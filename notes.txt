@@ -21,9 +21,12 @@ git config --global push.default simple
 # List local git configuration options
 git config --list
 
+cat ~/.ssh/id_rsa.pub
+
 
 git init
 git add README.md
 git commit -m "first commit"
-git remote add origin https://github.com/terence-lim/investment-data-science.git
+#git remote add origin https://github.com/terence-lim/investment-data-science.git
+git remote add origin git@github.com:/terence-lim/investment-data-science.git
 git push -u origin master
