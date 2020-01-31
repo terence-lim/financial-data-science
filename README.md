@@ -1,3 +1,3 @@
 # investment-data-science
 
-[More stuff](terence-lim.github.io/index.html)
+[More stuff](https://terence-lim.github.io/index.html)
