@@ -2,8 +2,9 @@
 
 ## dives module
 
-\'di&#305;(,)vez \
+\'d~~i~~(,)vez \
 ̅
+&#305;
 ### dbengines.py
 
 - wrappers and convenient methods for database engines: pymongo, sqlalchemy, redis"""
