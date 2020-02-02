@@ -38,6 +38,6 @@
 - unsupervised learning, clustering
 - data snooping
 
-* Though I mentioned a few key references, I have mistakenly left out many others
+ * _Though I mentioned a few key references, I have mistakenly left out many others
 (but will endeavour to backfill, with apologies in advance), from whom I have applied
-their ideas. Only the code herein and all errors are my own.
+their ideas. Only the code herein and all errors are my own._
