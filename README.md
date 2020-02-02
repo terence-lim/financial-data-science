@@ -2,9 +2,13 @@
 
 ## [Code](code) (as jupyter notebooks* in this main folder)
 
-\* _Though I mentioned a few key references, I have mistakenly left out many others
-(but will endeavour to backfill, with apologies in advance), from whom I have applied
-their ideas. Only the code herein and all errors are my own._
+This repo contains examples and code (in python) exploring data science and machine learning methods
+for large or textual financial data sets.  Questions and suggestions are welcome through
+[linkedin](https://www.linkedin.com/in/terencelim)
+
+\* _Though I pointed out a few key references, I have left out many others
+(but will endeavour to backfill, with apologies in advance).
+Only the code herein and all errors are my own._ 
 
 ### Quant Factors
 - factor investing, return predicting signals, alpha, information ratio
@@ -29,18 +33,6 @@ their ideas. Only the code herein and all errors are my own._
 - web api's
 - network science, centrality, link analysis
 - industry links, lead-lag cross-momentum
-
-### FRED economic data
-- time series, financial conditions
-- hidden markov models, kalman filter
-
-### Factor selection
-- supervised learning, elasticnet, random forest, xgboost
-- information coefficient
-
-### Factor returns
-- unsupervised learning, clustering
-- data snooping
 
 ## [Theory notes](notes)
 
