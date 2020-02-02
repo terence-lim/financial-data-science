@@ -2,7 +2,8 @@
 
 ## dives module
 
-/'di̅ve̅z/
+/'di̅ve̅z/ \[dahvy-veez\] (from Latin) wealthy;
+misunderstood as proper name for a rich man in the biblical parable of Lazarus.
 
 ### dbengines.py
 
