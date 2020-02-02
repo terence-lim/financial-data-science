@@ -1,6 +1,10 @@
 # Investment Data Science
 
-## [Code](code) (as jupyter notebooks in this main folder)
+## [Code](code) (as jupyter notebooks* in this main folder)
+
+\* _Though I mentioned a few key references, I have mistakenly left out many others
+(but will endeavour to backfill, with apologies in advance), from whom I have applied
+their ideas. Only the code herein and all errors are my own._
 
 ### Quant Factors
 - factor investing, return predicting signals, alpha, information ratio
