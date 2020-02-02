@@ -2,6 +2,10 @@
 
 ## Examples* and code
 
+\* _Though I mentioned a few key references, I have mistakenly left out many others
+(but will endeavour to backfill, with apologies in advance), from whom I have applied
+their ideas. Only the code herein and all errors are my own._
+
 ### Quant Factors [quant_factors.py](quant_factors.py)
 - factor investing, return predicting signals, alpha, information ratio
 - SQL, Fama-French, CRSP, Compustat, IBES
@@ -38,6 +42,3 @@
 - unsupervised learning, clustering
 - data snooping
 
- * _Though I mentioned a few key references, I have mistakenly left out many others
-(but will endeavour to backfill, with apologies in advance), from whom I have applied
-their ideas. Only the code herein and all errors are my own._
