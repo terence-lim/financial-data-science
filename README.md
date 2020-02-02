@@ -47,13 +47,13 @@ their ideas. Only the code herein and all errors are my own._
 ### Financial Data Professional (FDP) - FDP Institute, CAIA Association
 See my [pdf notes](https://terence-lim.github.io/notes/FDP.pdf).
 
-The FDP exam is copyrighted by FDPI
+- The FDP exam is copyrighted by FDPI
 (but in full disclosure, I am not necessarily recommending it, nor taking it myself)
 
 ### Statistics for Risk Modeling (SRM) - SOA
 See my [pdf notes](https://terence-lim.github.io/notes/SRM.pdf).
 
-The SRM exam is copyrighted by SOA
+- The SRM exam is copyrighted by SOA
 (but in full disclosure, I am not necessarily recommending it, nor taking it myself)
 
 ### Predictive Analytics (PA) - SOA
