@@ -2,9 +2,7 @@
 
 ## dives module
 
-'di̅̅̅̅ &#0305;(,)vez
-
-i  i
+/'di̅ve̅z/
 
 ### dbengines.py
 
