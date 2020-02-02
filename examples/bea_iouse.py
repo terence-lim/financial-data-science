@@ -13,7 +13,7 @@ Menzly, Lior, and Oguzhan Ozbas, 2010, Market segmentation and cross-predictabil
 """
 # The MIT License
 #
-# Copyright (c) 2020 Terence Lim
+# Copyright (c) 2020 Terence Lim (https://terence-lim.github.io/)
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation

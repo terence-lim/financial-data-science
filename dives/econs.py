@@ -3,7 +3,7 @@ the dives.econs module defines classes and methods for manipulating economic dat
 """
 # The MIT License
 #
-# Copyright (c) 2020 Terence Lim
+# Copyright (c) 2020 Terence Lim (https://terence-lim.github.io/)
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
