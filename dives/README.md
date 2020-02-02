@@ -4,7 +4,8 @@
 
 \'d~~i~~(,)vez \
 ̅
-&#305;
+i&#305;
+
 ### dbengines.py
 
 - wrappers and convenient methods for database engines: pymongo, sqlalchemy, redis"""
