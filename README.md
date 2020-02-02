@@ -7,7 +7,7 @@ for large or textual financial data sets.  Questions and suggestions are welcome
 [linkedin](https://www.linkedin.com/in/terencelim)
 
 \* _Though I pointed out a few key references, I have left out many others
-(but will endeavour to backfill, with apologies in advance).
+(but will endeavour to backfill, with apologies in advance) from whom I have applied ideas.
 Only the code herein and all errors are my own._ 
 
 ### Quant Factors
