@@ -2,9 +2,9 @@
 
 ## dives module
 
-\'d~~i~~(,)vez \
+'d~~i~~(,)vez
 ̅
-i &#305; i
+i &#0305; i
 
 ### dbengines.py
 
