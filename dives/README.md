@@ -2,7 +2,7 @@
 
 ## dives module
 
-'di&#0305;(,)vez
+'di &#0305;(,)vez
 ̅
 i  i
 
