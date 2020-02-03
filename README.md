@@ -1,6 +1,6 @@
 # Investment Data Science
 
-## Code* [examples](examples) (as jupyter notebooks in this main folder)
+## Code* [examples](examples) (with output in the jupyter notebooks in this main folder)
 
 This repo contains examples and code (in python) exploring data science and machine learning methods
 on large or textual financial data sets.  Questions and suggestions are welcome through
