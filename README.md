@@ -46,13 +46,13 @@ and fitting and testing quant and machine learning models.
 ## Theory [notes](notes) (exam syllabus-inspired study notes)
 
 #### Financial Data Professional (FDP) exam - by FDP Institute, CAIA Association
-[Download pdf exam study notes here](https://terence-lim.github.io/notes/FDP.pdf) (updated Jan 2020).
+[Download FDP exam study notes here](https://terence-lim.github.io/notes/FDP.pdf) (updated Jan 2020).
 
 - The FDP exam is copyrighted by FDPI
 (and in full disclosure, I am not necessarily recommending, nor taking it myself)
 
 #### Statistics for Risk Modeling (SRM) exam - by SOA
-[Download pdf exam study notes here](https://terence-lim.github.io/notes/SRM.pdf) (updated Jan 2020).
+[Download SRM exam study notes here](https://terence-lim.github.io/notes/SRM.pdf) (updated Jan 2020).
 
 - The SRM exam is copyrighted by SOA
 (and in full disclosure, I am not necessarily recommending, nor taking it myself)
