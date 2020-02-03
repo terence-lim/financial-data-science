@@ -32,7 +32,7 @@ on large and textual financial data sets.  Questions and suggestions are welcome
 
 &nbsp;
 
-## [dives](dives) python modules
+## "[dives](dives)" python modules
 
 For manipulating the structured and unstructured data sets;
 and fitting and testing quant and machine learning models.
