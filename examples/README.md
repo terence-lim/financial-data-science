@@ -25,7 +25,7 @@ Output are in jupyter notebooks in [main folder](https://github.com/terence-lim/
 
 ### [BEA Input-Output Use tables](bea_iouse.py)
 - web api's
-- network science, centrality, link analysis
+- network science, centrality, link analysis, networkx
 - industry links, lead-lag cross-momentum
 
 

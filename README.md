@@ -27,7 +27,7 @@ on large and textual financial data sets.  Questions and suggestions are welcome
 
 #### [BEA Input-Output Use tables](bea_iouse.ipynb)
 - web api's
-- network science, centrality, link analysis
+- network science, centrality, link analysis, networkx
 - industry links, lead-lag cross-momentum
 
 &nbsp;
