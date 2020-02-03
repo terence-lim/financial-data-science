@@ -47,7 +47,7 @@ and fitting and testing quant and machine learning models.
 #### Statistics for Risk Modeling (SRM) exam* - by SOA
 [Download SRM exam study notes here](https://terence-lim.github.io/notes/SRM.pdf) (updated Jan 2020).
 
-> (in full disclosure, I am not necessarily recommending, nor taking exams myself)
+> *(in full disclosure, I am not necessarily recommending, nor taking exams myself)
 
 #### Predictive Analytics (PA) - by SOA
 See [jupyter-notebook](notes/exam-pa-hospital-readmission-sample-sol.ipynb),
