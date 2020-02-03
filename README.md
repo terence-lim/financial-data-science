@@ -36,9 +36,9 @@ Only the code herein and all errors are my own._
 
 &nbsp;
 
-## [dives](dives) Python module
+## My [dives](dives) python modules
 
-Modules with all the supporting code for manipulating the structured and unstructured data sets;
+All the supporting code for manipulating the structured and unstructured data sets;
 and fitting and testing quant and machine learning models.
 
 &nbsp;
