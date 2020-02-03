@@ -43,7 +43,7 @@ and fitting and testing quant and machine learning models.
 
 &nbsp;
 
-## Theory [notes](notes) (exam syllabi-inspired study guides)
+## Theory [notes](notes) (exam syllabus-inspired study notes)
 
 #### Financial Data Professional (FDP) exam - by FDP Institute, CAIA Association
 [Download pdf exam study notes here](https://terence-lim.github.io/notes/FDP.pdf).
