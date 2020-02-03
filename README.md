@@ -34,12 +34,14 @@ Only the code herein and all errors are my own._
 - network science, centrality, link analysis
 - industry links, lead-lag cross-momentum
 
+&nbsp;
 
 ## [dives](dives) Python module
 
 Modules with all the supporting code for manipulating the structured and unstructured data sets;
 and fitting and testing quant and machine learning models.
 
+&nbsp;
 
 ## Theory [notes](notes) (exam syllabi-inspired study guides)
 
