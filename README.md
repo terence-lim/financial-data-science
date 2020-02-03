@@ -45,19 +45,19 @@ and fitting and testing quant and machine learning models.
 
 ## Theory [notes](notes) (exam syllabi-inspired study guides)
 
-#### Financial Data Professional (FDP) - FDP Institute, CAIA Association
+#### Financial Data Professional (FDP) exam - by FDP Institute, CAIA Association
 See my [pdf notes](https://terence-lim.github.io/notes/FDP.pdf).
 
 - The FDP exam is copyrighted by FDPI
-(but in full disclosure, I am not necessarily recommending, nor taking it myself)
+(and in full disclosure, I am not necessarily recommending, nor taking it myself)
 
-#### Statistics for Risk Modeling (SRM) - SOA
+#### Statistics for Risk Modeling (SRM) exam - by SOA
 See my [pdf notes](https://terence-lim.github.io/notes/SRM.pdf).
 
 - The SRM exam is copyrighted by SOA
-(but in full disclosure, I am not necessarily recommending, nor taking it myself)
+(and in full disclosure, I am not necessarily recommending, nor taking it myself)
 
-#### Predictive Analytics (PA) - SOA
+#### Predictive Analytics (PA) - by SOA
 See my [jupyter-notebook](notes/exam-pa-hospital-readmission-sample-sol.ipynb),
-a python (imperfect) translation of the
+for a python (imperfect) translation of the
 [sample case study solution in R](https://www.soa.org/education/exam-req/edu-exam-pa-detail/)
