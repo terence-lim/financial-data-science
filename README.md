@@ -3,7 +3,7 @@
 ## Code [examples](examples) (as jupyter notebooks* in this main folder)
 
 This repo contains examples and code (in python) exploring data science and machine learning methods
-for large or textual financial data sets.  Questions and suggestions are welcome through
+on large or textual financial data sets.  Questions and suggestions are welcome through
 [linkedin](https://www.linkedin.com/in/terencelim)
 
 \* _Though I pointed out a few key references, I have left out many others
