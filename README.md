@@ -1,14 +1,10 @@
 # Investment Data Science
 
-## Code* [examples](examples) (with output in the jupyter notebooks in this main folder)
+## Code [examples](examples) (output are in the jupyter notebooks)
 
-This repo contains examples and code (in python) exploring data science and machine learning methods
-on large or textual financial data sets.  Questions and suggestions are welcome through
+Examples and python code exploring data science and machine learning methods
+on large and textual financial data sets.  Questions and suggestions are welcome through
 [linkedin](https://www.linkedin.com/in/terencelim)
-
-\* _Though I pointed out a few key references, I have left out many others
-(but will endeavour to backfill, with apologies in advance) from whom I have applied their ideas.
-Only the code herein and all errors are my own._ 
 
 #### [Quant Factors](quant_factors.ipynb)
 - factor investing, return predicting signals, alpha, information ratio
@@ -36,28 +32,24 @@ Only the code herein and all errors are my own._
 
 &nbsp;
 
-## My [dives](dives) python modules
+## [dives](dives) python modules
 
-All the supporting code for manipulating the structured and unstructured data sets;
+For manipulating the structured and unstructured data sets;
 and fitting and testing quant and machine learning models.
 
 &nbsp;
 
-## Theory [notes](notes) (exam syllabus-inspired study notes)
+## Study [notes](notes) (exam syllabus-inspired reviews)
 
-#### Financial Data Professional (FDP) exam - by FDP Institute, CAIA Association
+#### Financial Data Professional (FDP) exam* - by FDP Institute, CAIA Association
 [Download FDP exam study notes here](https://terence-lim.github.io/notes/FDP.pdf) (updated Jan 2020).
 
-- The FDP exam is copyrighted by FDPI
-(and in full disclosure, I am not necessarily recommending, nor taking it myself)
-
-#### Statistics for Risk Modeling (SRM) exam - by SOA
+#### Statistics for Risk Modeling (SRM) exam* - by SOA
 [Download SRM exam study notes here](https://terence-lim.github.io/notes/SRM.pdf) (updated Jan 2020).
 
-- The SRM exam is copyrighted by SOA
-(and in full disclosure, I am not necessarily recommending, nor taking it myself)
+> (in full disclosure, I am not necessarily recommending, nor taking exams myself)
 
 #### Predictive Analytics (PA) - by SOA
-See my [jupyter-notebook](notes/exam-pa-hospital-readmission-sample-sol.ipynb),
-for a python (imperfect) translation of the sample case study
-[solution in R from SOA](https://www.soa.org/education/exam-req/edu-exam-pa-detail/)
+See [jupyter-notebook](notes/exam-pa-hospital-readmission-sample-sol.ipynb),
+for a (imperfect) python translation of the sample case study
+[solution in R](https://www.soa.org/education/exam-req/edu-exam-pa-detail/) from SOA.
