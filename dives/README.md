@@ -3,7 +3,7 @@
 ## "dives" python modules
 
 /'di̅ve̅z/ \[dahvy-veez\] (from Latin) wealthy;
-has been misunderstood as proper name for a rich man in the biblical parable of Lazarus.
+misunderstood as proper name for a rich man in biblical parable of Lazarus.
 
 &nbsp;
 
