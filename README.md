@@ -1,6 +1,6 @@
 # Investment Data Science
 
-## [Code](code) (as jupyter notebooks* in this main folder)
+## Code [examples](examples) (as jupyter notebooks* in this main folder)
 
 This repo contains examples and code (in python) exploring data science and machine learning methods
 for large or textual financial data sets.  Questions and suggestions are welcome through
@@ -34,7 +34,7 @@ Only the code herein and all errors are my own._
 - network science, centrality, link analysis
 - industry links, lead-lag cross-momentum
 
-## [Theory notes](notes)
+## Theory [notes](notes) (exam syllabi-inspired study guides)
 
 ### Financial Data Professional (FDP) - FDP Institute, CAIA Association
 See my [pdf notes](https://terence-lim.github.io/notes/FDP.pdf).
@@ -49,5 +49,6 @@ See my [pdf notes](https://terence-lim.github.io/notes/SRM.pdf).
 (but in full disclosure, I am not necessarily recommending it, nor taking it myself)
 
 ### Predictive Analytics (PA) - SOA
-See my [jupyter-notebook](https://terence-lim.github.io/notes/PA.ipynb),
-a python approximation of official R case study solution
+See my [jupyter-notebook](notes/exam-pa-hospital-readmission-sample-sol.ipynb),
+a python approximation of the [case study solution in R]
+(https://www.soa.org/education/exam-req/edu-exam-pa-detail/)
