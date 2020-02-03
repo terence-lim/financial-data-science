@@ -50,5 +50,5 @@ See my [pdf notes](https://terence-lim.github.io/notes/SRM.pdf).
 
 ### Predictive Analytics (PA) - SOA
 See my [jupyter-notebook](notes/exam-pa-hospital-readmission-sample-sol.ipynb),
-a python approximation of the [case study solution in R]
-(https://www.soa.org/education/exam-req/edu-exam-pa-detail/)
+a python (imperfect) translation of the
+[sample case study solution in R](https://www.soa.org/education/exam-req/edu-exam-pa-detail/)
