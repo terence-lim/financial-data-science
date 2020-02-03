@@ -59,5 +59,5 @@ and fitting and testing quant and machine learning models.
 
 #### Predictive Analytics (PA) - by SOA
 See my [jupyter-notebook](notes/exam-pa-hospital-readmission-sample-sol.ipynb),
-for a python (imperfect) translation of the
-[sample case study solution in R](https://www.soa.org/education/exam-req/edu-exam-pa-detail/)
+for a python (imperfect) translation of the sample case study
+[solution in R from SOA](https://www.soa.org/education/exam-req/edu-exam-pa-detail/)
