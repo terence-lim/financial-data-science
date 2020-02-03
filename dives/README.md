@@ -3,13 +3,13 @@
 ## "dives" python modules
 
 /'di̅ve̅z/ \[dahvy-veez\] (from Latin) wealthy;
-misunderstood as proper name for a rich man in the biblical parable of Lazarus.
+has been misunderstood as proper name for a rich man in the biblical parable of Lazarus.
 
 &nbsp;
 
 #### dbengines.py
 
-- wrappers and convenient methods for database engines: pymongo, sqlalchemy, redis"""
+- wrappers and convenient methods for database engines: pymongo, sqlalchemy, redis
 
 #### structured.py
 
@@ -23,7 +23,7 @@ misunderstood as proper name for a rich man in the biblical parable of Lazarus.
 
 #### evaluate.py
 
-- classes and methods for backtesting and evaluating portfolio returns
+- classes and methods for backtesting and evaluating portfolio performance
 
 #### taq.py
 
@@ -33,12 +33,12 @@ misunderstood as proper name for a rich man in the biblical parable of Lazarus.
 #### econs.py
 
 - classes and methods for manipulating economic data sources
-- industry sectoring, sic-naics-bea codes, from BEA, naics.com crosswalk, Fama-French groups
+- industry sectoring from BEA, Fama-French. sic-naics-bea codes from BEA, naics.com crosswalk
 - loaders for BEA and FRED
 
 #### custom.py
 
-- common function call arguments and useful wrappers
+- preset function call arguments and wrappers
 - e.g. kerasClassifier extends keras.wrappers.scikit_learn.KerasClassifier
   - parameterize network structure, 
   - endogenize input and output dimensions from data,
