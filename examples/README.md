@@ -2,7 +2,7 @@
 
 ## Examples* and code
 
-Output are in jupyter notebooks in [main parent folder](https://github.com/terence-lim/investment-data-science)
+Output are in jupyter notebooks in [main folder](https://github.com/terence-lim/investment-data-science)
 
 \* _Though I pointed out a few key references, I have left out many others
 (but will endeavour to backfill, with apologies in advance) from whom I have applied their ideas.
