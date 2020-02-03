@@ -11,4 +11,5 @@
 #### Predictive Analytics (PA) - by SOA
 See [jupyter-notebook](exam-pa-hospital-readmission-sample-sol.ipynb),
 for a (imperfect) python translation of the sample case study
-[solution in R](exam-pa-hospital-readmission-sample-sol-knit.pdf) from [SOA(https://www.soa.org/education/exam-req/edu-exam-pa-detail/).
+[solution in R](exam-pa-hospital-readmission-sample-sol-knit.pdf)
+from [SOA](https://www.soa.org/education/exam-req/edu-exam-pa-detail/).
