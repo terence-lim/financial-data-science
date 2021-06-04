@@ -6,6 +6,10 @@ machine learning models.
 
 [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
+by: [Terence Lim](https://www.linkedin.com/in/terencelim)
+
+&nbsp;
+
 
 ### [taq.py](taq.py)
 
@@ -126,10 +130,5 @@ machine learning models.
 - Convenience methods for pretty printing
 
   - pandas
-
-
-&nbsp;
-
-[Terence Lim](https://www.linkedin.com/in/terencelim)
 
 
