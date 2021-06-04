@@ -30,7 +30,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 - PCA, St Louis Fed FRED
 
-### Clasification Models and Events Text
+### Supervised Learning Models for Classification of events text
 
 [classification_models.py](classification_models.py)
 
