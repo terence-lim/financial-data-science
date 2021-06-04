@@ -6,10 +6,12 @@ methods on structured and unstructured financial data sets.
 
 [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
-[Terence Lim](https://www.linkedin.com/in/terencelim)
-### [FinDS](finds) Python library
+by: [Terence Lim](https://www.linkedin.com/in/terencelim)
+
 
 &nbsp;
+
+### [FinDS](finds) Python library
 
 - Support for retrieving and manipulating structured and unstructured
 financial data sets, and fitting and testing quant and machine
