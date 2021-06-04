@@ -1,6 +1,8 @@
 # Financial Data Science -
 
-## Python library, examples, notebooks:
+This repo contains a Python modules library, code examples, and
+Jupyter notebooks for exploring data science and machine learning
+methods on structured and unstructured financial data sets.
 
 ### [FinDS](finds) Python library
 
