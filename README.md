@@ -17,7 +17,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 financial data sets, and fitting and testing quant and machine
 learning models.
 
-## [Examples](examples) in Python
+## Code [examples](examples) in Python
 
 - Code examples exploring data science and machine learning methods
 on large and textual financial data sets.
