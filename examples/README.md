@@ -1,7 +1,9 @@
 # Financial Data Science python code examples
 
 These code examples explore data science and machine learning methods
-on large and textual financial data sets. [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
+on large and textual financial data sets.
+
+[https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
 by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
@@ -181,7 +183,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - Liu and Wu (2020), St Louis Fed FRED
 
 
-### Clustering economic series
+### Unsupervised learnin models for clustering economic series
 
 [unsupervised_economics.py](unsupervised_economics.py)
 
