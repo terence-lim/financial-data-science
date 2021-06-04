@@ -1,4 +1,5 @@
-# Financial Data Science: python library, examples, notebooks
+# Financial Data Science:
+## python library, examples, notebooks
 
 ### [FinDS](finds) Python library
 
