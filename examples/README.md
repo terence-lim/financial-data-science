@@ -1,9 +1,11 @@
 # Financial Data Science python code examples
 
 These code examples explore data science and machine learning methods
-on large and textual financial data sets.
+on large and textual financial data sets. [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
-[https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
+by: [Terence Lim](https://www.linkedin.com/in/terencelim)
+
+&nbsp;
 
 
 ### Approximate Factor Models, VAR and TCN from FRED-MD
@@ -96,7 +98,7 @@ on large and textual financial data sets.
 
 - NMF, LSA, LDA, PLSI matrix decomposition models
 
-###
+### Industry Sectoring
 
 [industry_community.py](industry_community.py)
 
@@ -144,7 +146,7 @@ on large and textual financial data sets.
 - gradient boosting, random boosting, ensembles
 - sklearn, statsmodels, St Louis Fed FRED, GDP
 
-### economic time series and releases: revisions and vintages
+### Economic time series and releases: revisions and vintages
 
 [revisions_vintage.py](revisions_vintage.py)
 
@@ -195,6 +197,3 @@ on large and textual financial data sets.
 - rpy2, CRSP, Wharton Research Data Services
 
 
-&nbsp;
-
-[Terence Lim](https://www.linkedin.com/in/terencelim)
