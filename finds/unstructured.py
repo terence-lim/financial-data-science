@@ -1,5 +1,7 @@
 """Implements interface for unstructured data sets
 
+- pymongo, S&P CapitalIQ key developments
+
 Author: Terence Lim
 License: MIT
 """

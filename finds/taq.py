@@ -1,5 +1,7 @@
 """Class and methods to preprocess and analyze TAQ trade and quotes tick data
 
+- NYSE Daily TAQ, bid-ask quotes, trade conditions, tick test
+
 Author: Terence Lim
 License: MIT
 """

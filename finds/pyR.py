@@ -1,5 +1,7 @@
 """Convenience class methods to use rpy2 package and R environment
 
+- rpy2
+
 Author: Terence Lim
 License: MIT
 """

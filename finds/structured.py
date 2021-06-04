@@ -1,5 +1,7 @@
 """Implements interface for structured data sets
 
+- CRSP, Compustat, IBES, delistings, distributions, shares outstanding
+
 Author: Terence Lim
 License: MIT
 """

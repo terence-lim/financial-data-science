@@ -1,4 +1,7 @@
-"""Convenience methods for web requests and retrievals
+"""Perform web requests and retrievals
+
+- pandas_datareader, Fama-French data library
+- Loughran McDonald financial word lists, FOMC minutes, Liu and Wu yield curve
 
 Author: Terence Lim
 License: MIT

@@ -1,5 +1,8 @@
 """Class and methods to retrieve and analyze EDGAR text data
 
+- SEC Edgar, 10K, 8K, MD&A, Business Descriptions
+- BeautifulSoup, requests, regular expressions
+
 Author: Terence Lim
 License: MIT
 """

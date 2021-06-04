@@ -1,5 +1,7 @@
 """Implement custom daily and weekly trading day calendars and datetime methods
 
+- pandas custom business calendar
+
 Author: Terence Lim
 License: MIT
 """

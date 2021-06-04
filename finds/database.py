@@ -1,5 +1,9 @@
 """Convenience class and methods to interface with database engines
 
+- SQL, sqlalchemy
+- MongoDB, pymongo
+- redis
+
 Author: Terence Lim
 License: MIT
 """

@@ -1,5 +1,9 @@
 """Implement industry sectoring, and convenience methods for BEA data
 
+- pandas, requests, sqlalchemy, json
+- SIC, NAICS, Fama-French industry crosswalks
+- Bureau of Economic Analysis, Input-Output Use Tables
+
 Author: Terence Lim
 License: MIT
 """

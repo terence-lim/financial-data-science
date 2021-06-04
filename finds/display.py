@@ -1,4 +1,6 @@
-"""Convenience methods for data wrangling and display
+"""Convenience methods for data visualization
+
+- matplotlib, seaborn, statsmodels, pandas
 
 Author: Terence Lim
 License: MIT

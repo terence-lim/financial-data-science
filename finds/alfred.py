@@ -1,5 +1,8 @@
 """Convenience class and methods to access ALFRED/FRED apis and FRED-MD/FRED-QD
 
+- FRED, ALFRED, revisions vintages
+- PCA, approximate factor model, EM algorithm
+
 Author: Terence Lim
 License: MIT
 """

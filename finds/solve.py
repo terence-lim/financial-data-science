@@ -1,5 +1,9 @@
 """Quant, financial and econometrics helpers
 
+- linear algebra, stationarity, robust covariances
+- maturity, bootstrap, annuity, compounding, rate of discount and interest
+- value at risk, duration, half-life
+
 Author: Terence Lim
 License: MIT
 """

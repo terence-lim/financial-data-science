@@ -1,5 +1,9 @@
 """Class and methods to evaluate backtests, event studies and risk premiums
 
+- Event studies, cumulative abnormal returns
+- Risk premiums, Fama-MacBeth regressions
+- Sharpe ratio, appraisal ratio, walk-forward backtests
+
 Author: Terence Lim
 License: MIT
 """

@@ -1,5 +1,8 @@
 """Convenience methods for igraph and networkx modules
 
+- Network science, community detection, centrality, modularity
+- igraph, networkx
+
 Author: Terence Lim
 License: MIT
 """

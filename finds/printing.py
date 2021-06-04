@@ -1,5 +1,7 @@
 """Convenience methods for pretty printing
 
+- pandas
+
 Author: Terence Lim
 License: MIT
 """
