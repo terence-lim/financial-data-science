@@ -1,7 +1,8 @@
-# Financial Data Science [FinDS](finds) Python library
+# Financial Data Science python library
 
-Support for manipulating structured and unstructured financial data sets,
-and fitting and testing quant and machine learning models.
+These modules support retrieving and manipulating structured and
+unstructured financial data sets, and fitting and testing quant and
+machine learning models.
 
 [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 

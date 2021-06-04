@@ -8,8 +8,9 @@ methods on structured and unstructured financial data sets.
 
 ### [FinDS](finds) Python library
 
-- Support for manipulating structured and unstructured financial data sets,
-and fitting and testing quant and machine learning models.
+- Support for retrieving and manipulating structured and unstructured
+financial data sets, and fitting and testing quant and machine
+learning models.
 
 ### [Examples](examples) in Python
 
