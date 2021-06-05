@@ -11,13 +11,13 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 ## Applications in Unsupervised Learning
 
-### Topic Models and FOMC meeting minutes
+### Topic models and FOMC meeting minutes
 
 [fomc_topics.py](fomc_topics.py)
 
 - NMF, LSA, LDA, PLSI matrix decomposition models
 
-### LSTM Networks, State Space Models and Mixtures from FRED-MD
+### LSTM networks, state space models and mixtures from FRED-MD
 
 [economic_states.py](economic_states.py)
 
@@ -40,7 +40,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - pytorch, deep averaging networks, word embeddings, spacy
 - S&P Key Developments, Wharton Research Data Services
 
-### Classification Models and Events Text
+### Classification models and events text
 
 [classification_models.py](classification_models.py)
 
@@ -55,14 +55,14 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - precision, recall, ROC curve, sensitivity, specificity
 - S&P Key Developments, Wharton Research Data Services
 
-### Sentiment Analysis of Edgar Company Filings
+### Sentiment analysis of Edgar company filings
 
 [sec_sentiment.py](sec_sentiment.py)
 
 - Cohen, Malloy and Nguyen (2020), Loughran and McDonald (2011), and others
 - sklearn, nltk, SEC Edgar, Wharton Research Data Services
 
-### Approximate Factor Models, VAR and TCN from FRED-MD
+### Approximate factor models, VAR and TCN from FRED-MD
 
 [approximate_factors.py](approximate_factors.py)
 
@@ -80,7 +80,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 ## Applications in Linear Regression
 
-### Forecasting and Econometrics
+### Forecasting and econometrics
 
 [econometric_forecast.py](econometric_forecast.py)
 
@@ -88,7 +88,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - autocorrelation functions, AR, MA, SARIMAX
 - scipy, statsmodels, seaborn, St Louis Fed FRED
 
-### Linear Regression Diagonostics and Residual Plots
+### Linear regression diagonostics and residual plots
 
 [linear_diagnostics.py](linear_diagnostics.py)
 
@@ -96,42 +96,42 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - outliers, leverage, multicollinearity
 - statsmodels, St Louis Fed FRED
 
-### Economic time series and releases: revisions and vintages
+### Economic time series and releases
 
 [revisions_vintage.py](revisions_vintage.py)
 
-- St Louis Fed FRED/ALFRED
+- : revisions and vintages, St Louis Fed FRED/ALFRED
 
 ## Applications in Risk Modelling
 
-### Market Microstructure
+### Market microstructure
 
 [market_microstructure.py](market_microstructure.py)
 
 - intraday liquidity, variance ratio, effective spreads, tick sign test
 - tick data, NYSE Daily TAQ 
 
-### Factor and Empirical Covariance Matrix from NYSE TAQ
+### Factor and empirical covariance matrix from NYSE TAQ
 
 [taq_covariance.py](taq_covariance.py)
 
 - covariance matrix shrinkage, PCA, minimum variance portfolios
 - high frequency tick data, NYSE Daily TAQ
 
-### Conditional Volatility Models
+### Conditional volatility models
 
 [conditional_volatility.py](conditional_volatility.py)
 
 - Value at Risk, GARCH, EWMA, Scholes-Williams Beta
 - VIX, Bitcoin, St Louis Fed FRED
 
-### Bond Market Index Components and Interest Rate Indicators
+### Bond market index components and interest rate indicators
 
 [bond_returns.py](bond_returns.py)
 
 - PCA, St Louis Fed FRED
 
-### Term Structure of Interest Rates
+### Term structure of interest rates
 
 [term_structure.py](term_structure.py)
 
@@ -140,28 +140,28 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 ## Applications in Network Science
 
-### Social Network Analysis of BEA Industries
+### Social network analysis of BEA industries
 
 [social_iouse.py](social_iouse.py)
 
 - Input-Output Use Tables, Social Relations Regression Model
 - igraph, rpy2, Bureau of Economic Analysis
 
-### Graph Centrality and BEA Input-Output Use Tables
+### Graph centrality and BEA input-output use tables
 
 [bea_centrality.py](bea_centrality.py)
 
 - igraph, network, centrality, BEA Input-Output Use Table
 - Choi and Foerster (2017), Bureau of Economic Analysis, and others
 
-### Industry Sectoring
+### Industry sectoring
 
 [industry_community.py](industry_community.py)
 
 - igraph, community detection, modularity
 - Text-based Network Industry Classification (Hoberg and Phillips, 2016)
 
-### Principal Customers Network
+### Principal customers network
 
 [customer_ego.py](customer_ego.py)
 
@@ -170,14 +170,14 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 ## Applications in Quantitative Finance
 
-### Event Study Abnormal Returns
+### Event study abnormal returns
 
 [event_study.py](event_study.py)
 
 - CAR, BHAR, post-event drift, order statistics, Bonferroni adjustment
 - S&P Key Developments, Wharton Research Data Services
 
-### Weekly Reversals Strategy
+### Weekly reversals strategy
 
 [weekly_reversal.py](weekly_reversal.py)
 
@@ -185,7 +185,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - structural breaks, unknown changepoint
 - rpy2, CRSP, Wharton Research Data Services
 
-### Factor Investing
+### Factor investing
 
 [quant_factors.py](quant_factors.py)
 
@@ -199,7 +199,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 - pandas datareader, Fama French data library
 
-### Fama French and momentum research factors
+### Fama-French and momentum research factors
 
 [fama_french.py](fama_french.py)
 
