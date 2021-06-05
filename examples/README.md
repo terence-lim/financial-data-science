@@ -9,7 +9,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 &nbsp;
 
-## ***Applications in Unsupervised Learning***
+## Applications in Unsupervised Learning
 
 ### Topic Models and FOMC meeting minutes
 
@@ -31,7 +31,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - KMeans, agglomerative, spectral clustering, nearest neighbors, PCA
 - sklearn, FRED-MD
 
-## ***Applications in Supervised Learning***
+## Applications in Supervised Learning
 
 ### DAN for text classification
 
@@ -78,7 +78,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - gradient boosting, random boosting, ensembles
 - sklearn, statsmodels, St Louis Fed FRED, GDP
 
-## ***Applications in Linear Regression***
+## Applications in Linear Regression
 
 ### Forecasting and Econometrics
 
@@ -102,7 +102,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 - St Louis Fed FRED/ALFRED
 
-## ***Applications in Risk Modelling***
+## Applications in Risk Modelling
 
 ### Market Microstructure
 
@@ -138,7 +138,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - bootstrap, splines, yield curve, duration
 - Liu and Wu (2020), St Louis Fed FRED
 
-## ***Applications in Network Science***
+## Applications in Network Science
 
 ### Social Network Analysis of BEA Industries
 
@@ -168,7 +168,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - igraph, ego graph, betweenness centrality
 - S&P Compustat, Wharton Research Data Services
 
-## ***Applications in Quantitative Finance***
+## Applications in Quantitative Finance
 
 ### Event Study Abnormal Returns
 
