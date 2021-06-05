@@ -3,7 +3,7 @@
 These code examples explore data science and machine learning methods
 on large and textual financial data sets.  Accompanying Jupyter notebooks
 that also contain results output are in the
-[https://github.com/terence-lim/data-science-notebooks])https://github.com/terence-lim/data-science-notebooks) repo.
+[https://github.com/terence-lim/data-science-notebooks](https://github.com/terence-lim/data-science-notebooks) repo.
 
 [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
