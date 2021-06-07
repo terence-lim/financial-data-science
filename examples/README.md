@@ -25,6 +25,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 - Long Short-Term Memory networks, hidden states, state space models, Gaussian mixtures
 - pytorch, hmmlearn, statsmodels, sklearn
+- Chen, Pelger and Zhu (2020) and others
 
 ### Unsupervised learning models for clustering economic series
 
