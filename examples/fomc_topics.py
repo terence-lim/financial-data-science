@@ -135,6 +135,14 @@ for ifig, (name, (base, vectorizer)) in enumerate(algos.items()):
                    for topic in range(topics.shape[1])}
     plt.savefig(os.path.join(logdir, name + 'topics.jpg'))
 
+"""Display top features as wordclouds
+- NMF model appears to provide most intuitive outputs
+- 1990's appears to be dominated by concerns of domestic non-financial debt
+- 2000's pivoted to high-tech and inflation
+- 2008-2015 by mortage-backed securities and asset purchases
+- 2016-2019 by fed fund target rates, with the previous topic returning in 2020
+"""
+    
 for ifig, (name, model) in enumerate(models.items()):
     wc = WordCloud(height=300, width=500, colormap='cool') 
     top_n = 20

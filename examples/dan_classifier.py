@@ -238,14 +238,19 @@ for layers in range(1, max_layers + 1):
 #
 
 ## Confusion Matrix
+"""
+Note: when specific words determine classification, average word embeddings (where
+may words appear similar) may not work as well as distinct word indexes, such as when
+encoded as one-hot features.
+"""
 from sklearn.metrics import confusion_matrix
 labels = [event_[e] for e in event_encoder.classes_]
 cf_train = DataFrame(confusion_matrix(train_gold, train_pred),
-              index=pd.MultiIndex.from_product([['Predicted'], labels]),
-              columns=pd.MultiIndex.from_product([['Actual'], labels]))
+              index=pd.MultiIndex.from_product([['Actual'], labels]),
+              columns=pd.MultiIndex.from_product([['Predicted'], labels]))
 cf_test = DataFrame(confusion_matrix(test_gold, test_pred),
-                    index=pd.MultiIndex.from_product([['Predicted'], labels]),
-                    columns=pd.MultiIndex.from_product([['Actual'], labels]))
+                    index=pd.MultiIndex.from_product([['Actual'], labels]),
+                    columns=pd.MultiIndex.from_product([['Predicted'], labels]))
 import seaborn as sns
 for num, (title, cf) in enumerate({'Training':cf_train, 'Test':cf_test}.items()):
     fig, ax = plt.subplots(num=1+num, clear=True, figsize=(10,6))
@@ -254,8 +259,8 @@ for num, (title, cf) in enumerate({'Training':cf_train, 'Test':cf_test}.items())
                              for label,e in zip(labels, event_encoder.classes_)],
                 xticklabels=event_encoder.classes_)
     ax.set_title(f'{title} Set Confusion Matrix')
-    ax.set_xlabel('Actual')
-    ax.set_ylabel('Predicted')
+    ax.set_xlabel('Predicted')
+    ax.set_ylabel('Actual')
     ax.yaxis.set_tick_params(labelsize=8, rotation=0)
     ax.xaxis.set_tick_params(labelsize=8, rotation=0)
     plt.subplots_adjust(left=0.35, bottom=0.25)

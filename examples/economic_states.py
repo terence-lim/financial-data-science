@@ -1,7 +1,12 @@
 """LSTM, State Space Models, and Mixtures from FRED-MD
 
+We apply and compare four methods for extracting lower-dimensional states from a large panel of economic time series: State space models, Hidden Markov Models, Gaussian mixtures, and LSTM networks.
+
+We visualize the extracted hidden states/latent factors to recessionary and economic time periods, and compare the estimated persistence of states.
+
 - Long Short-Term Memory networks, hidden states, state space models, Gaussian mixtures
 - pytorch, hmmlearn, statsmodels, sklearn
+- Chen, Pelger and Zhu (2020) and others
 
 Terence Lim
 License: MIT
@@ -225,9 +230,12 @@ def plot_states(modelname, labels, beg, end):
     plt.tight_layout()
     plt.savefig(os.path.join(imgdir, f"{modelname.lower()}.jpg"))
 
-# Gaussian Hidden Markov Model from FRED-MD
-# - with 3 states
-# - display estimated transition and stationary distributions
+Hidden Markov Model from FRED-MD
+"""
+ - Gaussian HMM
+ - with 3 states
+ - display estimated transition and stationary distributions
+"""
 from hmmlearn import hmm
 n_components = 3
 markov = hmm.GaussianHMM(n_components=n_components,

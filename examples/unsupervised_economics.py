@@ -1,4 +1,4 @@
-"""Clustering economic series
+"""Unsupervised learning models for clustering economic series
 
 - KMeans, agglomerative, spectral clustering, nearest neighbors, PCA
 - sklearn, FRED-MD

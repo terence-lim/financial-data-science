@@ -1,5 +1,9 @@
 """Approximate Factor Models, VAR and TCN from FRED-MD
 
+We extract an approximate factor structure that reduces the number of dimensions (variables) in a large set of economic time series (FRED-MD), with number of components automatically selected by an information criterion and outliers replaced with an EM approach. 
+
+We contrast Vector Autoregression and Temporal Convolutional Networks to model the time-series persistance of the extracted factors, and compare prediction errors.
+
 - PCA, EM, vector autoregression, temporal convolutional networks
 - Bai and Ng (2002), McCracken and Ng (2016), St Louis Fed FRED, and others
 
@@ -136,7 +140,9 @@ from finds.printing import print_multicolumn
 print_multicolumn(out, rows=n, latex=True)
 
 # PCA-EM Approximate Factors
-## Bai and Ng 2002
+"""
+Bai and Ng 2002
+"""
 from finds.alfred import pcaEM, BaiNg, marginalR2
 X = np.array(data.loc[sample])
 X[~as_inliers(X, method='iq10')] = np.nan    # missing and outliers to NaN
@@ -214,6 +220,10 @@ M = train_data.shape[1]
 model = VAR(train_data)
 
 ## Selecting lag order
+"""
+The lagged coefficients estimated from the Vector Autoregression produce a 
+multi-period cumulative forecast 
+"""
 results = {p: model.fit(p) for p in [1, 2, 4, 12]}   # VAR(p) models
 DataFrame({ic: model.fit(maxlags=maxlags, ic=ic).k_ar
            for ic in ['aic', 'fpe', 'hqic', 'bic']},
