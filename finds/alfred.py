@@ -28,7 +28,10 @@ import time
 from .readers import requests_get
 from .busday import str2date, to_monthend
 
-ECHO = False
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 # From https://research.stlouisfed.org/econ/mccracken/fred-databases/
 _fred_md_url = 'https://files.stlouisfed.org/files/htdocs/fred-md/'

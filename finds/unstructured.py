@@ -15,6 +15,10 @@ import gzip
 import io
 import csv
 from pandas.api import types
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 def parse_where(where):
     """Helper to parse dict or list-like where clause to pymongo command str

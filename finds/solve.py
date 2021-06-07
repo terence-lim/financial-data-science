@@ -11,6 +11,10 @@ import numpy as np
 from pandas import DataFrame, Series
 from statsmodels.tsa.stattools import adfuller
 from pandas.api import types
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 def least_squares(data=None, y='y', x='x', add_constant=True, stdres=False):
     """Compute least squares fitted coefficients: helper for groupby apply

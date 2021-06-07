@@ -12,6 +12,10 @@ import indexed_gzip as igzip
 import gzip, io, pickle, time, re, os
 import matplotlib.pyplot as plt
 from .display import plot_time
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 def chunk_to_df(chunk, columns=None):
     """Convert a csv text chunk from TAQ to dataframe with correct dtypes"""
@@ -457,7 +461,7 @@ def plot_taq(left1, right1=None, left2=None, right2=None, num=None, title='',
     plt.tight_layout(pad=3)
 
 def itertaq(trades, quotes, master, open_t=_open_t, close_t=None,
-            cusips=None, symbols=None, echo=True, has_shares=True):
+            cusips=None, symbols=None, echo=ECHO, has_shares=True):
     """Iterates over and filters daily taq trades and quotes by symbol
 
     Parameters

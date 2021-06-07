@@ -15,8 +15,10 @@ import requests, zipfile, io, gzip, csv, json, unicodedata, glob
 import numpy as np
 import matplotlib.pyplot as plt
 from .readers import requests_get
-
-ECHO = False
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 # https://www.sec.gov/edgar/searchedgar/accessing-edgar-data.htm
 # https://www.investor.gov/introduction-investing/general-resources/

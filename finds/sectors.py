@@ -14,8 +14,10 @@ from pandas.api import types
 import re, requests, io, zipfile, json
 from sqlalchemy import Integer, String, Column
 from pandas.api import types
-
-ECHO = False
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 class Sectoring:
     """Base class to implement industry sector grouping schemes

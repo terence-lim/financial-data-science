@@ -14,6 +14,10 @@ from pandas.tseries.holiday import USFederalHolidayCalendar
 from sqlalchemy import Column, Integer
 from pandas.api.types import is_list_like
 from pandas.tseries.offsets import MonthEnd, YearEnd, QuarterEnd
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 # .to_pydatetime() - convert pandas format (Timestamp, datetime64) to datetime
 # datetime.date.strftime(d, '%Y%m%d') - convert datetime to string

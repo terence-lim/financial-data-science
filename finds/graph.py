@@ -64,7 +64,7 @@ def igraph_to_networkx(g, weight='weight', name='name'):
                 G, {k: v for k,v in zip(g.vs[name], g.vs[attrib])}, name=attrib)
     return G
 
-def igraph_draw(g, savefig=None, num=1, figsize=(10,11), pos=None, 
+def igraph_draw(g, savefig=None, num=1, figsize=(12,11), pos=None, 
                 arrowsize=10, arrowstyle='-|>', font_weight='bold',
                 labels=None, 
                 style='dotted', width=.1, font_size=8, font_family='helvetica',

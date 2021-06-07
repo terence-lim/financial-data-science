@@ -12,8 +12,11 @@ from sqlalchemy import Column, Index
 from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, BigInteger
 from pandas.api import types
 from .solve import fractiles
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
-ECHO = False
 def parse_where(where, prefix):
     """Helper method to parse a dict to SQL where clause query
 

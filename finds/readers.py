@@ -19,6 +19,10 @@ from pandas.api.types import is_list_like, is_datetime64_any_dtype
 from pandas.api.types import is_integer_dtype, is_string_dtype, is_numeric_dtype
 from pandas.api import types
 from bs4 import BeautifulSoup
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 _h = {'User-Agent':
       'Mozilla/5.0 (X11; Linux i686; rv:64.0) Gecko/20100101 Firefox/64.0'}
@@ -27,7 +31,7 @@ _h = {"Connection": "keep-alive",
       "/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36"}
 
 def requests_get(url, params=None, retry=3, sleep=2, timeout=3, trap=False,
-                 delay=0, headers=_h, echo=True):
+                 delay=0, headers=_h, echo=ECHO):
     """Wrapper over requests.get, with retry loops and delays
 
     Parameters
@@ -208,7 +212,7 @@ if False:  # retrieve
     from finds.database import SQL
     from finds.busday import BusDay
     from finds.structured import benchmarks
-    sql = SQL(**settings['sql'], echo=True)
+    sql = SQL(**settings['sql'], echo=ECHO)
     bd = BusDay(sql)
     bench = Benchmarks(sql, bd)
     

@@ -24,7 +24,10 @@ from pandas.api import types
 from .structured import Structured
 from .display import plot_date, plot_bands
 from .solve import least_squares
-ECHO = False
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 def _astype(v, t=str):
     """Convert each element in list of nested lists to target type"""

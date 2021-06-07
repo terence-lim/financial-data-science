@@ -27,6 +27,10 @@ from matplotlib import colors, cm
 from matplotlib.lines import Line2D
 from pandas.plotting import register_matplotlib_converters
 register_matplotlib_converters()  # for date formatting in plots
+try:
+    from settings import ECHO
+except:
+    ECHO = False
 
 # plt.style.use('ggplot')
 
