@@ -99,11 +99,12 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
   - maturity, bootstrap, annuity, compounding, rate of discount and interest
   - value at risk, duration, half-life
 
-### learning.py
+### [learning.py](learning.py)
 
-- Convenience methods for statistical, machine and deep learning
+- Convenience methods for textual, statistical, machine and deep learning
 
-  - scipy, sklearn, pytorch, DataLoader
+  - relativized embeddings, word2idx, stratified train-test split, minibatch
+  - sklearn, pytorch, nltk
 
 ### [pyR.py](pyR.py)
 
