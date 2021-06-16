@@ -27,11 +27,12 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 - pytorch, hmmlearn, statsmodels, sklearn
 - Chen, Pelger and Zhu (2020) and others
 
-### Unsupervised learning models for clustering economic series
+### Clustering economic series and outlier detection
 
 [unsupervised_economics.py](unsupervised_economics.py)
 
 - KMeans, agglomerative, spectral clustering, nearest neighbors, PCA
+- isolated forest, minimum covariance determinant, local outlier factor
 - sklearn, FRED-MD
 
 ## Applications in Supervised Learning
@@ -40,15 +41,15 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 [dan_classifier.py](dan_classifier.py)
 
-- pytorch, deep averaging networks, word embeddings, spacy
-- S&P Key Developments, Wharton Research Data Services
+- deep averaging networks, word embeddings
+- pytorch, spacy, GloVe, S&P Key Developments
 
 ### Classification models and events text
 
 [classification_models.py](classification_models.py)
 
-- sklearn, naivebayes, logistic, linearsvc, mlp, decisiontree, wordcloud
-- text classification, S&P Key Developments, Wharton Research Data Services
+- naivebayes, logistic, linearsvc, mlp, decisiontree, wordcloud
+- nltk, S&P Key Developments
 
 ### Binary classification of events text
 
@@ -56,7 +57,7 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 - text classification, logistic regression, stochastic gradient descent
 - precision, recall, ROC curve, sensitivity, specificity
-- S&P Key Developments, Wharton Research Data Services
+- S&P Key Developments
 
 ### Sentiment analysis of Edgar company filings
 

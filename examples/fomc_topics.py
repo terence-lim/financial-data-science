@@ -26,9 +26,10 @@ from finds.alfred import Alfred
 alf = Alfred(api_key=settings['fred']['api_key'])
 usrec = alf('USREC')
 usrec.index = pd.DatetimeIndex(usrec.index.astype(str), freq='infer')
-g = (usrec != usrec.shift()).cumsum()[usrec.gt(0)].to_frame()
+g = usrec.astype(bool) | usrec.shift(-1, fill_value=0).astype(bool)
+g = (g != g.shift(fill_value=0)).cumsum()[g].to_frame()
 g = g.reset_index().groupby('USREC')['date'].agg(['first','last'])
-usrec = [(v[0].replace(day=1), v[1]) for k, v in g.iterrows()]
+vspans = [(v[0], v[1]) for k, v in g.iterrows()]
 
 # Update FOMC Minutes
 dates = fomc['minutes'].distinct('date')       # check dates stored
@@ -119,7 +120,7 @@ for ifig, (name, (base, vectorizer)) in enumerate(algos.items()):
     fig, ax = plt.subplots(num=1+ifig, clear=True, figsize=(5,4))
     date = pd.DatetimeIndex(docs.index.astype(str))        
     ax.plot(date, topics)
-    for a,b in usrec:
+    for a,b in vspans:
         if b >= min(date):
             ax.axvspan(a, min(b, max(date)), alpha=0.3, color='grey')
     ax.set_title(name)

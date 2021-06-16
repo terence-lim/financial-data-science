@@ -1,6 +1,7 @@
-"""Unsupervised learning models for clustering economic series
+"""Unsupervised learning: clustering and outlier detection for economic series
 
 - KMeans, agglomerative, spectral clustering, nearest neighbors, PCA
+- isolated forest, minimum covariance determinant, local outlier factor
 - sklearn, FRED-MD
 
 Terence Lim
@@ -16,6 +17,7 @@ import re
 import time
 from datetime import datetime
 from finds.alfred import fred_md, Alfred
+from finds.solve import lm, is_inlier
 from settings import settings
 imgdir = os.path.join(settings['images'], 'ts')
 
@@ -23,14 +25,16 @@ imgdir = os.path.join(settings['images'], 'ts')
 alf = Alfred(api_key=settings['fred']['api_key'])
 usrec = alf('USREC', freq='m')   # to indicate recession periods in the plots
 usrec.index = pd.DatetimeIndex(usrec.index.astype(str), freq='infer')
-g = (usrec != usrec.shift()).cumsum()[usrec.gt(0)].to_frame()
+
+g = usrec.astype(bool) | usrec.shift(-1, fill_value=0).astype(bool)
+g = (g != g.shift(fill_value=0)).cumsum()[g].to_frame()
 g = g.reset_index().groupby('USREC')['date'].agg(['first','last'])
 vspans = [(v[0], v[1]) for k, v in g.iterrows()]
 
 # Retrieve FRED-MD series
 mdf, mt = fred_md(202104)        # from vintage April 2020
 beg = 19600301
-end = 20191231 # 20191231
+end = 20201231 # 20191231
 
 # Apply tcode transformations, DatetimeIndex, and sample beg:end
 df = mdf
@@ -44,34 +48,90 @@ data.index = pd.DatetimeIndex(data.index.astype(str), freq='infer')
 cols = list(data.columns)
 data
 
-## helpers to estimate explained variance
-from collections import namedtuple
-def lm(x, y, add_constant=True, flatten=True):
-    """Calculate linear multiple regression model results as namedtuple"""
-    def f(a):
-        """helper to optionally flatten 1D array"""
-        if not flatten or not isinstance(a, np.ndarray):
-            return a
-        if len(a.shape) == 1 or a.shape[1] == 1:
-            return float(a) if a.shape[0] == 1 else a.flatten()
-        return a.flatten() if a.shape[0] == 1 else a
-    X = np.array(x)
-    Y = np.array(y)
-    if len(X.shape) == 1 or X.shape[0]==1:
-        X = X.reshape((-1,1))
-    if len(Y.shape) == 1 or Y.shape[0]==1:
-        Y = Y.reshape((-1,1))
-    if add_constant:
-        X = np.hstack([np.ones((X.shape[0], 1)), X])
-    b = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, Y))
-    out = {'coefficients': f(b)}
-    out['fitted'] = f(X @ b)
-    out['residuals'] = f(Y) - out['fitted']
-    out['rsq'] = f(np.var(out['fitted'], axis=0)) / f(np.var(Y, axis=0))
-    out['rvalue'] = f(np.sqrt(out['rsq']))
-    out['stderr'] = f(np.std(out['residuals'], axis=0))
-    return namedtuple('LinearModel', out.keys())(**out)
+# Outlier Detection: single time series
+"""
+- 10iq (interquartile range), or other multiple, around the median
+- Tukey proposed 1.5iq, and 3iq for farout, beyond 1Q and 3Q values
+"""
+outliers = DataFrame({method: (~is_inlier(data, method=method)).mean(axis=1)
+                      for method in ['farout', 'iq10']}, index=data.index)
 
+print("Months with most data points identified as time-series outliers")
+for label in outliers.columns:
+    print(outliers[[label]].sort_values(by=label, ascending=False)[:5].T) 
+    print()
+
+
+# Outlier Detection -- multidimensional features
+""" 
+Isolation Forest
+- Isolates observations by randomly selecting a feature and then
+  randomly selecting a split value: normality is measured by the
+  number of splittings required to isolate a sample -- single feature
+
+Minimum Covariance Determinant (MCD)
+- Assume that the regular data come from a known distribution, such as
+  Gaussian, define outlying observations which stand far enough from
+  the fit shape - global multidimensional
+
+Local Outlier Factor (LOF) 
+- Computes a score reflecting the local density deviation of a given
+  data point with respect to its neighbors, as the measure of
+  abnormality -- local multidimensional
+"""
+from sklearn import svm
+from sklearn.covariance import EllipticEnvelope
+from sklearn.ensemble import IsolationForest
+from sklearn.neighbors import LocalOutlierFactor
+
+def detects(label=None, frac=None):
+    """list of outlier detection algorithms to select from"""
+    algo = {'isoForest': IsolationForest(contamination=frac, random_state=42),
+            'MCD': EllipticEnvelope(contamination=frac),
+            'LOF': LocalOutlierFactor(n_neighbors=20, contamination=frac)}
+    return list(algo.keys()) if label is None else algo[label]
+
+## Compute and store detections
+spans = dict() 
+for label in detects():
+    spans[label] = dict()
+    tic = time.time()
+    for frac in [0.005, 0.02]:  # specify contamination fractions
+        y = detects(label, frac).fit_predict(data)
+        spans[label][frac] = [(d - pd.DateOffset(months=1), d)
+                              for d in data.index[y<0]]
+    print(f"{label}: {time.time()-tic:.0f} secs elapsed")
+
+## Display outlier regions
+fig, axes = plt.subplots(nrows=3, ncols=1, num=1, clear=True, figsize=(9,10))
+for (label, span), ax in zip(spans.items(), axes):
+    outliers.plot(ax=ax)
+    for i, frac in enumerate(sorted(span.keys(), reverse=True)):
+        for a,b in span[frac]:
+            ax.axvspan(a, b, alpha=0.2 + 0.6*i, color='m')
+    ax.legend(['% ' + c for c in outliers.columns] + [label],
+              loc='upper left')
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.suptitle(f"Outlier Detection of Monthly Observations")
+plt.savefig(os.path.join(imgdir, 'anomaly.jpg'))
+plt.show()
+
+
+# Clustering economic series
+"""
+- input y should have shape (n_samples=variables, n_features=monthly values)
+- StandardScaler standardizes by column: but we want to normalize by variable
+  hence first apply StandardScaler to (monthly values, variables), then tranpose
+"""
+from sklearn.preprocessing import StandardScaler
+y = StandardScaler().fit_transform(np.asarray(data)).T
+within_rsq = dict()    # collect average within-cluster rsquareds
+total_rsq = dict()     # collect total rsquareds
+max_clusters = 8
+
+# helpers to show explained variance
 def cluster_rsq(y, centers, labels=None):
     """Calculate within-cluster average rsquared of y to its labelled center"""
     if labels is None:
@@ -82,7 +142,7 @@ def cluster_rsq(y, centers, labels=None):
 
 from sklearn.neighbors import NearestNeighbors
 def print_nearest(centers, neighbors, labels, n_neighbors=3):
-    """Display each center's nearest labeled neighbors, and variance explained"""
+    """Display each center's labeled neighbors, and variance explained"""
     
     c = centers / centers.std(ddof=0, axis=1)[:, None]   # standardize centers
     l = labels.flatten()
@@ -103,22 +163,9 @@ def print_nearest(centers, neighbors, labels, n_neighbors=3):
     print()
 
 
-# Clustering economic variables
-"""
-- input y shall have shape (n_samples=variables, n_features=monthly values)
-- StandardScaler standardizes by column: note we want to normalize each variable
-  hence first apply StandardScaler to (monthly values, variables), then tranpose
-"""
-from sklearn.preprocessing import StandardScaler
-y = StandardScaler().fit_transform(np.asarray(data)).T
-within_rsq = dict()    # collect average within-cluster rsquareds
-total_rsq = dict()     # collect total rsquareds
-max_clusters = 8
+## KMeans clustering - default initialization is k-means++
 
-#
-# KMeans clustering with MiniBatch
-#
-from sklearn.cluster import MiniBatchKMeans, KMeans
+from sklearn.cluster import KMeans
 
 modelname = 'KMeans'
 rsq, ttl = dict(), dict()
@@ -143,9 +190,9 @@ print(f"Model [{modelname}] Average Within-clusters Rsquare:",
 print(f"Total Rsquare: {lm(y=y.T, x=kmeans.cluster_centers_.T).rsq.mean():.3f}")
 print_nearest(kmeans.cluster_centers_, neighbors=y, labels=kmeans.labels_)
 
-#
-# PCA components as cluster centers
-#
+
+## PCA components as cluster centers
+
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
@@ -170,9 +217,9 @@ print(f"Model [{modelname}] Average Within-cluster Rsquare:",
 print(f"Total Rsquare: {lm(y=y.T, x=centers.T).rsq.mean():.3f}")
 print_nearest(centers, neighbors=y, labels=labels)
 
-#
-# Spectral clustering
-#
+
+## Spectral clustering
+
 from sklearn.cluster import SpectralClustering
 
 modelname = 'Spectral'
@@ -198,9 +245,9 @@ print(f"Model [{modelname}] Average Within-cluster Rsquare:",
 print(f"Total Rsquare: {lm(y=y.T, x=centers.T).rsq.mean():.3f}")
 print_nearest(centers, neighbors=y, labels=spectral.labels_)
 
-#
-# Ward Hierarchical Clustering
-#
+
+## Ward Hierarchical Clustering
+
 from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import AgglomerativeClustering
 connectivity = kneighbors_graph(y, n_neighbors=len(y)//2, include_self=False)
@@ -231,10 +278,10 @@ print(f"Model [{modelname}] Average Within-cluster Rsquare:",
 print(f"Total Rsquare: {lm(y=y.T, x=centers.T).rsq.mean():.3f}")
 print_nearest(centers, neighbors=y, labels=ward.labels_)
 
-#
-# AverageLinkage Hierarchical Clustering
+
+## AverageLinkage Hierarchical Clustering
+
 # with cityblock distance
-#
 from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import AgglomerativeClustering
 connectivity = kneighbors_graph(y, n_neighbors=len(y)//2, include_self=False)
@@ -259,21 +306,28 @@ within_rsq[modelname] = rsq
 total_rsq[modelname] = ttl
 
 # show clusters
-# PCA seeks to maximize total rsquare
-# KMeans (with Euclidean distance) seeks to maximize within-cluster rsquare
-# Note for the Average Linking method, we used Manhattan rather than Euclidean distances, 
-# hence appears poorer through ``variance explained'' (or Euclidean) metrics
 print(f"Model [{modelname}] Average Within-cluster Rsquare:",
       f"{cluster_rsq(y, centers, avglink.labels_):.03f}")
 print(f"Total Rsquare: {lm(y=y.T, x=centers.T).rsq.mean():.3f}")
 print_nearest(centers, neighbors=y, labels=avglink.labels_)
 
+
 ## Plot within-cluster and total variance explained
+"""
+- PCA seeks to maximize total rsquare
+
+- KMeans (with Euclidean distance) seeks to maximize within-cluster rsquare
+
+- Average Linking method used Manhattan rather than Euclidean distances, hence 
+  appears poorer through ``variance explained'' (or Euclidean) metrics
+"""
 fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(9,5), num=1, clear=True)
 for v, title, ax in zip([DataFrame(within_rsq), DataFrame(total_rsq)],
                         ['Average Within-Cluster Variance Explained',
                          'Total Variance Explained'], axes.ravel()):
     v.plot(ax=ax, style='-', rot=0)
+    ax.set_xlabel('number of clusters')
+    ax.set_xlabel('in-sample variance explained')
     ax.set_title(title, {'fontsize':9})
     ax.legend(fontsize=8)
 plt.tight_layout()

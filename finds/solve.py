@@ -8,6 +8,7 @@ Author: Terence Lim
 License: MIT
 """
 import numpy as np
+import re
 from pandas import DataFrame, Series
 from statsmodels.tsa.stattools import adfuller
 from pandas.api import types
@@ -60,6 +61,100 @@ def least_squares(data=None, y='y', x='x', add_constant=True, stdres=False):
         x = x + ['stdres']
     return (Series(b[0], index=x) if len(b)==1 else
             DataFrame(b, columns=x, index=y))
+
+from collections import namedtuple
+def lm(x, y, add_constant=True, flatten=True):
+    """Calculate linear multiple regression model results as namedtuple
+
+    Parameters
+    ----------
+    x : array-like or DataFrame/Series
+        RHS independent variables
+    y : array-like or DataFrame/Series
+        LHS dependent variables
+    add_constant : bool, default is True
+        If True, then hstack 'Intercept' column of ones before x variables
+    flatten : bool, default is True
+        If True, then flatten computed results to 1D for return
+
+    Returns
+    -------
+    LinearModel : named tuple, with key values
+      coefficients : estimated linear regression coefficients
+      fitted : fitted y values
+      residuals : fitted - actual y values
+      rsq : R-squared
+      rvalue : square root of r-squared
+      stderr : std dev of residuals
+    """
+    def f(a):
+        """helper to optionally flatten 1D array"""
+        if not flatten or not isinstance(a, np.ndarray):
+            return a
+        if len(a.shape) == 1 or a.shape[1] == 1:
+            return float(a) if a.shape[0] == 1 else a.flatten()
+        return a.flatten() if a.shape[0] == 1 else a
+    X = np.array(x)
+    Y = np.array(y)
+    if len(X.shape) == 1 or X.shape[0]==1:
+        X = X.reshape((-1,1))
+    if len(Y.shape) == 1 or Y.shape[0]==1:
+        Y = Y.reshape((-1,1))
+    if add_constant:
+        X = np.hstack([np.ones((X.shape[0], 1)), X])
+    b = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, Y))
+    out = {'coefficients': f(b)}
+    out['fitted'] = f(X @ b)
+    out['residuals'] = f(Y) - out['fitted']
+    out['rsq'] = f(np.var(out['fitted'], axis=0)) / f(np.var(Y, axis=0))
+    out['rvalue'] = f(np.sqrt(out['rsq']))
+    out['stderr'] = f(np.std(out['residuals'], axis=0))
+    return namedtuple('LinearModel', out.keys())(**out)
+
+def is_inlier(x, method='iq10', bounds=False):
+    """Test if elements of x are column-wise inliers and return as boolean array
+
+    Parameters
+    ----------
+    x : array_like
+        Input array to test element-wise
+    method : str 'iq{D}' (default is 'iq10') or 'tukey' or 'farout'
+        Whether to screen by iq range [Q2 +/- D times (Q3-Q1)]
+        or tukey [Q1 - 1.5(Q3-Q1), Q3 + 1.5(Q3-Q1)] or farout (tukey with 3IQ)
+    bounds : bool (default is False)
+        If True, return (low, high) values of inlier range
+
+    Returns
+    -------
+    inlier : array of bool
+        boolean array of test results that each element is column-wise inlier
+    """
+    def nancmp(f, a, b):
+        valid = ~np.isnan(a)
+        valid[valid] = f(a[valid] , b)
+        return valid
+
+    x = np.array(x)
+    if len(x.shape) == 1:
+        lb, median, ub = np.nanpercentile(x, [25, 50, 75])
+        if method.lower().startswith(('tukey', 'far')):
+            w = 1.5 if method[0].lower() == 't' else 3.0
+            f = [lb - (w * (ub - lb)), ub + (w * (ub - lb))]
+            if not bounds:
+                f = (nancmp(np.greater_equal, x, f[0]) &
+                     nancmp(np.less_equal, x, f[1]))
+        elif method.lower().startswith('iq'):
+            w = float(re.sub('\D', '', method))
+            f = [median - (w * (ub - lb)), median + (w * (ub - lb))]
+            if not bounds:
+                f = (nancmp(np.greater_equal, x, f[0]) &
+                     nancmp(np.less_equal, x, f[1]))
+        else:
+            raise Exception("outliers method not in ['iq[D]', 'tukey']")
+        return np.array(f)
+    else:
+        return np.hstack([is_inlier(x[:, i], method=method, bounds=bounds)\
+                          .reshape(-1, 1) for i in range(x.shape[1])])
 
 from numpy.ma import masked_invalid as valid
 def weighted_average(df, weights=None, axis=0):

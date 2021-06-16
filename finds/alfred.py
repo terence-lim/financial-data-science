@@ -247,12 +247,14 @@ class Alfred:
         t.update(kwargs)
         df = data.sort_index()
         if t['pct_change']:
-            df = df.pct_change(fill_method='pad')
+            #df = df.pct_change(fill_method='pad')
+            df = df.pct_change(fill_method=None)
             df = ((1 + df) ** t['annualize']) - 1  # by compounding
         for _ in range(t['log']):
             df = np.log(df)
         for _ in range(t['diff']):
-            df = df.fillna(method='pad').diff(periods=t['periods'])
+            #df = df.fillna(method='pad').diff(periods=t['periods'])
+            df = df.diff(periods=t['periods'])
             df = df * t['annualize']               # by adding
         return df.shift(t['shift'])
 
@@ -614,18 +616,20 @@ def pcaEM(X, kmax=None, p=2, tol=1e-12, n_iter=2000, echo=ECHO):
 
     Parameters
     ----------
-    x : 2D array
+    X : 2D array
         T observations/samples in rows, N variables/features in columns
+    kmax : int, default is None
+        Maximum number of factors.  If None, set to rank from SVD minus 1
     p : int in [0, 1, 2, 3], default is 2 (i.e. 'ICp2' criterion)
         If 0, number of factors is fixed as kmax.  Else picks one of three
         methods in Bai & Ng (2002) to auto-determine number in every iteration
-    kmax : int, default is None
-        maximum number of factors.  If None, set to rank from SVD minus 1
 
     Returns
     -------
-    r : int
-        best number of factors, or 0 if not determined
+    x : 2D arrayint
+        X with nan's replaced by PCA EM
+    model : dict
+        Model results 'u', 's', 'vT', 'kmax', 'converge', 'n_iter'
     """
     X = X.copy()      # passed by reference
     Y = np.isnan(X)   # identify missing entries

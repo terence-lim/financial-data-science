@@ -6,6 +6,9 @@
 Author: Terence Lim
 License: MIT
 """
+import json
+import os
+import random
 import numpy as np
 import pandas as pd
 from pandas import Series, DataFrame
@@ -14,19 +17,38 @@ from nltk.tokenize import RegexpTokenizer
 from sklearn.model_selection import train_test_split
 from collections import Counter
 import torch
-import json
-import os
-import random
+from hmmlearn import hmm
+
+def hmm_summary(markov, X, lengths, matrix=False):
+    """Return summary statistics from fitting Hidden Markov Model"""
+    logL = markov.score(X, lengths)
+    T = np.sum(lengths)      # n_samples
+    n = markov.n_features    # number of features ~ dimension of covariance matrix
+    m = markov.n_components  # number of states
+    k = markov.n_features + {"diag": m * n,    # parms in mean vector and cov matrix
+                             "full": m * n * (n-1) / 2.0,
+                             "tied": n * (n-1) / 2.0,
+                             "spherical": m}[markov.covariance_type] 
+    p = m**2 + (k * m) - 1   # number of indepedent parameters of the model
+    results = {'aic': -2 * logL + (2 * p),
+               'bic': -2 * logL + (p * np.log(T)),
+               'p': p,
+               'neglogL' : -logL}
+    if matrix:   # whether to return the transition and stationary matrix
+        matrix = DataFrame(markov.transmat_).rename_axis(columns='Transition Matrix:')
+        matrix['Stationary'] = markov.get_stationary_distribution()
+        results.update({'matrix': matrix})   # return matrix as DataFrame
+    return results
 
 def form_batches(batch_size, idx):
-    """Shuffles idx list into minibatches of size batch_size"""
+    """Shuffles idx list into minibatches each of size batch_size"""
     idxs = [i for i in idx]
     random.shuffle(idxs)
     return [idxs[i:(i+batch_size)] for i in range(0,len(idxs),batch_size)]
 
 def form_splits(labels, test_size=0.2, random_state=42):
     """Randomly stratifies labels into train-test split indexes"""
-    if type.is_list_like(labels):
+    if types.is_list_like(labels):
         return train_test_split(np.arange(len(labels)), stratify=labels,
                                 random_state=random_state, test_size=test_size)
     else:
@@ -47,9 +69,9 @@ class TextualData:
         """Initialize class for pre-processing textual data"""
         self.tokenizer = RegexpTokenizer(regex)
 
-    def __call__(self, words, pos=0):
+    def __call__(self, words, field=None):
         """Reads (list of) words to form vocabulary"""
-        self.word2idx = {(w if pos is None or isinstance(w, str) else w[pos]):
+        self.word2idx = {(w if field is None else w[field]):
                           i+1 for i, w in enumerate(words)}
         self.word2idx['UNK'] = 0
         self.idx2word = {v:k for k,v in self.word2idx.items()}

@@ -50,7 +50,7 @@ def print_doc(infile=None, tex=True, verbose=True):
         f = ['pyR.py', 'graph.py', 'solve.py', 'taq.py', 'alfred.py',
              'edgar.py', 'structured.py', 'unstructured.py', 'sectors.py',
              'backtesting.py', 'readers.py', 'display.py', 'gdrive.py',
-             'database.py', 'busday.py']
+             'database.py', 'busday.py', 'learning.py']
         for s in f:
             print_doc('finds/' + s, tex=tex, verbose=verbose)
         return
