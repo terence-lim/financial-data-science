@@ -253,14 +253,50 @@ def read_situations(csvfile, sep='\t'):
     return df.loc[:, ['keydeveventtypeid', 'keydevid', 'headline', 'situation']]
 
 
-if False:  # Read keydevelopment situations text file
-    from finds.database import MongoDB
-    mongodb = MongoDB()
+def read_lm(wordlists=None, echo=ECHO) :
+    """Update Loughran McDonald stopword and sentiment word files"""
 
+    # scrape LM's web page for all google drive filenames
+    url = 'https://sraf.nd.edu/textual-analysis/resources/'
+    r = requests.get(url).text  
+    files = {re.search('>(.*)?</a>', h).group(1):
+         re.search('/file/d/(.*)?/view', h).group(1) for h in
+         re.findall('<a\s+?href.*?https://drive.google.com/file.*?</a>', r)}
+
+    # construct links to download master and all StopWords_* files
+    source = "https://drive.google.com/uc?export=download&id="
+    master = files['csv format']  # master file is csv format
+    stopfiles = {re.search('StopWords_(.*)\.txt', k, re.I).group(1).lower(): 
+                 v for k,v in files.items() if 'stopwords_' in k.lower()}
+    if echo:
+        print({'Master': master}, stopfiles)
+
+    # grab standard word dictionaries, and compare to LM
+    words = fetch_lm(source + master)
+    for stopword, file_id in stopfiles.items():
+        words.update(fetch_lm(source + file_id, stopword))
+    if echo:
+        print(Series({k: len(v) for k,v in words.items()}, name='count'))
+
+    if wordlists:
+        # insert into wordlists unstructured (mongodb) database
+        for k,v in words.items():                   # insert each wordlist as a
+            wordlists.insert('lm', {k:v}, keys=[k]) # document in collection 'lm'
+        if echo:
+            print(Series({k: len(wordlists['lm', k]) for k in words.keys()}))
+            
+    return pd.concat([Series({k: len(v) for k,v in words.items()}, name='count'),
+                      Series(words, name='words')], axis=1)
+
+
+if __name__ == "__init__":  
     from settings import settings
     import os
     import time
-    
+    from finds.database import MongoDB
+    mongodb = MongoDB()
+
+    # Read keydevelopment situations text file
     keydev = Unstructured(mongodb, 'KeyDev')
     keydev['events'].create_index('keydevid', unique=True)
 
@@ -276,3 +312,6 @@ if False:  # Read keydevelopment situations text file
         {t: keydev['events'].count_documents({'keydeveventtypeid': t})
          for t in keydev['events'].distinct('keydeveventtypeid')})
 
+
+    wordlists = Unstructured(mongodb, 'WordLists')
+    read_lm(wordlists)

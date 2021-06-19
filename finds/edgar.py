@@ -14,18 +14,31 @@ import os, sys, time, re
 import requests, zipfile, io, gzip, csv, json, unicodedata, glob
 import numpy as np
 import matplotlib.pyplot as plt
+"""
 from .readers import requests_get
 try:
     from settings import ECHO
 except:
     ECHO = False
-
-# https://www.sec.gov/edgar/searchedgar/accessing-edgar-data.htm
-# https://www.investor.gov/introduction-investing/general-resources/
-#   news-alerts/alerts-bulletins/investor-bulletins/how-read-8
-
+"""
+from readers import requests_get
+ECHO = True
+    
 class Edgar:
-    # EDGAR_Forms_v2.1.py from ND-SRAF / McDonald : 201606
+    """Class to retrieve and pre-process Edgar website documents
+
+    Attributes
+    ----------
+    forms_ : dict with  key in {'10-K', '10-Q', '8-K'}
+      Values are list of form names str
+
+    Notes
+    -----
+    https://www.sec.gov/edgar/searchedgar/accessing-edgar-data.htm
+    https://www.investor.gov/introduction-investing/general-resources/
+      news-alerts/alerts-bulletins/investor-bulletins/how-read-8
+    """
+    # Create .forms_ list: EDGAR_Forms_v2.1.py from ND-SRAF / McDonald 201606
     f_10K = ['10-K', '10-K405', '10KSB', '10-KSB', '10KSB40']
     f_10KA = ['10-K/A', '10-K405/A', '10KSB/A', '10-KSB/A', '10KSB40/A']
     f_10KT = ['10-KT', '10KT405', '10-KT/A', '10KT405/A']
@@ -36,13 +49,28 @@ class Edgar:
               '10-Q' : f_10Q + f_10QA + f_10QT,
               '8-K' : ['8-K']}
     url_prefix = 'https://www.sec.gov/Archives'
-    def __init__(self, dirname, echo=ECHO):
-        self.dirname = dirname
-        self.echo_ = echo
 
-    def _print(self, *args, echo=None):
-        if echo or self.echo_:
-            print(*args)
+    #
+    # Static methods to fetch documents from SEC Edgar website
+    #    
+    @staticmethod
+    def basename(date, form, cik, filename):
+        """Construct base filename from components of the filing pathname"""
+        base = os.path.split(filename)[-1]
+        return f"{date}_{form.replace('/A', '-A')}_edgar_data_{cik}_{base}"
+    
+    @staticmethod
+    def from_path(pathname, filename=None):
+        """Extract meta info from edgar pathname"""
+        items = pathname.split('.')[0].split('/')
+        adsh = items[-1].replace('-','')
+        resource = os.path.join(*items[:-1], adsh)
+        indexname = os.path.join(resource, items[-1] + '-index.html')
+        return (os.path.join(resource, filename) if filename
+                else {'root': Edgar.url_prefix,
+                      'adsh': adsh,
+                      'indexname': indexname,
+                      'resource' : resource})
 
     @staticmethod
     def fetch_tickers(echo=ECHO):
@@ -123,7 +151,7 @@ class Edgar:
     def fetch_detail(pathname, root=None, echo=ECHO):
         """Fetch from HTML file, containing table of hyperlinks of documents"""
         root = root or Edgar.url_prefix
-        subs = Edgar.from_pathname(pathname)
+        subs = Edgar.from_path(pathname)
         r = requests_get(os.path.join(root, subs['indexname']), echo=echo)
         return None if r is None else r.content
 
@@ -187,22 +215,8 @@ class Edgar:
         if echo: print('normalize: %d' % len(text))
         return text
 
-
     @staticmethod
-    def from_pathname(pathname, filename=None):
-        """Extract meta info from edgar pathname"""
-        items = pathname.split('.')[0].split('/')
-        adsh = items[-1].replace('-','')
-        resource = os.path.join(*items[:-1], adsh)
-        indexname = os.path.join(resource, items[-1] + '-index.html')
-        return (os.path.join(resource, filename) if filename
-                else {'root': Edgar.url_prefix,
-                      'adsh': adsh,
-                      'indexname': indexname,
-                      'resource' : resource})
-
-    @staticmethod
-    def extract_filename(detail, echo=ECHO):
+    def extract_filenames(detail, echo=ECHO):
         """Extract ordered list of .htm and .txt filenames from filing detail"""
         df_list = pd.read_html(detail)
         jdf = -1
@@ -226,109 +240,11 @@ class Edgar:
                             html_name = name
                         else:
                             html_all += [name]
-        if echo: print(f"(extract_filename) [{jdf} {jrow} {jcol}] {html_all}")
+        if echo:
+            print(f"(extract_filenames) [{jdf} {jrow} {jcol}] {html_all}")
         return [html_name] + html_all if html_name else html_all
 
-    def archive_index(self, form='', date=None, item=None, permno=None, zip=1):
-        """List index of filings in local (zipped or folders) archive
-        Examples
-        --------
-        form, date, item, permno = '10-K', None, 'bus', None
-        form, date, item, permno = '10-K', None, 'bus', 76676
-        form, date, item, permno = '10-K', 2020, 'detail', None
-        form, date, item, permno = '10-K', 20200427, 'detail', None
-        form, date, item, permno = '8-K', 20200427, 'detail', None
-        form, date, item, permno = '8-K', 20200427, None, None        
-        form, date, item, permno = '10-Q', 2020, None, None        
-        form, date, item, permno = '10-Q', 20200608, None, None        
-        form, date, item, permno = '10-Q', 2020, 'detail', None        
-        zip = False
-        form, date, item, permno = '', 2020, None, None
-        form, date, item, permno = '', 2019, 'detail', None
-        form, date, item, permno = '10-K', None, 'mda', None
-        form, date, item, permno = '8-K', 2020, None, None
-        form, date, item, permno = '8-K', 2020, 'detail', None
-        zip = True
-        """
-        def list_zip(zipname):
-            """Helper to list index of zipped archive"""
-            r = []
-            with zipfile.ZipFile(zipname) as archive:
-                for pathname in archive.namelist():
-                    if pathname.endswith('/'):
-                        self._print(pathname)
-                    else:
-                        #r.append(pathname)
-                        r.append(self.from_archivepath(pathname=pathname))
-            return r
-        
-        def list_dir(dirname, suffix='*'):
-            """Helper to list files in a folder"""
-            r = []
-            for a in glob.glob(os.path.join(dirname, suffix)):
-                a = a.replace(dirname + '/', '')
-                r.append({'pathname': a} if '_' not in a else 
-                         self.from_archivepath(pathname=a))
-            return r
-
-        p = os.path.join(self.dirname, form) # infer and construct full pathname
-        if item is not None:    # 1) item may be mda10K, bus10K, detail
-            p = os.path.join(p, item)  
-        if date is not None:    # 2) date may be year
-            date = str(date)
-            p = os.path.join(p, date[:4] if len(date)>4 else '', str(date))
-        if zip:                 # 3a) zip is True => return list_zip()
-            r = list_zip(p + '.zip')
-            df = DataFrame(r).drop_duplicates(['pathname','date','form','cik'])
-            if date is None:
-                t = DataFrame.from_dict(df['pathname'].str.split('/').to_dict(),
-                                        orient='index')
-                if permno is None:
-                    df['permno'] = t.iloc[:,1].values
-                else:
-                    df=df[t.iloc[:,1].astype(int)==permno]
-        else:                   # 3b) zip is False =>
-            if permno is not None:   # 4) permno 
-                p = os.path.join(p, str(permno))
-            if date is not None and len(date) < 5: #5a) date is year => not leaf
-                df = pd.concat([DataFrame(list_dir(p, os.path.basename(r)+'/*'))
-                                for r in glob.glob(os.path.join(
-                                        p, date+'[01]???'))], ignore_index=True)
-            else: # 5b) date is None or 8-digit => is leaf, so return list_dir()
-                df = DataFrame(list_dir(p))
-                if date is None and permno is None:
-                    df['permno'] = df['pathname'].astype(int)
-        return df, p + ('.zip' if zip else '')
-
-    @staticmethod
-    def to_archivepath(date, form, cik, filename):
-        """Construct file name in archive from components of the filing"""
-        base = os.path.split(filename)[-1]
-        return f"{date}_{form.replace('/A', '-A')}_edgar_data_{cik}_{base}"
-
-    @staticmethod
-    def from_archivepath(pathname):
-        """Deconstruct components of the filing from archive file name"""
-        items = pathname.split('_')        # components are separated by '_'
-        items[0] = items[0].split('/')[-1] # in the last substring split on '/'
-        return {'cik': int(items[4]),
-                'form': items[1].replace('-A', '/A'), # basename cannot have '/'
-                'date': int(items[0]),
-                'pathname': pathname}
-
-    @staticmethod
-    def archive_filing(pathname, archive):
-        """Read filing text from pathname in local (zip or folders) archive"""
-        if archive.endswith('.zip'):
-            with zipfile.ZipFile(archive).open(pathname) as f:
-                with io.TextIOWrapper(f, encoding='latin-1') as g:
-                    text = g.read()
-                    #text = re.sub('(May|MAY)', ' ', text)  # drop 'May'
-        else:
-            with open(os.path.join(archive, pathname)) as f:
-                text = f.read()
-        return text
-
+    
     @staticmethod
     def extract_item(text, item, echo=ECHO):
         """Extract text passage for {'mda10K', 'bus10K'} item from input text
@@ -471,102 +387,231 @@ class Edgar:
                 best = mda
         return best
 
-if False: # download 10-K's, 10-Q's, and 8-Ks
+
+class EdgarClone(Edgar):
+    """Class to save Edgar documents locally in cloned archives
+
+    prefix = '/home/terence/Downloads/sshfs/10X/'
+
+    # zip -r 2019.zip 2019
+    ed = EdgarClone(prefix, zipped=False)
+    files = ed.open(date=2021)   # 10-K and 10-Q (in prefix)
+    files = ed.open(date=2021, item='detail')
+    files = ed.open(form='8-K', date=2021)
+    files = ed.open(form='8-K', date=2021, item='detail')
+    files = ed.open(form='10-K', item='mda10K', permno=85414) 
+    files = ed.open(date=20210323)
+    files = ed.open(date=20210323, item='detail')
+    files = ed.open(form='8-K', date=20210323, item='detail')
+
+    ed = EdgarClone(prefix, zipped=True)
+    files = ed.open(date=2020)   # 10-K and 10-Q (in prefix)
+    files = ed.open(date=2020, item='detail')
+    
+    files = ed.open(form='10-K', item='mda10K')   # TO ZIP
+    files = ed.open(form='10-K', item='bus10K')   # TO ZIP
+
+    """
+    def __init__(self, prefix='', zipped=True, echo=ECHO):
+        """To access (zipped or unzipped) Edgar cloned archives"""
+        self.prefix = prefix
+        self.zipped = zipped
+        self.echo_ = echo
+
+    def to_path(self, basename, form, date=None, item=None, permno=None):
+        """Construct local full path name for clone archive"""
+        s = os.path.join(self.prefix,
+                         str(form),
+                         str(item) if item else '',
+                         str(permno) if permno else '',
+                         str(date // 10000) if date else '',
+                         str(date) if date else '',
+                         basename)
+        os.makedirs(os.path.dirname(s), exist_ok=True)
+        return s        
+
+    def open(self, form='', date=None, item=None, permno=None):
+        """Opens a clone archive and return list of its documents"""
+        def from_clonepath(pathname):
+            """Helper to deconstruct components of filing from clone file name"""
+            items = pathname.split('_')         # components are separated by '_'
+            items[0] = items[0].split('/')[-1]  # split last substring on '/'
+            return {'cik': int(items[4]),
+                    'form': items[1].replace('-A', '/A'), # cannot have '/'
+                    'date': int(items[0]),
+                    'pathname': pathname}
+        self.close()
+        
+        p = os.path.join(self.prefix, form, item or '')
+        date = str(date) if date else None
+        r = []
+        if self.zipped: # if zipped archive: then have to retrieve its namelist()
+            p = os.path.join(p, date) + '.zip'
+            with zipfile.ZipFile(p) as clone:
+                for pathname in clone.namelist():
+                    if pathname.endswith('/'):
+                        if self.echo_:
+                            print(pathname)
+                    else:
+                        r.append(from_clonepath(pathname=pathname))
+            df = DataFrame(r).drop_duplicates(['pathname','date','form','cik'])
+            if item is None:   # may be mda10K, bus10K, detail
+                t = DataFrame.from_dict(df['pathname'].str.split('/').to_dict(),
+                                        orient='index')
+                if permno is None:  # select all, so explicitly assign permno col
+                    df['permno'] = t.iloc[:,1].values
+                else:               # select by permno
+                    df=df[t.iloc[:,1].astype(int)==permno]
+            self.keys_ = df                        
+            self.zipped = p
+            self.archive = zipfile.ZipFile(p)
+        else:
+            def list_dir(*args):
+                """helper to list potential document filenames in folder"""
+                r = []
+                for a in glob.glob(os.path.join(*args, '*')):
+                    a = a.replace(self.prefix + '/', '')
+                    r.append({'pathname': a} if '_' not in a else 
+                             from_clonepath(pathname=a))
+                return r
+
+            if date is None:
+                if permno is None:   # select all permnos
+                    q = glob.glob(os.path.join(p, '[0-9]????'))
+                    df = pd.concat([DataFrame(list_dir(r))\
+                                    .assign(permno=int(r.split('/')[-1]))
+                                    for r in q], ignore_index=True)
+                else:                # select by permno
+                    q = glob.glob(os.path.join(p, str(permno)))
+                    df = pd.concat([DataFrame(list_dir(r)) for r in q],
+                                   ignore_index=True)               
+            else:
+                if len(date) < 5:    # 4) date is year => not leaf
+                    dates = glob.glob(os.path.join(p, date, date + '[01]???'))
+                    df = pd.concat([DataFrame(list_dir(r)) for r in dates],
+                                   ignore_index=True)
+                else:                # 5) date is specific 8-digit date => leaf
+                    q = glob.glob(os.path.join(p, date[:4], date))
+                    df = pd.concat([DataFrame(list_dir(r)) for r in q],
+                                   ignore_index=True)                
+            self.keys_ = df
+            self.archive = p
+        if self.echo_:
+            print(self.zipped if self.zipped else self.archive, len(self.keys_))
+        return self.keys_
+
+    def close(self):
+        """Close the clone archive"""
+        try:
+            self.archive.close()
+            self.archive = None
+        except:
+            pass
+
+    def __getitem__(self, pathname):
+        """Retrieves text of document file by pathname in clone archive"""
+        if not isinstance(pathname, str):
+            pathname = pathname['pathname']
+        if self.zipped:
+            with self.archive.open(pathname) as f:
+                with io.TextIOWrapper(f, encoding='latin-1') as g:
+                    text = g.read()
+        else:
+            with open(os.path.join(self.prefix, pathname)) as f:
+                text = f.read()
+        return text
+   
+#    
+# download 10-K's, 10-Q's, and 8-Ks from Edgar
+#
+if False: 
+    #from finds.edgar import Edgar, EdgarClone
     from settings import settings
-    from finds.edgar import Edgar
     import time, os
     import numpy as np
     from pandas import DataFrame, Series
-    ed = Edgar(settings['10X'])
+    ed = EdgarClone(settings['10X'], zipped=True)
+    forms = Edgar.forms_['10-K'] + Edgar.forms_['10-Q'] + Edgar.forms_['8-K']
 
-    quarters = [2021] # np.arange(2012, 2019, 0.25):
-    tic = time.time()
     logger = {}
-    forms = ed.forms_['10-K'] + ed.forms_['10-Q'] + ed.forms_['8-K']
+    quarters = [2021.25] # np.arange(2012, 2019, 0.25):
+    tic = time.time()
+    year = quarters[0]
     for year in quarters:
         y = int(year)
         q = int(1 + ((year - y)*4))
-        files = ed.fetch_index(year=y, quarter=q)
+        files = Edgar.fetch_index(year=y, quarter=q)
+        r = files.iloc[3]
         for i, r in files.iterrows():  # 294124
-            if i < 294124:
-                continue
             if r['form'] in forms:
-                form8k = r['form'] in ed.forms_['8-K']
-                detail = ed.fetch_detail(pathname=r['pathname'])
-                if detail is None:               # filing detail page missing!
+                form8k = '8-K' if r['form'] in Edgar.forms_['8-K'] else ''
+
+                # To save detail page
+                detail = Edgar.fetch_detail(pathname=r['pathname'])
+                if detail is None and ECHO:     # filing detail page missing!
                     print('****', r['name'], r['pathname'], '****')
                     continue
-                s = os.path.join(ed.dirname,     # to save detail webpage
-                                 '8-K' if form8k else '',
-                                 'detail',
-                                 str(r['date'] // 10000),
-                                 str(r['date']),
-                                 ed.to_archivepath(date=r['date'],
-                                                   form=r['form'],
-                                                   cik=r['cik'],
-                                                   filename=r['pathname']))
-                os.makedirs(os.path.dirname(s), exist_ok=True)
-                with open(s, 'wb') as g:
-                    g.write(detail)
-                print(r['date'], r['form'], r['cik'], f"*{i}/{len(files)}*")
-
-                # to save main filing document text
-                f = ed.extract_filename(detail)  # retrieve main filings
-                if form8k and ".htm" in f[0]:    # for 8-K's: merge all .htm*'s
-                    filenames = [ed.from_pathname(r['pathname'], g)
-                                 for g in f if ".htm" in g]
-                    text = "\n".join([ed.fetch_filing(s, form8k=True)
-                                      for s in filenames])
+                s = ed.to_path(form=form8k, item='detail', cik=r['cik'],
+                               date=r['date'], basename=Edgar.basename(*r))
+                with open(s, 'wb') as f:
+                    f.write(detail)
+                if ECHO:
+                    print(r['date'], r['form'], r['cik'], f"*{i}/{len(files)}*")
+                    
+                # To save main filing document text
+                filenames = Edgar.extract_filenames(detail)  # retrieve filings
+                if form8k and ".htm" in filenames[0]:
+                    text = "\n".join([Edgar.fetch_filing(
+                        Edgar.from_path(r['pathname'], f),
+                        form8k=True) for f in filenames if ".htm" in f])
                 else:
-                    filename = ed.from_pathname(r['pathname'], f[0])
-                    text = ed.fetch_filing(filename, form8k=form8k)
+                    text = Edgar.fetch_filing(Edgar.from_path(
+                        r['pathname'], filenames[0]), form8k=form8k)
                 if not text:
-                    text = ed.fetch_filing(r['pathname'], form8k=form8k)
-                s = os.path.join(ed.dirname,     # save filing document text
-                                 '8-K' if form8k else '',
-                                 str(r['date'] // 10000),
-                                 str(r['date']),
-                                 ed.to_archivepath(date=r['date'],
-                                                   form=r['form'],
-                                                   cik=r['cik'],
-                                                   filename=r['pathname']))
-                os.makedirs(os.path.dirname(s), exist_ok=True)
-                with open(s, 'wt') as g:
-                    g.write(text)
+                    text = Edgar.fetch_filing(r['pathname'], form8k=form8k)
+                s = ed.to_path(date=r['date'], form=form8k, cik=r['cik'],
+                               basename=Edgar.basename(*r))
+                with open(s, 'wt') as f:
+                    f.write(text)
+                    
                 logger[r['pathname'].split('/')[-1]] = r.append(
                     Series({'len': len(text)})).drop('pathname')
-                print(*r.values, f"*{i}/{len(files)}*")
+                if ECHO:
+                    print(*r.values, f"*{i}/{len(files)}*")
     logger = DataFrame.from_dict(logger, orient='index')
 
-if False: # extract and save MDA BUS text
+#
+# Extract and save MDA and BUS text
+#
+if False: 
     from finds.database import SQL
     from finds.structured import PSTAT
     from finds.busday import BusDay
     from settings import settings
     from finds.edgar import Edgar
-    ed = Edgar(settings['10X'])
     
+    ed = EdgarClone(settings['10X'], zipped=False)
     sql = SQL(**settings['sql'])
     bday = BusDay(sql)
     rdb = None
     pstat = PSTAT(sql, bday)
-    to_permno = pstat.build_lookup(source='lpermno', target='cik', fillna=0)
+    to_permno = pstat.build_lookup(target='lpermno', source='cik', fillna=0)
 
-    mindate = 0   # 20201001
-    items = {'10-K': ['bus10K', 'mda10K'], '10-Q': ['mda10Q']}
-    items = {'10-K': ['bus10K', 'mda10K']}
+    mindate = 20210101   # 20201001
+    items = {'10-K': ['bus10K', 'mda10K']}  # '10-Q': ['mda10Q']}
     logger = []
-    for year in [2021]:  #2019, 2021):  # Start 1998++
-        files, root = ed.archive_index(date=year, zip=False)
-        for _, f in files.iterrows():
-            permno = to_permno(f['cik'])
-            if f['form'] in items and permno and f['date'] >= mindate:
-                filing = ed.archive_filing(f['pathname'], root)
-                for item in items[f['form']]:
-                    extract = ed.extract_item(filing, item)
-                    s = os.path.join(ed.root, item, str(permno),
-                                     os.path.basename(f['pathname']))
-                    os.makedirs(os.path.dirname(s), exist_ok=True)
+    year = 2021
+    for year in [2021]:    #2019, 2021):  # Start 1998++
+        rows = ed.open(date=year)
+        row = rows.iloc[0]
+        for i, row in rows.iterrows():
+            permno = to_permno(int(row['cik']))
+            if row['form'] in items and permno and row['date'] >= mindate:
+                filing = ed[row['pathname']]
+                for item in items[row['form']]:
+                    extract = Edgar.extract_item(filing, item)
+                    s = ed.to_path(form=row['form'], permno=permno, item=item,
+                                   basename=os.path.basename(row['pathname']))
                     with open(s, 'wt') as g:
                         g.write(extract)
                     r = {'year': year, 'permno': permno, 'item': item,
@@ -578,69 +623,3 @@ if False: # extract and save MDA BUS text
                     print(", ".join([f"{k}: {v}" for k,v in r.items()]))
 
     logger = DataFrame.from_records(logger)
-
-# NOT USED, because from .htm rather than .txt
-xdrop = [re.compile(b"<type>GRAPHIC", re.I),
-         re.compile(b"<type>EXCEL", re.I),
-         re.compile(b"<type>PDF", re.I),
-         re.compile(b"<type>ZIP", re.I),
-         re.compile(b"<type>COVER", re.I),
-         re.compile(b"<type>CORRESP", re.I),
-         re.compile(b"<type>JSON", re.I),
-         re.compile(b"<type>XML", re.I)]
-xexhibit = re.compile(b"<type>EX-", re.I)
-xdocs = re.compile(b"<DOCUMENT>[\w\W]*?<", re.I)
-xmda = re.compile(b"DISCUSSION AND ANALYSIS[\w\W]*?DISCUSSION AND ANALYSIS",re.I)
-xtype = re.compile(b"<TYPE>[\w\W]*?<", re.I)
-xbrls = [re.compile("ix:\S*", re.I), re.compile("xbrli:\S*", re.I)]
-
-if False: # process 8K files
-    """
-    Save Insider Transactions
-    https://www.sec.gov/cgi-bin/own-disp?action=getissuer&CIK=0000084246
-    pull out <table border="0" cellspacing="0" id="transaction-report">
-    except first row, drop other <tr align="left" valign="top" class="header">
-    1. 8K Insider Trading Gap Event Study
-
-       Price Change (mkt-adjusted) 3-days up to close before Report Period Date
-       Price Change (mkt-adjusted) Report Period Date up to close of day after filing date
-       Price Change (mkt-adjusted) 3-days from day after filing date
-
-       With or Without Insider Activity
-       By 8K Type
-
-   2. Abnormal (absolute) Returns and Volume
-      around Report Period Date and Filing Date
-      by event type -- compare to average return
-      especially:
-    Item 4.01 – Changes in Registrant’s Certifying Accountant
-    Item 3.03 – Material Modification to Rights of Security Holders
-    Item 4.02 – Non-Reliance on Previously Issued
-    Item 5.02 – Departure; Election of Directors; Appointment; Compensatory Arrangements
-    Item 3.01 – Notice of Delisting
-    Item 2.06 – Material Impairments
-    Item 1.01 – Entry into a Material Definitive Agreement
-    Item 1.02 – Termination of a Material Definitive Agreement
-    1.03 – Bankruptcy or Receivership
-    Item 2.03 – Creation of a Direct Financial Obligation
-    Item 2.04 – Triggering Events
-    Item 2.05 – Costs Associated with Exit
-
-    3. Cosine, Jacard and Wordvec  Similarity of (parsed) Nouns of Bus10K in 2020, especially Zoom and Moderna
-    https://arxiv.org/abs/1803.11175
-    SSRN pre-trained
-
-    import tensorflow_hub as hub
-module_url = "https://tfhub.dev/google/universal-sentence-encoder/1?tf-hub-format=compressed"
-
-# Import the Universal Sentence Encoder's TF Hub module
-embed = hub.Module(module_url)
-similarity_input_placeholder = tf.placeholder(tf.string, shape=(None))
-similarity_message_encodings = embed(similarity_input_placeholder)
-with tf.Session() as session:
-    session.run(tf.global_variables_initializer())
-    session.run(tf.tables_initializer())
-    message_embeddings_ = session.run(similarity_message_encodings, feed_dict={similarity_input_placeholder: messages})
-
-    corr = np.inner(message_embeddings_, message_embeddings_)
-"""

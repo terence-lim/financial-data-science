@@ -72,7 +72,7 @@ def requests_get(url, params=None, retry=3, sleep=2, timeout=3, trap=False,
             if echo: print(e, r.status_code)
             r = None
     if r is None:  # likely timed-out after retries:
-        if trap:     # raise exception if trap, else silently return False
+        if trap:     # raise exception if trap, else silently return None
             raise Exception(f"requests_get: {url} {time.time()}")
         return None
     if r.status_code != 200:
