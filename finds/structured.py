@@ -1933,6 +1933,107 @@ class Finder:
         result = self.sql.run(q, label)
         return DataFrame(**result) if result is not None else None
 
+def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend, 
+                     window=0, pctiles=[30, 70], leverage=1, months=[], 
+                     minobs=100, minprc=0, mincap=0, maxdecile=10):
+    """Generate monthly time series of holdings by two-way sort procedure
+
+    Parameters
+    ----------
+    stocks : Structured object
+        Stock returns and price data
+    label : string
+        Signal name to retrieve either from Signal sql table or {data} dataframe
+    signals : Signals, or chunk_signal object
+        Call to extract cross section of values for the signal
+    rebalbeg : int
+        First rebalance date (YYYYMMDD)
+    rebalend : int
+        Last holding date (YYYYMMDD)
+    pctiles : tuple of int, default is [30, 70]
+        Percentile breakpoints to sort into high, medium and low buckets
+    window: int, optional (default 0)
+        Number of months to look back for signal values (non-inclusive day),
+        0 (default) is exact date
+    months: list of int, optional
+        Month/s (e.g. 6 = June) to retrieve universe and market cap,
+        [] (default) means every month
+    maxdecile: int, default is 10
+        Include largest stocks from decile 1 through decile (10 is smallest)
+    minobs: int, optional
+        Minimum required universe size with signal values
+    leverage: numerical, default is 1.0
+        Leverage multiplier, if any
+
+    Notes
+    -----
+    Independent sort by median (NYSE) mkt cap and 30/70 (NYSE) HML percentiles
+    Subportfolios of the intersections are value-weighted; 
+       spread portfolios are equal-weighted subportfolios
+    Portfolio are resorted every June, and other months' holdings are adjusted 
+      by monthly realized retx
+    """
+    rebaldates = stocks.bd.date_range(rebalbeg, rebalend, 'endmo')
+    holdings = {label: dict(), 'smb': dict()}  # to return two sets of holdings
+    sizes = {h : dict() for h in ['HB','HS','MB','MS','LB','LS']}
+    for rebaldate in rebaldates:  #[:-1]
+
+        # check if this is a rebalance month
+        if not months or (rebaldate//100)%100 in months or not holdings[label]:
+            
+            # rebalance: get this month's universe of stocks with valid data
+            df = stocks.get_universe(rebaldate)
+            
+            # get signal values within lagged window
+            start = (stocks.bd.endmo(rebaldate, months=-abs(window)) if window
+                     else stocks.bd.offset(rebaldate, offsets=-1))
+            signal = signals(label=label, date=rebaldate, start=start)
+            df[label] = signal[label].reindex(df.index)
+
+            df = df[df['prc'].abs().gt(minprc) &
+                    df['cap'].gt(mincap) &
+                    df['decile'].le(maxdecile)].dropna()
+
+            if (len(df) < minobs):  # skip if insufficient observations
+                continue
+
+            # split signal into desired fractiles, and assign to subportfolios
+            df['fractile'] = fractiles(df[label],
+                                       pctiles=pctiles,
+                                       keys=df[label][df['nyse']],
+                                       ascending=False)
+            subs = {'HB' : (df['fractile'] == 1) & (df['decile'] <= 5),
+                    'MB' : (df['fractile'] == 2) & (df['decile'] <= 5),
+                    'LB' : (df['fractile'] == 3) & (df['decile'] <= 5),
+                    'HS' : (df['fractile'] == 1) & (df['decile'] > 5),
+                    'MS' : (df['fractile'] == 2) & (df['decile'] > 5),
+                    'LS' : (df['fractile'] == 3) & (df['decile'] > 5)}
+            weights = {label: dict(), 'smb': dict()}
+            for subname, weight in zip(['HB','HS','LB','LS'],
+                                       [0.5, 0.5, -0.5, -0.5]):
+                cap = df.loc[subs[subname], 'cap']
+                weights[label][subname] = leverage * weight * cap / cap.sum()
+                sizes[subname][rebaldate] = sum(subs[subname])
+            for subname, weight in zip(['HB','HS','MB','MS','LB','LS'],
+                                       [-0.5, 0.5, -0.5, 0.5, -0.5, 0.5]):
+                cap = df.loc[subs[subname], 'cap']
+                weights['smb'][subname] = leverage * weight * cap / cap.sum()
+                sizes[subname][rebaldate] = sum(subs[subname])
+            #print("(famafrench_sorts)", rebaldate, len(df))
+            
+        else:  # else not a rebalance month, so simply adjust holdings by retx
+            retx = 1 + stocks.get_ret(stocks.bd.begmo(rebaldate),
+                                      rebaldate, field='retx')['retx']
+            for port, subports in weights.items():
+                for subport, old in subports.items():
+                    new = old * retx.reindex(old.index, fill_value=1)
+                    weights[port][subport] = new / (abs(np.sum(new))
+                                                    * len(subports) / 2)
+
+        # combine this month's subportfolios
+        for h in holdings:
+            holdings[h][rebaldate] = pd.concat(list(weights[h].values()))
+    return {'holdings': holdings, 'sizes': sizes}
 
 if False:
     from settings import settings

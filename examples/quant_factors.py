@@ -19,7 +19,7 @@ from datetime import datetime
 from settings import settings
 from finds.database import SQL, Redis
 from finds.structured import PSTAT, CRSP, IBES, Benchmarks, Signals
-from finds.busday import BusDay, Weekly, minibatch
+from finds.busday import BusDay, Weekly
 from finds.structured import as_signal
 from finds.backtesting import BackTest
 from finds.solve import fractiles

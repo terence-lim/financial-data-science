@@ -158,7 +158,8 @@ class SQL(object):
              f" FIELDS TERMINATED BY ',' ENCLOSED BY '\"' LINES TERMINATED "
              f" BY '\\n' IGNORE 1 ROWS {options};")
         try:
-            print_verbose("(load_infile)", q)
+            if self.echo_:
+                print("(load_infile)", q)
             self.run(q)
         except Exception as e:
             print("(load_infile) Got exception = ", e, " Query = ", q)
@@ -194,7 +195,8 @@ class SQL(object):
                       index = (index_label is not None),
                       index_label = index_label)
         except:  # duplicates exists, so to_sql to temp, and insert ignore
-            print_verbose("(load_dataframe) Retrying insert ignore", table)
+            if self.echo_:
+                print("(load_dataframe) Retrying insert ignore", table)
             self.run('drop table if exists ' + self.temp_)
             df.to_sql(self.temp_,
                       self.engine,
@@ -276,7 +278,8 @@ class SQL(object):
         else:  # execute as single chunk
             where += " LIMIT " + str(limit) if limit else ''
             q = f"SELECT {index}, {columns}, {values} FROM {table} {where}"
-            print_verbose('(pivot)', q)
+            if self.echo_:
+                print('(pivot)', q)
             return self.read_dataframe(q).pivot(
                 index=index, columns=columns, values=values)
         

@@ -14,15 +14,16 @@ import os, sys, time, re
 import requests, zipfile, io, gzip, csv, json, unicodedata, glob
 import numpy as np
 import matplotlib.pyplot as plt
-"""
-from .readers import requests_get
 try:
     from settings import ECHO
 except:
     ECHO = False
-"""
-from readers import requests_get
-ECHO = True
+if __name__ == '__main__':
+    from readers import requests_get
+    from settings import settings
+    ECHO = True
+else:
+    from .readers import requests_get
     
 class Edgar:
     """Class to retrieve and pre-process Edgar website documents
@@ -391,10 +392,8 @@ class Edgar:
 class EdgarClone(Edgar):
     """Class to save Edgar documents locally in cloned archives
 
-    prefix = '/home/terence/Downloads/sshfs/10X/'
-
     # zip -r 2019.zip 2019
-    ed = EdgarClone(prefix, zipped=False)
+    ed = EdgarClone(prefix=settings['10X'], zipped=False)
     files = ed.open(date=2021)   # 10-K and 10-Q (in prefix)
     files = ed.open(date=2021, item='detail')
     files = ed.open(form='8-K', date=2021)
@@ -404,10 +403,10 @@ class EdgarClone(Edgar):
     files = ed.open(date=20210323, item='detail')
     files = ed.open(form='8-K', date=20210323, item='detail')
 
-    ed = EdgarClone(prefix, zipped=True)
+    ed = EdgarClone(prefix=settings['10X'], zipped=True)
     files = ed.open(date=2020)   # 10-K and 10-Q (in prefix)
     files = ed.open(date=2020, item='detail')
-    
+
     files = ed.open(form='10-K', item='mda10K')   # TO ZIP
     files = ed.open(form='10-K', item='bus10K')   # TO ZIP
 
@@ -432,6 +431,7 @@ class EdgarClone(Edgar):
 
     def open(self, form='', date=None, item=None, permno=None):
         """Opens a clone archive and return list of its documents"""
+        
         def from_clonepath(pathname):
             """Helper to deconstruct components of filing from clone file name"""
             items = pathname.split('_')         # components are separated by '_'
@@ -441,12 +441,16 @@ class EdgarClone(Edgar):
                     'date': int(items[0]),
                     'pathname': pathname}
         self.close()
-        
+
         p = os.path.join(self.prefix, form, item or '')
-        date = str(date) if date else None
+        if date:
+            date = str(date)
+            p = os.path.join(p, date[:4])
+        else:
+            date = ''
         r = []
         if self.zipped: # if zipped archive: then have to retrieve its namelist()
-            p = os.path.join(p, date) + '.zip'
+            p = p + '.zip'
             with zipfile.ZipFile(p) as clone:
                 for pathname in clone.namelist():
                     if pathname.endswith('/'):
@@ -455,13 +459,13 @@ class EdgarClone(Edgar):
                     else:
                         r.append(from_clonepath(pathname=pathname))
             df = DataFrame(r).drop_duplicates(['pathname','date','form','cik'])
-            if item is None:   # may be mda10K, bus10K, detail
+            if item and form and form not in self.forms_['8-K']:
                 t = DataFrame.from_dict(df['pathname'].str.split('/').to_dict(),
                                         orient='index')
-                if permno is None:  # select all, so explicitly assign permno col
-                    df['permno'] = t.iloc[:,1].values
-                else:               # select by permno
-                    df=df[t.iloc[:,1].astype(int)==permno]
+                if permno:  # select by permno
+                    df=df[t.iloc[:,1].astype(int)==permno].assign(permno=permno)
+                else:       # select all, so explicitly assign permno col
+                    df['permno'] = t.iloc[:,1].astype(int).values
             self.keys_ = df                        
             self.zipped = p
             self.archive = zipfile.ZipFile(p)
@@ -475,25 +479,25 @@ class EdgarClone(Edgar):
                              from_clonepath(pathname=a))
                 return r
 
-            if date is None:
-                if permno is None:   # select all permnos
+            if date:
+                if len(date) < 5:    # 4) date is year => not leaf
+                    dates = glob.glob(os.path.join(p, date + '[01]???'))
+                    df = pd.concat([DataFrame(list_dir(r)) for r in dates],
+                                   ignore_index=True)
+                else:                # 5) date is specific 8-digit date => leaf
+                    q = glob.glob(os.path.join(p, date))
+                    df = pd.concat([DataFrame(list_dir(r)) for r in q],
+                                   ignore_index=True)                
+            else:
+                if permno:   # select by permno
+                    q = glob.glob(os.path.join(p, str(permno)))
+                    df = pd.concat([DataFrame(list_dir(r)) for r in q],
+                                   ignore_index=True)               
+                else:        # select all permnos
                     q = glob.glob(os.path.join(p, '[0-9]????'))
                     df = pd.concat([DataFrame(list_dir(r))\
                                     .assign(permno=int(r.split('/')[-1]))
                                     for r in q], ignore_index=True)
-                else:                # select by permno
-                    q = glob.glob(os.path.join(p, str(permno)))
-                    df = pd.concat([DataFrame(list_dir(r)) for r in q],
-                                   ignore_index=True)               
-            else:
-                if len(date) < 5:    # 4) date is year => not leaf
-                    dates = glob.glob(os.path.join(p, date, date + '[01]???'))
-                    df = pd.concat([DataFrame(list_dir(r)) for r in dates],
-                                   ignore_index=True)
-                else:                # 5) date is specific 8-digit date => leaf
-                    q = glob.glob(os.path.join(p, date[:4], date))
-                    df = pd.concat([DataFrame(list_dir(r)) for r in q],
-                                   ignore_index=True)                
             self.keys_ = df
             self.archive = p
         if self.echo_:
@@ -520,7 +524,7 @@ class EdgarClone(Edgar):
             with open(os.path.join(self.prefix, pathname)) as f:
                 text = f.read()
         return text
-   
+
 #    
 # download 10-K's, 10-Q's, and 8-Ks from Edgar
 #
@@ -561,12 +565,14 @@ if False:
                 # To save main filing document text
                 filenames = Edgar.extract_filenames(detail)  # retrieve filings
                 if form8k and ".htm" in filenames[0]:
-                    text = "\n".join([Edgar.fetch_filing(
-                        Edgar.from_path(r['pathname'], f),
-                        form8k=True) for f in filenames if ".htm" in f])
+                    text = "\n".join(
+                        [Edgar.fetch_filing(
+                            Edgar.from_path(r['pathname'], f), form8k=True)
+                         for f in filenames if ".htm" in f])
                 else:
-                    text = Edgar.fetch_filing(Edgar.from_path(
-                        r['pathname'], filenames[0]), form8k=form8k)
+                    text = Edgar.fetch_filing(
+                        Edgar.from_path(r['pathname'], filenames[0]),
+                        form8k=form8k)
                 if not text:
                     text = Edgar.fetch_filing(r['pathname'], form8k=form8k)
                 s = ed.to_path(date=r['date'], form=form8k, cik=r['cik'],

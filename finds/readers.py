@@ -185,6 +185,10 @@ def fetch_FamaFrench(name=None, item=0, suffix='',
         end=pd.to_datetime(end, format='%Y%m%d')
     df = pdr.data.DataReader(name=name, data_source='famafrench',
                              start=start, end=end)[item]
+    try:
+        df.index = df.index.to_timestamp()   # else invalid comparison error!
+    except:
+        pass
     df = df[(df.index >= start) & (df.index <= end)]
     if index_formatter:
         df.index = [index_formatter(d) for d in df.index]

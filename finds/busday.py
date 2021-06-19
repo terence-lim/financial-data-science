@@ -210,7 +210,8 @@ class BusDay:
                 roll=roll,
                 busdaycal=self.busdaycalendar_)).strftime('%Y%m%d')[0])
         except:
-            return [self.offset(d, offsets, roll=roll) for d in dates]
+            #return [self.offset(d, offsets, roll=roll) for d in dates]
+            return self._map(self.offset, dates, offsets, end=end, roll=roll)
 
     def holding_periods(self, dates):
         """Returns beg and end dates of realized returns after each rebalance"""
@@ -413,7 +414,7 @@ if False:  # create custom busday trading dates
     from finds.database import SQL
     from finds.busday import BusDay
     sql = SQL(**settings['sql'], echo=True)
-    busday = BusDay(sql, create=True)
+    busday = BusDay(sql, create=True)   # set create flag as True
     
 if False: # some unit tests
     from settings import settings
