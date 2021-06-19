@@ -121,6 +121,7 @@ pickle_dump(data, 'sentiment.data')
 #data = pickle_load('sentiment.data')
 
 ## Display sentiment words of sample extreme documents
+top_n = 20
 files = ed.open(form=form, item=item)
 docs = data[data['date'].between(20210101, 20210331)].sort_values('mdasent')
 for ifig, (iloc, sense) in enumerate({0: 'negative', -1: 'positive'}.items()):
@@ -130,7 +131,8 @@ for ifig, (iloc, sense) in enumerate({0: 'negative', -1: 'positive'}.items()):
     tokens = analyze(doc)
     words = Series([t for t in tokens if t in sentiments[sense]]).value_counts()
     wc = WordCloud(width=500, height=400, colormap='cool') 
-    top_n = 20
+    words.iloc[:] = 0
+    words.iloc[:top_n] = np.arange(top_n, 0, -1)
     fig, ax = plt.subplots(num=1+ifig, clear=True, figsize=(5, 4))
     ax.imshow(wc.generate_from_frequencies(words.iloc[:top_n].to_dict()))
     ax.axis("off")
