@@ -63,7 +63,6 @@ def parse_where(where, prefix):
         return " " + prefix + " " + where
     return ''
 
-
 def _as_dtypes(df, columns, drop_duplicates=[], sort_values=[], keep='first',
               replace={}):
     """Helper method to convert dtypes of data frame, from sqlalchemy types
@@ -160,6 +159,11 @@ class Structured(object):
         """Return the table object corresponding to a dataset label"""
         return self.tables_.get(dataset, None)
 
+    def dtypes(self, dataset):
+        """Return empty DataFrame with columns of corresponding dtype"""
+        return _as_dtypes(None, {k : v.type
+                                 for k,v in self[dataset].columns.items()})
+        
     def create_all(self):
         """Create all tables and indexes in SQL using associated schemas"""
         if self.tables_:
@@ -400,7 +404,7 @@ class Stocks(Structured):
 
         Parameters
         ----------
-        permnos: list
+        permnos: str or list of str
             Identifiers to filter
         field: str
             Name of column to extract
@@ -413,21 +417,34 @@ class Stocks(Structured):
 
         Returns
         -------
-        DataFrame
+        DataFrame or Series
             Values of desired field, indexed by date, with permnos in columns
         """
-        q = ("SELECT date, {permno}, {field} FROM {table}"
-             "  WHERE date >= {start} AND date <= {end} "
-             "    AND {permno} IN ('{permnos}')").format(
-                 permno=self.identifier,
-                 field=field,
-                 table=self[dataset].key,
-                 start=int(start),
-                 end=int(end),
-                 permnos="', '".join([str(p) for p in permnos]))
-        self._print('(get_series)', q)
-        return self.sql.read_dataframe(q).pivot(
-            index='date', columns=self.identifier, values=field)[permnos]
+        if isinstance(permnos, str):
+            q = ("SELECT date, {field} FROM {table}"
+                 "  WHERE date >= {start} AND date <= {end} "
+                 "    AND {permno} = {permnos}").format(
+                     permno=self.identifier,
+                     field=field,
+                     table=self[dataset].key,
+                     start=int(start),
+                     end=int(end),
+                     permnos=permnos)
+            self._print('(get_series)', q)
+            return self.sql.read_dataframe(q)[field].rename(permnos)
+        else:
+            q = ("SELECT date, {permno}, {field} FROM {table}"
+                 "  WHERE date >= {start} AND date <= {end} "
+                 "    AND {permno} IN ('{permnos}')").format(
+                     permno=self.identifier,
+                     field=field,
+                     table=self[dataset].key,
+                     start=int(start),
+                     end=int(end),
+                     permnos="', '".join([str(p) for p in permnos]))
+            self._print('(get_series)', q)
+            return self.sql.read_dataframe(q).pivot(
+                index='date', columns=self.identifier, values=field)[permnos]
 
     def get_ret(self, start, end, dataset='daily', field='ret',
                 use_cache=True):
@@ -1721,6 +1738,38 @@ class IBES(Structured):
         return super().get_linked(dataset, date_field, fields, 'permno',
                                   'sdates', where=where, limit=limit)
 
+class chunk_stocks:
+    """Cached daily returns, to provide Stocks-like interface"""
+    
+    def __init__(self, stocks, beg, end, fields=['ret', 'retx'],
+                 identifier='permno'):
+        """Create object and load daily returns into its cache
+
+        Parameters
+        ----------
+        stocks : Stocks structured data object
+           To access stock returns data
+        beg : int
+            Earliest date of daily stock returns to load
+        end : int
+            Latest date of daily stock returns to load
+        fields : str list, default is ['ret', 'retx']
+            Column names of returns fields to load
+        """
+        q = (f"SELECT permno, date, {', '.join(fields)} FROM "
+             f" {stocks['daily'].key} WHERE date>={beg} AND date<={end}")
+        self.rets = stocks.sql.read_dataframe(q).sort_values(['permno', 'date'])
+        self.fields = fields
+        self.identifier = identifier
+        self.bd = stocks.bd
+
+    def get_ret(self, beg, end, fields=None):
+        """Return compounded stock returns between beg and end dates"""
+        df = self.rets[self.rets['date'].between(beg,end)].drop(columns=['date'])
+        df.loc[:, self.fields] += 1
+        df = (df.groupby(self.identifier).prod(min_count=1) - 1).fillna(0)
+        return df[fields or self.fields]
+
 class chunk_signal:
     """Cache dataframe of signals values, provide Signals-like interface"""
     def __init__(self, df, identifier='permno'):
@@ -1935,8 +1984,9 @@ class Finder:
 
 def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend, 
                      window=0, pctiles=[30, 70], leverage=1, months=[], 
-                     minobs=100, minprc=0, mincap=0, maxdecile=10):
-    """Generate monthly time series of holdings by two-way sort procedure
+                     minobs=100, minprc=0, mincap=0, maxdecile=10,
+                     rebals='endmo'):
+    """Generate time series of holdings by two-way sort procedure
 
     Parameters
     ----------
@@ -1964,6 +2014,8 @@ def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend,
         Minimum required universe size with signal values
     leverage: numerical, default is 1.0
         Leverage multiplier, if any
+    rebals: str or list of int (default is 'endmo')
+        rebalance freq str, or list of rebaldates
 
     Notes
     -----
@@ -1973,6 +2025,78 @@ def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend,
     Portfolio are resorted every June, and other months' holdings are adjusted 
       by monthly realized retx
     """
+    if isinstance(rebals, str):
+        rebals = stocks.bd.date_range(rebalbeg, rebalend, freq=rebals)
+    else:
+        rebals = sorted(set(rebals).union([rebalbeg, rebalend]))
+    if months:   # identify rebals in range
+        keys = {k: [] for k in set([r//100 for r in rebals])
+                if k % 100 in months}
+        for r in rebals:
+            if (r // 100) in keys:
+                keys[r//100].append(r)
+        months = [max(v) for v in keys.values()]
+    holdings = {label: dict(), 'smb': dict()}  # to return two sets of holdings
+    sizes = {h : dict() for h in ['HB','HS','MB','MS','LB','LS']}
+    for rebal in rebals:  #[:-1]
+
+        # check if this is a rebalance month
+        if not months or rebal in months or not holdings[label]:
+            
+            # rebalance: get this month's universe of stocks with valid data
+            df = stocks.get_universe(rebal)
+            
+            # get signal values within lagged window
+            start = (stocks.bd.endmo(rebal, months=-abs(window)) if window
+                     else stocks.bd.offset(rebal, offsets=-1))
+            signal = signals(label=label, date=rebal, start=start)
+            df[label] = signal[label].reindex(df.index)
+
+            df = df[df['prc'].abs().gt(minprc) &
+                    df['cap'].gt(mincap) &
+                    df['decile'].le(maxdecile)].dropna()
+
+            if (len(df) < minobs):  # skip if insufficient observations
+                continue
+
+            # split signal into desired fractiles, and assign to subportfolios
+            df['fractile'] = fractiles(df[label],
+                                       pctiles=pctiles,
+                                       keys=df[label][df['nyse']],
+                                       ascending=False)
+            subs = {'HB' : (df['fractile'] == 1) & (df['decile'] <= 5),
+                    'MB' : (df['fractile'] == 2) & (df['decile'] <= 5),
+                    'LB' : (df['fractile'] == 3) & (df['decile'] <= 5),
+                    'HS' : (df['fractile'] == 1) & (df['decile'] > 5),
+                    'MS' : (df['fractile'] == 2) & (df['decile'] > 5),
+                    'LS' : (df['fractile'] == 3) & (df['decile'] > 5)}
+            weights = {label: dict(), 'smb': dict()}
+            for subname, weight in zip(['HB','HS','LB','LS'],
+                                       [0.5, 0.5, -0.5, -0.5]):
+                cap = df.loc[subs[subname], 'cap']
+                weights[label][subname] = leverage * weight * cap / cap.sum()
+                sizes[subname][rebal] = sum(subs[subname])
+            for subname, weight in zip(['HB','HS','MB','MS','LB','LS'],
+                                       [-0.5, 0.5, -0.5, 0.5, -0.5, 0.5]):
+                cap = df.loc[subs[subname], 'cap']
+                weights['smb'][subname] = leverage * weight * cap / cap.sum()
+                sizes[subname][rebal] = sum(subs[subname])
+            #print("(famafrench_sorts)", rebal, len(df))
+            
+        else:  # else not a rebalance month, so simply adjust holdings by retx
+            retx = 1 + stocks.get_ret(stocks.bd.offset(prevdate, 1),
+                                      rebal, field='retx')['retx']
+            for port, subports in weights.items():
+                for subport, old in subports.items():
+                    new = old * retx.reindex(old.index, fill_value=1)
+                    weights[port][subport] = new / (abs(np.sum(new))
+                                                    * len(subports) / 2)
+
+        # combine this month's subportfolios
+        for h in holdings:
+            holdings[h][rebal] = pd.concat(list(weights[h].values()))
+        prevdate = rebal
+    return {'holdings': holdings, 'sizes': sizes}
     rebaldates = stocks.bd.date_range(rebalbeg, rebalend, 'endmo')
     holdings = {label: dict(), 'smb': dict()}  # to return two sets of holdings
     sizes = {h : dict() for h in ['HB','HS','MB','MS','LB','LS']}

@@ -46,6 +46,41 @@ def _as_compound(rets, intervals, dates=None):
         return [_as_compound(rets, interval) for interval in intervals]
 
 
+class DailyPerformance:
+    """Simple class for computing daily realized returns on periodic holdings"""
+    
+    def __init__(self, stocks):
+        """Initialize with Stocks or Stocks-like object"""
+        self.stocks = stocks
+        
+    def __call__(self, holdings, end):
+        """Return series of daily returns through end date
+
+        Parameters
+        ----------
+        holdings : dict of Series keyed by int date
+            Series, indexed by permno, contain stock weights on rebalance date
+        end : int
+            Last date of daily returns to compute performance for
+
+        Returns
+        -------
+        performance : Series
+            Daily realized portfolio returns
+        """
+        rebals = sorted(holdings.keys())   # rebalance dates, including initial
+        dates = self.stocks.bd.date_range(rebals[0], end)[1:] # return dates
+        curr = holdings[rebals[0]]         # initial portfolio
+        perf = {}                          # collect daily performance
+        for date in dates[1:]:   # loop over return dates
+            ret = self.stocks.get_ret(date, date)
+            perf[date] = sum(curr * ret['ret'].reindex(curr.index, fill_value=0))
+            if date in rebals:   # update daily portfolio holdings
+                curr = holdings[date]
+            else:
+                curr = curr * (1 + ret['retx'].reindex(curr.index)).fillna(1)
+        return Series(perf, name='ret')
+    
 class BackTest(Structured):
     """Base class for computing portfolio backtest returns
 
