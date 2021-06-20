@@ -22,6 +22,7 @@ from finds.display import plot_date
 sql = SQL(**settings['sql'], echo=True)
 user = SQL(**settings['user'], echo=True)
 rdb = Redis(**settings['redis'])
+imgdir = os.path.join(settings['images'], 'monitor')
 
 # Real-time updates
 """Monthly: update busdays and Fama-French research factors
@@ -134,6 +135,7 @@ for num, (label, benchname) in enumerate(ports.items()):
               title=f"Daily Returns to {label} factor, through {LAST_DATE}") 
     ax.set_xlabel(f"published {datetime.now().strftime('%Y-%m-%d')}")
     plt.tight_layout()
+    plt.savefig(os.path.join(imgdir, f"{label}.jpg"))
 plt.show()
 
 """
