@@ -24,7 +24,7 @@ if __name__ == '__main__':
     ECHO = True
 else:
     from .readers import requests_get
-    
+
 class Edgar:
     """Class to retrieve and pre-process Edgar website documents
 
@@ -390,8 +390,10 @@ class Edgar:
 
 
 class EdgarClone(Edgar):
-    """Class to save Edgar documents locally in cloned archives
+    """Class to clone Edgar documents locally in zipped archives
 
+    Examples
+    --------
     # zip -r 2019.zip 2019
     ed = EdgarClone(prefix=settings['10X'], zipped=False)
     files = ed.open(date=2021)   # 10-K and 10-Q (in prefix)
@@ -410,6 +412,20 @@ class EdgarClone(Edgar):
     files = ed.open(form='10-K', item='mda10K')   # TO ZIP
     files = ed.open(form='10-K', item='bus10K')   # TO ZIP
 
+    Notes
+    -----
+    form = {'8-K', '10-K', '10-Q'}, item = {'mda10K', 'bus10K'} :
+
+    ~/<YYYY>.zip : zipped 10-K and 10-Q docs for year YYYY
+    ~/detail/<YYYY>.zip : zipped 10-K and 10-Q details for year YYYY
+    ~/<form>/<item>.zip : zipped extracted items from form
+    ~/<form>/<YYYY>.zip : zipped form docs for year YYYY
+    ~/<form>/detail/<YYYY>.zip : zipped form details for year YYYY
+
+    ~/detail/<YYYY>/<YYYYMMDD>/*.txt : 10-K and 10-Q details for date YYYYMMDD
+    ~/<form>/<item>/<permno>/*.txt : extracted items from form for permno
+    ~/<form>/<YYYY>/<YYYYMMDD>/*.txt : form docs for date YYYYMMDD
+    ~/<form>/detail/<YYYY>/<YYYYMMDD>/*.txt : form details for date YYYYMMDD
     """
     def __init__(self, prefix='', zipped=True, echo=ECHO):
         """To access (zipped or unzipped) Edgar cloned archives"""

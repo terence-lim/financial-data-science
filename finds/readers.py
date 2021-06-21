@@ -20,18 +20,14 @@ from pandas.api.types import is_integer_dtype, is_string_dtype, is_numeric_dtype
 from pandas.api import types
 from bs4 import BeautifulSoup
 try:
-    from settings import ECHO
+    from settings import ECHO, settings
+    _h = settings['url_header']
 except:
     ECHO = False
+    _h = None
 
-_h = {'User-Agent':
-      'Mozilla/5.0 (X11; Linux i686; rv:64.0) Gecko/20100101 Firefox/64.0'}
-_h = {"Connection": "keep-alive",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit"
-      "/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36"}
-
-def requests_get(url, params=None, retry=3, sleep=2, timeout=3, trap=False,
-                 delay=0, headers=_h, echo=ECHO):
+def requests_get(url, params=None, retry=3, sleep=2, timeout=3,
+                 trap=False, delay=1, headers=_h, echo=ECHO):
     """Wrapper over requests.get, with retry loops and delays
 
     Parameters
@@ -62,13 +58,15 @@ def requests_get(url, params=None, retry=3, sleep=2, timeout=3, trap=False,
     """
     if echo:
         print(url)
+    if delay:
+        time.sleep(delay * np.random.rand())
     for _ in range(retry):
         try:
             r = requests.get(url, headers=headers,timeout=timeout,params=params)
             assert(r.status_code >= 200 and r.status_code <= 404)
             break
         except Exception as e:
-            time.sleep(sleep)
+            time.sleep(sleep*np.random.rand())
             if echo: print(e, r.status_code)
             r = None
     if r is None:  # likely timed-out after retries:

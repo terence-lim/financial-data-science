@@ -298,7 +298,7 @@ def igraph_centrality(g, weights='weight', cost=False, damping=0.99):
     #out['clustering'] = g.as_undirected().transitivity_local_undirected()
     return out
 
-def igraph_info(g, census=False):
+def igraph_info(g, census=False, fast=False):
     """Return summary dict of igraph properties"""
     import warnings
     with warnings.catch_warnings():
@@ -307,20 +307,22 @@ def igraph_info(g, census=False):
         out["vertices"] = g.vcount()
         out["edges"] = g.ecount()
         out["density"] = 2*g.ecount()/(g.vcount()*(g.vcount()-1))
-        out["diameter"] = g.diameter()
         out["simple"] = g.is_simple()
         out["directed"] = g.is_directed()
-        out["global clustering"] = g.transitivity_undirected()
-        out["local clustering"] = g.transitivity_avglocal_undirected()
         components = g.components(mode=1).sizes()
-        out["weak components"] = len(components)
-        out["largest weak"] = max(components)
-        components = g.components(mode=2).sizes()
-        out["strong components"] = len(components)
-        out["largest strong"] = max(components)
+        out["weak-components"] = len(components)
+        out["largest-weak"] = max(components)
+        if out["directed"]:
+            components = g.components(mode=2).sizes()
+            out["strong-components"] = len(components)
+            out["largest-strong"] = max(components)
         if census:
             out["dyads"] = g.dyad_census() if g.is_directed() else ()
             out["triads"] = g.triad_census() if g.is_directed() else ()
+        if not fast:
+            out["diameter"] = g.diameter()
+            out["global clustering"] = g.transitivity_undirected()
+            out["local clustering"] = g.transitivity_avglocal_undirected()
     return out
 
 def igraph_path(g, nodes, labels=None, desc=None):

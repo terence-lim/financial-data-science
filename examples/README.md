@@ -19,6 +19,14 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 - NMF, LSA, LDA, PLSI matrix decomposition models
 
+### Text Analysis with 10-K Business Descriptions from Edgar
+
+[business_description.py](business_description.py)
+
+- part-of-speech tagging, lemmatizing, multilevel community detection
+- spacy, nltk, sklearn, igraph
+- Hoberg and Phillips (2016), SEC Edgar, Wharton Research Data Services
+
 ### LSTM networks, state space models and mixtures from FRED-MD
 
 [economic_states.py](economic_states.py)
