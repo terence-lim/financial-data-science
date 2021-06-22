@@ -13,19 +13,20 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 ## Applications in Unsupervised Learning
 
+### Text Analysis with 10-K Business Descriptions from Edgar
+
+[business_description.py](business_description.py)
+
+- part-of-speech tags, lemmatize, named entity recognition
+- jaccard similarity, cosine similarity, multilevel community detection
+- spacy, nltk, sklearn, igraph
+- Hoberg and Phillips (2016), SEC Edgar, Wharton Research Data Services
+
 ### Topic models and FOMC meeting minutes
 
 [fomc_topics.py](fomc_topics.py)
 
 - NMF, LSA, LDA, PLSI matrix decomposition models
-
-### Text Analysis with 10-K Business Descriptions from Edgar
-
-[business_description.py](business_description.py)
-
-- part-of-speech tagging, lemmatizing, multilevel community detection
-- spacy, nltk, sklearn, igraph
-- Hoberg and Phillips (2016), SEC Edgar, Wharton Research Data Services
 
 ### LSTM networks, state space models and mixtures from FRED-MD
 

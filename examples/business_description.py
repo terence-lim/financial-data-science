@@ -1,6 +1,7 @@
 """Text Analysis with 10-K Business Descriptions from Edgar
 
-- part-of-speech tagging, lemmatizing, multilevel community detection
+- part-of-speech tags, lemmatize, named entity recognition
+- jaccard similarity, cosine similarity, multilevel community detection
 - spacy, nltk, sklearn, igraph
 - Hoberg and Phillips (2016), SEC Edgar, Wharton Research Data Services
 
@@ -21,7 +22,7 @@ import seaborn as sns
 import igraph  # pip3 install cairocffi
 from igraph import Graph
 from sklearn.feature_extraction import text
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import cosine_similarity, pairwise_distances
 from tqdm import tqdm
 from collections import Counter
 from finds.database import SQL, MongoDB, Redis
@@ -86,7 +87,7 @@ plt.show()
 # Community Detection with Business Descriptions
 # Load spacy vocab
 lang = 'en_core_web_lg'
-nlp = spacy.load(lang, disable=['ner'])
+nlp = spacy.load(lang)
 n_vocab, vocab_dim = nlp.vocab.vectors.shape
 print('Language:', lang, '   vocab:', n_vocab, '   dim:', vocab_dim)
 stopwords = {'company', 'companys', 'companies', 'product', 'products',
@@ -97,27 +98,40 @@ univs = {y: crsp.get_universe(bd.endmo(int(f"{y-1}1231"))).assign(year=y)
          for y in range(1993, 2021)}
 
 
-## Extract lemmatized nouns from bus10K documents
+## Extract lemmatized nouns and named entities from bus10K documents
 A = ed.open(form=form, item=item)  # open bus10K archive
 A['year'] = [d.year-(d.month<4) for d in int2date(A['date'])] # set fiscal year
 
 tic = time.time()
-for year in [2018, 2017]: #[2020, 2019, 2018, 2017]:
+for year in [2020, 2019, 2018, 2017]:
     docs = dict()
+    ners = dict()
     for i, permno in tqdm(enumerate(sorted(univs[year].index))):
         doc = A[A['permno'].eq(permno) & A['year'].eq(year)].sort_values('date')
         if len(doc):
             sent = ed[doc.iloc[0]['pathname']].encode('ascii', 'ignore').lower()
             tokens = nlp(sent.decode()[:900000])
+
+            if tokens.ents:
+                entities = [ent.text for ent in tokens.ents if ent.label in
+                            [383, 384, 380, 381]] # ['ORG'.'GPE','PERSON','NORP']
+                # print(ent.text, ent.label,spacy.explain(ent.label_))
+                counts = Series(entities, dtype='object').value_counts()
+                ners[permno] = counts.to_dict()
+
+            # Extract nounse
             nouns = [t.lemma_ for t in tokens if t.pos_ in ['NOUN','PROPN'] and
                      len(t.text)>1 and not (t.is_oov or t.is_stop) and
                      t.text not in stopwords]
             counts = Series(nouns, dtype='object').value_counts()
             if len(counts):
                 docs[permno] = counts.to_dict()
-    print(year, len(docs), f"{time.time()-tic:.1f}")
+    print(year, len(docs), len(ners), f"{time.time()-tic:.1f}")
+    with gzip.open(os.path.join(imgdir, f"ners{year}.json.gz"), 'wt') as f:
+        json.dump(ners, f)     # save this year's docs
     with gzip.open(os.path.join(imgdir, f"docs{year}.json.gz"), 'wt') as f:
         json.dump(docs, f)     # save this year's docs
+#"""
 
 ## Text Vectorizer
 max_df, min_df, max_features = 0.5, 25, 10000
@@ -134,12 +148,10 @@ def iterable(docs, unique=True, key=False, lemma=False):
             value = " ".join(t.lemma_ for t in nlp(value))
         yield (k, value) if key else value
         
-## Compute document term frequencies and average word vectors, and cos similiary
-cos_tfidf = {}
-cos_vector = {}
-graphlasso_tfidf = {}
-corr_tfidf = {}
+## Document term frequencies and average word vectors, and jacard and cosine similiary
+similar = dict()
 for year in [2020]:#, 2019, 2018]:
+    similar[year] = dict()
     with gzip.open(os.path.join(imgdir, f"docs{year}.json.gz"), 'rt') as f:
         docs = json.load(f)
 
@@ -158,9 +170,12 @@ for year in [2020]:#, 2019, 2018]:
     print(time.time() - tic)
 
     # compute cosine similarity matrixes between documents
-    cos_tfidf[year] = cosine_similarity(tfidf, tfidf)
+    similar[year]['cosine'] = cosine_similarity(tfidf, tfidf)
     #cos_vector[year] = cosine_similarity(vector, vector) 
     #corr_tfidf[year] = np.corrcoef(tfidf.toarray(), rowvar=True)
+    terms = (tfidf > 0).todense()
+    similar[year]['jaccard'] = 1- pairwise_distances(terms,metric="jaccard")
+
 
 ## Populate new DataFrame, indexed by permnos, with sic and naics codes
 pstat = PSTAT(sql, bd)
@@ -181,59 +196,66 @@ vs[scheme] = codes[scheme][vs['sic']]
 vs = vs[vs[scheme].ne(codes[scheme].fillna)]
 vs
 
-## Create edges, and edge value thresholds
-perms = [str(p) for p in permnos]
-E = DataFrame(data=cos_tfidf[year], index=perms, columns=perms)
-E = E.stack()
-thresh = [10, 20, 25, 30, 40, 50, 60, 70, 80, 90, 95]
-thresh = {t: v for t,v in zip(thresh, np.percentile(E, thresh))}
-E = E.reset_index()
+## Run community detection on edges
+for num, metric in enumerate(['jaccard', 'cosine']):
+    
+    # Create edges, and edge value thresholds
+    perms = [str(p) for p in permnos]
+    E = DataFrame(data=similar[year][metric], index=perms, columns=perms)
+    E = E.stack()
+    thresh = [10, 20, 25, 30, 40, 50, 60, 70, 80, 90, 95]
+    thresh = {t: v for t,v in zip(thresh, np.percentile(E, thresh))}
+    E = E.reset_index()
 
-## Run community detection on edges 
-for i, pct in enumerate([40, 60, 80]):  # percentile thresholds to cull edges
-
-    print(f'\nMin threshold for edges set at {pct} %-tile cosine similarity...')
-    edges = E[(E.iloc[:,0] != E.iloc[:,1]) & (E.iloc[:,-1] > thresh[pct])]
-    attributes = edges.iloc[:, -1].values
-    edges = edges.iloc[:, :-1].values
-
-    # Populate igraph including attributes (note: vertex names must be str)
-    g = Graph(directed=False)
-    g.add_vertices(vs.index.astype(str).to_list(), vs.to_dict(orient='list'))
-    g.add_edges(edges, {'score': attributes})
-    degree = Series(g.vs.degree())   # to remove zero degree vertexes
-    print('Deleting', len(degree[degree==0]), 'vertex IDs with degree 0.\n')
-    g.delete_vertices(degree[degree==0].index.to_list())
-    g = g.simplify()         # remove self-loops and multi-edges
-    s = Series(igraph_info(g, fast=True)).rename(year)
-    print(s.to_frame().T)
-
-    # detect communities and report modularity
-    c = g.community_multilevel()
-    print(DataFrame({'modularity': c.modularity, 'components': len(c.sizes())},
-                    index=[pct]).rename_axis('cos_sim threshold %'))
-
-    # plot and display industry representation of communities detected
-    detect = 'multilevel'
-    indus = pd.concat([Series(c.subgraph(j).vs[scheme]).value_counts().rename(i+1)
-                       for i, j in enumerate(np.argsort(c.sizes())[::-1])],
-                      axis=1).dropna(axis=0, how='all').fillna(0).astype(int)\
-              .reindex(codes[scheme].sectors['name']\
-                       .drop_duplicates(keep='first'))
-    for j in indus.columns:
-        tops = ", ".join(f"{k}({v})" for k,v in
-                         indus.sort_values(j)[-1:-4:-1][j].items())
-        print(f"  Community {j}:", tops)              
-    fig, ax = plt.subplots(num=1+i, clear=True, figsize=(5,12))
-    sns.heatmap(indus, square=False, linewidth=.5, ax=ax, yticklabels=1,
-                cmap="YlGnBu", robust=True)
-    ax.set_yticklabels(indus.index, size=10)
-    ax.set_xlabel(f'Communities ({detect} method)')
-    ax.set_ylabel(f'Industry Representation ({scheme})')
-    ax.set_title(f"Business Descriptions {year} (cos-sim threshold {pct}%)")
-    fig.subplots_adjust(left=0.4)
-    plt.tight_layout(pad=3)
-    plt.savefig(os.path.join(imgdir, f'bus{year}_{pct}.jpg'))
+    thresholds = [40, 60, 80]
+    for i, pct in enumerate(thresholds):  # percentile thresholds to cull edges
+        print(f'\nMin {metric} similarity threshold for edges: {pct}th %-tile')
+        edges = E[(E.iloc[:,0] != E.iloc[:,1]) & (E.iloc[:,-1] > thresh[pct])]
+        attributes = edges.iloc[:, -1].values
+        edges = edges.iloc[:, :-1].values
+        
+        # Populate igraph including attributes (note: vertex names must be str)
+        g = Graph(directed=False)
+        g.add_vertices(vs.index.astype(str).to_list(), vs.to_dict(orient='list'))
+        g.add_edges(edges, {'score': attributes})
+        degree = Series(g.vs.degree())   # to remove zero degree vertexes
+        print('Deleting', len(degree[degree==0]), 'vertex IDs with degree 0.\n')
+        g.delete_vertices(degree[degree==0].index.to_list())
+        g = g.simplify()         # remove self-loops and multi-edges
+        s = Series(igraph_info(g, fast=True)).rename(year)
+        print(s.to_frame().T)
+        #t = g.components(mode=1)
+        #print('Deleting', t._len-1, 'components with sizes', t.sizes()[1:], '\n')
+        #g = t.subgraph(0)
+        
+        # detect communities and report modularity
+        c = g.community_multilevel()
+        print(DataFrame({'modularity':c.modularity, 'components':len(c.sizes())},
+                        index=[pct]).rename_axis(f'{metric} threshold %'))
+        
+        # plot and display industry representation of communities detected
+        detect = 'multilevel'
+        indus = pd.concat([Series(c.subgraph(j).vs[scheme])\
+                           .value_counts().rename(i+1)
+                           for i, j in enumerate(np.argsort(c.sizes())[::-1])],
+                          axis=1).dropna(axis=0, how='all').fillna(0).astype(int)\
+                  .reindex(codes[scheme].sectors['name']\
+                           .drop_duplicates(keep='first'))
+        for j in indus.columns:
+            tops = ", ".join(f"{k}({v})" for k,v in
+                             indus.sort_values(j)[-1:-4:-1][j].items())
+            print(f"  Community {j}:", tops)              
+        fig, ax = plt.subplots(num=(len(thresholds)*num) + 1 + i, clear=True,
+                               figsize=(5, 12))
+        sns.heatmap(indus, square=False, linewidth=.5, ax=ax, yticklabels=1,
+                    cmap="YlGnBu", robust=True)
+        ax.set_yticklabels(indus.index, size=10)
+        ax.set_xlabel(f'Communities ({detect} method)')
+        ax.set_ylabel(f'Industry Representation ({scheme})')
+        ax.set_title(f"Business Descriptions {year} ({metric} threshold {pct}%)")
+        fig.subplots_adjust(left=0.4)
+        plt.tight_layout(pad=3)
+        plt.savefig(os.path.join(imgdir, f'{metric}{year}_{pct}.jpg'))
 plt.show()
 
     
