@@ -24,8 +24,17 @@ import os
 import re
 import time
 from datetime import datetime
+import random
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import statsmodels.api as sm
+from statsmodels.tsa.api import VAR
 from finds.alfred import Alfred, fred_md, fred_qd
+from finds.alfred import pcaEM, BaiNg, marginalR2
 from finds.solve import integration_order, is_inlier
+from finds.display import plot_bands
 
 from settings import settings
 imgdir = os.path.join(settings['images'], 'ts')
@@ -68,8 +77,6 @@ c = pd.concat([tcodes.drop(columns='fred-md'), out['qd'], tcodes['fred-md'],
 c
 
 # PCA-EM Algorithm for Approximate Factors Model - Bai and Ng 2002
-from finds.alfred import pcaEM, BaiNg, marginalR2
-
 for freq, df, t in [['monthly', mdf, mt], ['quarterly', qdf, qt]]:
     df = qdf.copy()
     t = qt['transform']
@@ -128,8 +135,8 @@ x, model = pcaEM(X, kmax=r, p=0, echo=False)
 # Extract factors with SVD
 y = ((x-x.mean(axis=0).reshape(1,-1))/x.std(axis=0,ddof=0).reshape(1,-1))
 u, s, vT = np.linalg.svd(y, full_matrices=False)
-factors = DataFrame(u[:, :r], columns=np.arange(1, 1+r),
-                    index=pd.DatetimeIndex(train_sample.astype(str), freq='M'))
+#factors = DataFrame(u[:, :r], columns=np.arange(1, 1+r),
+#                    index=pd.DatetimeIndex(train_sample.astype(str), freq='M'))
 Series(s[:r]**2 / np.sum(s**2), index=np.arange(1, r+1), name='R2').to_frame().T
 
 # Equivalent to sklearn PCA
@@ -139,14 +146,14 @@ from sklearn.decomposition import PCA
 pipe = Pipeline([('scaler', StandardScaler()), ('pca', PCA(r))])
 pipe.fit(x)                        # fit model on training data
 X = np.array(data.loc[sample])     # to transform on full sample data
-x, model = pcaEM(X, kmax=8, p=0, echo=False)  # replace missing (not outlier)
-factors = DataFrame(StandardScaler().fit_transform(pipe.transform(x)),
+X, model = pcaEM(X, kmax=8, p=0, echo=False)  # replace missing (not outlier)
+factors = DataFrame(StandardScaler().fit_transform(pipe.transform(X)),
                     index=pd.DatetimeIndex(sample.astype(str), freq='infer'),
                     columns=np.arange(1, 1+r))
 Series(pipe.named_steps['pca'].explained_variance_ratio_,
        index=np.arange(1,r+1), name='R2').to_frame().T   # sanity check
 
-## To indicate recession periods in the plots
+## Retrieve recession periods from FRED
 usrec = alf('USREC', freq='m')  
 usrec.index = pd.DatetimeIndex(usrec.index.astype(str), freq='infer')
 g = usrec.astype(bool) | usrec.shift(-1, fill_value=0).astype(bool)
@@ -180,10 +187,6 @@ plt.show()
 """
 - predicting multiple time series (of the extracted factors)
 """
-import statsmodels.api as sm
-from statsmodels.tsa.api import VAR
-from finds.display import plot_bands
-
 maxlags = 16
 train_date = '2014-12-31'
 train_index = factors.index[factors.index <= train_date]
@@ -195,7 +198,6 @@ test1_data = factors.loc[test1_index].copy()
 test2_data = factors.loc[test2_index].copy()
 M = train_data.shape[1]
 model = VAR(train_data, freq='M')
-model
 
 ## Selecting lag order
 """
@@ -253,18 +255,22 @@ out = [Series({'Train Error': e.loc[e.index <= train_date].mean(),
 out = pd.concat(out, axis=1).T.rename_axis(columns="1961-07-31...2019-12-31:")
 out
 
-## Plot Train and Test Error of TCN Models
+## Plot Train and Test Error of VAR(p) Models
 fig, ax = plt.subplots(1, 1, figsize=(9, 5), num=1, clear=True)
 ax.plot(np.arange(len(out)), out['Train Error'], color=f"C0")
 ax.plot(np.arange(len(out)), out['Test1 Error'], color=f"C1")
-ax.plot([], [], color=f"C2")
+ax.plot([], [], color=f"C2")   # dummy for legend labels
+argmin = out['Test1 Error'].argmin()
+ax.plot(argmin, out.iloc[argmin]['Test1 Error'], 'o', color="C1")
 bx = ax.twinx()
 bx.plot(np.arange(len(out)), out['Test2 Error'], color=f"C2")
 ax.set_title(f'Train, Test1(2014-2019) and Test2(2020+) Errors of Var(p) Models')
-ax.set_ylabel('Mean Squared Error')
-bx.set_ylabel('Test2 sample period [2020-01 ... 2021-03]')
-ax.set_xlabel('lags (0)')
-ax.legend(['Train Error', 'Test1 Error', 'Test2 Error'], loc='center left')
+ax.set_ylabel('Mean Squared Error of Train and Test1 periods')
+bx.set_ylabel('MSE of Test2 period [2020-01 ... 2021-03]')
+ax.set_xlabel('lag order of VAR(p)')
+ax.legend(['Train Error', 'Test1 Error', 'Test2 Error',
+           f'Test1 Min Error{out.iloc[argmin]["Test1 Error"]:.4f}'],
+          loc='center left')
 plt.tight_layout()
 plt.savefig(os.path.join(imgdir, 'varerr.jpg'))
 plt.show()
@@ -288,19 +294,16 @@ plt.savefig(os.path.join(imgdir, 'varmse.jpg'))
 plt.show()
 
 # Temporal 1D Convolutional Net (TCN)
-import random
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class TCN(torch.nn.Module):
     class CausalConv1dBlock(torch.nn.Module):
-        """Building block Conv1d, ReLU, skip, dropout, dilation and padding"""
+        """Conv1d block with ReLU, skip, dropout, dilation and padding"""
         def __init__(self, in_channels, out_channels, kernel_size, dilation,
                      dropout):
             super().__init__()
+
+            print('kernel', kernel_size, 'dilation', dilation)
             self.network = torch.nn.Sequential(
                 torch.nn.ConstantPad1d(((kernel_size-1)*dilation, 0), 0),
                 torch.nn.Conv1d(in_channels, out_channels, kernel_size,
@@ -312,27 +315,32 @@ class TCN(torch.nn.Module):
                 torch.nn.ReLU(),
                 torch.nn.Dropout(dropout))
             self.skip = lambda x: x
-            if in_channels != out_channels:     # downsample if necessary
-                self.skip = torch.nn.Conv1d(in_channels, out_channels,1)
+            if in_channels != out_channels:   # downsample for skip if necessary
+                self.skip = torch.nn.Conv1d(in_channels, out_channels, 1)
 
         def forward(self, x):
             return self.network(x) + self.skip(x)  # with skip connection
 
 
-    def __init__(self, n_features, layers=[8, 8, 8], kernel_size=3, dropout=0.0):
+    def __init__(self, n_features, blocks, kernel_size, dropout):
         """TCN model by connecting multiple convolution layers"""
         super().__init__()
-        c = n_features
+        in_channels = n_features
         L = []
-        for total_dilation, l in enumerate(layers):
-            L.append(self.CausalConv1dBlock(in_channels=c,
-                                            out_channels=l,
+        for dilation, hidden in enumerate(blocks):
+            L.append(self.CausalConv1dBlock(in_channels=in_channels,
+                                            out_channels=hidden,
                                             kernel_size=kernel_size,
-                                            dilation=2*(total_dilation+1),
+                                            dilation=2**dilation,
                                             dropout=dropout))
-            c = l
-        self.network = torch.nn.Sequential(*L)
-        self.classifier = torch.nn.Conv1d(c, n_features, 1)
+            in_channels = hidden
+        self.network = torch.nn.Sequential(*L) if L else lambda x: x
+        if L:
+            self.classifier = torch.nn.Conv1d(in_channels, n_features, 1)
+        else:
+            self.classifier = torch.nn.Sequential(
+                torch.nn.ConstantPad1d((kernel_size-1, 0), 0),                
+                torch.nn.Conv1d(in_channels, n_features, kernel_size))
 
     def forward(self, x):
         """input is (B, n_features, L)), linear expects (B, * n_features)"""
@@ -352,22 +360,32 @@ class TCN(torch.nn.Module):
 seq_len = 16    # length of each input sequence for TCN
 train_exs = [train_data.iloc[i-(seq_len+1):i].values
              for i in range(seq_len+1, len(train_data))]
-n_features = train_data.shape[1]
 
 ## Fit TCN models with increasing layers of convolution and dropout rates
-layers = [1, 2, 3, 4]                      # range of convolution block layers
-dropouts = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # range of dropout rates
+n_features = train_data.shape[1]    # number of input planes
 batch_size = 8
-step_size = 300      # learning rate scheduler step size
+step_size = 100      # learning rate scheduler step size
 lr = 0.01            # initial learning rate
 num_lr = 6
 res = []             # to collect results summaries
 tcn_error = dict()   # to store prediction errors
-for layer in layers:
-    for dropout in dropouts:
+
+kernel_sizes = [1, 2, 4]
+dropouts = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+blocks = [0, 1, 2]
+for block in blocks:
+    for parm in (dropouts if block else kernel_sizes):
+        if block:
+            dropout = parm
+            kernel_size = 3
+        else:
+            dropout = 0.0
+            kernel_size = parm
+        modelname = f"TCN{block}_{kernel_size}_{dropout*100:.0f}"
+
         # Set model, optimizer, loss function and learning rate scheduler
-        model = TCN(n_features, layers=[16]*layer, kernel_size=2,
-                    dropout=dropout).to(device)
+        model = TCN(n_features=n_features, blocks=[n_features]*block,
+                    kernel_size=kernel_size, dropout=dropout).to(device)
         print(model)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, gamma=0.1,
@@ -381,7 +399,7 @@ for layer in layers:
             random.shuffle(idxs)
             batches = [idxs[i:(i+batch_size)]
                        for i in range(0, len(idxs), batch_size)]
-    
+
             total_loss = 0.0               # train by batch
             model.train()
             for batch in batches:
@@ -399,7 +417,7 @@ for layer in layers:
                 optimizer.step()
             scheduler.step()
             if (epoch % (step_size//2)) == 0:
-                print(epoch, layer, dropout, optimizer.param_groups[0]['lr'],
+                print(epoch, block, dropout, optimizer.param_groups[0]['lr'],
                       total_loss/len(batches))
             model.eval()
 
@@ -412,26 +430,27 @@ for layer in layers:
                 pred = model(X)
                 e[x.index[i]] = mse([x.iloc[i].values],
                                     pred[:,:,-1].cpu().detach().numpy())
-        name=f"TCN{layer}_{dropout*100:.0f}"
-        model.save(os.path.join(imgdir, name + '.pt'))
-        e = Series(e, name=name)
-        tcn_error[name] = e
-        res.append(Series({'depth': layer, 'dropout': dropout,
+        model.save(os.path.join(imgdir, modelname + '.pt'))
+        e = Series(e, name=modelname)
+        tcn_error[modelname] = e
+        res.append(Series({'blocks': block, 'dropout': dropout, 'kernel_size': kernel_size,
                            'Train Error': float(e[e.index <= train_date].mean()),
                            'Test1 Error': float(e[test1_index].mean()),
                            'Test2 Error': float(e[test2_index].mean())},
-                          name=name))
+                          name=modelname))
         #print(pd.concat(res, axis=1).T)
-res = pd.concat(res, axis=1).T
+res = pd.concat(res, axis=1).T.astype({'blocks': int, 'kernel_size': int})
+res
 
 ## Plot monthly mean squared error
 fig, ax = plt.subplots(1, 1, figsize=(9, 5), num=1, clear=True)
 ax.set_yscale('log')
 legend = []
-for i, layer in enumerate([1, max(layers)]):
-    for j, dropout in enumerate([0, int(100*max(dropouts))]):
-        tcn_error[f"TCN{layer}_{dropout}"].plot(ax=ax, c=f'C{i*2+j}')
-        legend.append(f"depth={layer} dropout=0.{dropout}")
+for col, (modelname, parm) in enumerate(res.iterrows()):
+    if parm['dropout'] in [0.0, 0.5]:
+        tcn_error[modelname].plot(ax=ax, c=f'C{col}')
+        legend.append(f"depth={parm['blocks']} kernel={parm['kernel_size']}, "
+                      f"dropout=.{100*parm['dropout']:.0f}")
 for a,b in vspans:
     if a >= train_index[maxlags]:
         ax.axvspan(a, min(b, max(test2_index)), alpha=0.3, color='grey')
@@ -443,35 +462,46 @@ plt.tight_layout()
 #plt.savefig(os.path.join(imgdir, 'tcnmse.jpg'))
 plt.show()
 
+## Display train and test error of TCN models by dropout and depth parameters
+res[res['blocks'].gt(0)]\
+    .rename(columns={s+' Error': s for s in ['Train','Test1','Test2']})\
+    .pivot(index=['dropout'], columns=['blocks']).drop(columns=['kernel_size'])\
+    .swaplevel(0, 1, 1).round(4).sort_index(axis=1)
 
-## Display Train and Test Error of TCN Models by dropout and depth
-res.astype({'depth':int})\
-   .rename(columns={s + ' Error': s for s in ['Train', 'Test1', 'Test2']})\
-   .pivot(index=['dropout'], columns=['depth'])\
-   .swaplevel(0, 1, 1).round(4).sort_index(axis=1)
-
+res[res['blocks'].eq(0)]\
+    .rename(columns={s+' Error': s for s in ['Train','Test1','Test2']})\
+    .pivot(index=['kernel_size'], columns=['blocks']).drop(columns=['dropout'])\
+    .swaplevel(0, 1, 1).round(4).sort_index(axis=1)
 
 ## Plot Train and Test Error of TCN Models
 fig, ax = plt.subplots(1, 1, figsize=(9, 5), num=1, clear=True)
 bx = ax.twinx()
-for layer in np.unique(res.depth):
-    select = res['depth'].eq(layer)
-    Series(index=res['dropout'][select], data=res['Train Error'][select].values,
-           name=f"Layers={layer:.0f} (Train Error)")\
-           .plot(ax=ax, color=f"C{layer:.0f}", style='-', marker='o')
-    Series(index=res['dropout'][select], data=res['Test1 Error'][select].values,
-           name=f"Layers={layer:.0f} (Test1 Error)")\
-           .plot(ax=ax, color=f"C{layer:.0f}", style='--', marker='s')
-    ax.plot([],[], color=f"C{layer:.0f}", ls=':',
-            label=f"Layers={layer:.0f} (Test2 Error)")
-    Series(index=res['dropout'][select], data=res['Test2 Error'][select].values)\
-           .plot(ax=bx, color=f"C{layer:.0f}", style=':')    
+col = 0
+for block in np.unique(res.blocks):
+    select_block = res['blocks'].eq(block)
+    for kernel_size in np.unique(res['kernel_size'][select_block]):
+        select = res['blocks'].eq(block) & res['kernel_size'].eq(kernel_size)
+
+        Series(index=res['dropout'][select], 
+               data=res['Train Error'][select].values,
+               name=f"Layers={layer:.0f} (Train Error)")\
+               .plot(ax=ax, color=f"C{col}", style='-', marker='o')
+        Series(index=res['dropout'][select], 
+               data=res['Test1 Error'][select].values,
+               name=f"Layers={layer:.0f} (Test1 Error)")\
+               .plot(ax=ax, color=f"C{col}", style='--', marker='s')
+        ax.plot([],[], color=f"C{col}", ls=':',
+                label=f"Layers={layer:.0f} (Test2 Error)")
+        Series(index=res['dropout'][select], 
+               data=res['Test2 Error'][select].values)\
+               .plot(ax=bx, color=f"C{col}", style=':')
+        col = col + 1    
 ax.set_title('Train and Test Error of TCN Models')
 ax.set_ylabel('Mean Squared Error')
 ax.set_xlabel('Dropout')
 ax.legend(loc='upper center', fontsize=6)
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'tcn.jpg'))
+#plt.savefig(os.path.join(imgdir, 'tcn.jpg'))
 plt.show()
 
 
