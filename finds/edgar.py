@@ -14,16 +14,61 @@ import os, sys, time, re
 import requests, zipfile, io, gzip, csv, json, unicodedata, glob
 import numpy as np
 import matplotlib.pyplot as plt
-try:
-    from settings import ECHO
-except:
-    ECHO = False
-if __name__ == '__main__':
-    from readers import requests_get
-    from settings import settings
-    ECHO = True
-else:
-    from .readers import requests_get
+import config
+
+def _print(*args, echo=config.ECHO, **kwargs):
+    if echo: print(*args, **kwargs)
+
+def requests_get(url, params=None, retry=7, sleep=2, timeout=3, delay=0.25,
+                 trap=False, headers=config.headers, echo=config.ECHO):
+    """Wrapper over requests.get, with retry loops and delays
+
+    Parameters
+    ----------
+    url : str
+        URL address to request
+    params : dict of {key: value} (optional), default is None
+        Payload of &key=value to append to url
+    headers : dict (optional)
+        e.g. User-Agent, Connection and other headers parameters
+    timeout : int (optional), default is 3
+        Number of seconds before timing out one request try
+    retry : int (optional), default is 5
+        Number of times to retry request
+    sleep : int (optional), default is 2
+        Number of seconds to wait between retries
+    trap : bool (optional), default is True
+        On timed-out after retries: if True raise exception, else return False
+    delay : int (optional), default is 0
+        Number of seconds to initially wait
+    echo : bool (optional), default is True
+        whether to display verbose messages to aid debugging
+
+    Returns
+    -------
+    r : requests.Response object, or None
+        None if timed-out or status_code != 200
+    """
+    _print(url, echo=echo)
+    if delay:
+        time.sleep(delay + (delay * np.random.rand()))
+    for i in range(retry):
+        try:
+            r = requests.get(url, headers=headers,timeout=timeout,params=params)
+            assert(r.status_code >= 200 and r.status_code <= 404)
+            break
+        except Exception as e:
+            time.sleep(sleep * (2 ** i) + sleep*np.random.rand())
+            _print(e, r.status_code, echo=echo)
+            r = None
+    if r is None:  # likely timed-out after retries:
+        if trap:     # raise exception if trap, else silently return None
+            raise Exception(f"requests_get: {url} {time.time()}")
+        return None
+    if r.status_code != 200:
+        _print(r.status_code, r.content, echo=echo)
+        return None
+    return r
 
 class Edgar:
     """Class to retrieve and pre-process Edgar website documents
@@ -55,9 +100,9 @@ class Edgar:
     # Static methods to fetch documents from SEC Edgar website
     #    
     @staticmethod
-    def basename(date, form, cik, filename):
+    def basename(date, form, cik, pathname, **kwargs):
         """Construct base filename from components of the filing pathname"""
-        base = os.path.split(filename)[-1]
+        base = os.path.split(pathname)[-1]
         return f"{date}_{form.replace('/A', '-A')}_edgar_data_{cik}_{base}"
     
     @staticmethod
@@ -74,7 +119,7 @@ class Edgar:
                       'resource' : resource})
 
     @staticmethod
-    def fetch_tickers(echo=ECHO):
+    def fetch_tickers(echo=config.ECHO):
         """Fetch tickers-to-cik lookup from SEC web page as a pandas Series"""
         url = 'https://www.sec.gov/include/ticker.txt'
         tickers = requests_get(url, echo=echo).text
@@ -83,7 +128,7 @@ class Edgar:
         return df.set_index('ticker')['cik'].astype(int)
 
     @staticmethod
-    def fetch_index(date=None, year=None, quarter=None, echo=ECHO):
+    def fetch_index(date=None, year=None, quarter=None, echo=config.ECHO):
         """Fetch edgar daily or master index, or walk to get all daily dates"""
         # https://www.sec.gov/Archives/edgar/data/51143/0000051143-13-000007.txt
         if year and quarter:    # get full-index by year/quarter
@@ -149,7 +194,7 @@ class Edgar:
         return Series(leaf)
 
     @staticmethod
-    def fetch_detail(pathname, root=None, echo=ECHO):
+    def fetch_detail(pathname, root=None, echo=config.ECHO):
         """Fetch from HTML file, containing table of hyperlinks of documents"""
         root = root or Edgar.url_prefix
         subs = Edgar.from_path(pathname)
@@ -157,7 +202,7 @@ class Edgar:
         return None if r is None else r.content
 
     @staticmethod
-    def fetch_filing(pathname, root=None, form8k=False, echo=ECHO):
+    def fetch_filing(pathname, root=None, form8k=False, echo=config.ECHO):
         """Fetch filing text from url pathname or local html file"""
         root = root or Edgar.url_prefix        
         if not isinstance(root, str):
@@ -174,7 +219,7 @@ class Edgar:
                 return None
 
         soup = BeautifulSoup(r, "lxml")   #"html.parser" )
-        if echo: print('soup: %d' % len(soup.text))
+        _print('soup: %d' % len(soup.text), echo=echo)
 
         # remove inline xbrl's
         for x in [re.compile("ix:\S*", re.I), re.compile("xbrli:\S*", re.I)]:
@@ -196,14 +241,14 @@ class Edgar:
                 tag.replace_with_children()
 
         text = soup.get_text('\n')
-        if echo: print('table: %d %d' % (len(tags), len(text)))
+        _print('table: %d %d' % (len(tags), len(text)), echo=echo)
 
         if form8k:
             x = re.search('emerging growth company[\w\W]*? of the Exchange Act',
                           text)
             if x:
                 text = text[x.end():]
-            if echo: print('form8k: %d' % len(text))
+            _print('form8k: %d' % len(text), echo=echo)
 
         # clean-up line breaks
         text = unicodedata.normalize("NFKD", text)  # Normalize
@@ -213,11 +258,11 @@ class Edgar:
         text = re.sub(r'\n+', '\n', text)
 
         # Completed Stage One
-        if echo: print('normalize: %d' % len(text))
+        _print('normalize: %d' % len(text), echo=echo)
         return text
 
     @staticmethod
-    def extract_filenames(detail, echo=ECHO):
+    def extract_filenames(detail, echo=config.ECHO):
         """Extract ordered list of .htm and .txt filenames from filing detail"""
         df_list = pd.read_html(detail)
         jdf = -1
@@ -241,13 +286,13 @@ class Edgar:
                             html_name = name
                         else:
                             html_all += [name]
-        if echo:
-            print(f"(extract_filenames) [{jdf} {jrow} {jcol}] {html_all}")
+        _print(f"(extract_filenames) [{jdf} {jrow} {jcol}] {html_all}",
+                   echo=echo)
         return [html_name] + html_all if html_name else html_all
 
     
     @staticmethod
-    def extract_item(text, item, echo=ECHO):
+    def extract_item(text, item, echo=config.ECHO):
         """Extract text passage for {'mda10K', 'bus10K'} item from input text
 
         Parameters
@@ -278,7 +323,7 @@ class Edgar:
         Item 2. Unregistered Sales of Equity Securities and Use of Proceeds.
         """
 
-        def parse_helper(text, marker, start=0, echo=ECHO):
+        def parse_helper(text, marker, start=0, echo=config.ECHO):
             # e.g. INTC uses text titles, not  "ITEM", in their 10K:
             #  "DISCUSSION AND ANALYSIS"
             # '\nQUANTITATIVE AND QUALITATIVE DISCLOSURE']
@@ -299,31 +344,28 @@ class Edgar:
             for item7 in item_beg:   # try to find begin
                 begin = item7.search(text)
                 begin = begin.start() if begin else -1
-                if echo:
-                    print('item begin?', item7, begin)
+                _print('item begin?', item7, begin, echo=echo)
                 if begin != -1:
                     break
             if begin != -1:          # found begin
                 for item7A in item_end:
                     end = item7A.search(text, pos=begin + 1)
                     end = end.start() if end else -1
-                    if echo:
-                        print('item end?', item7A, end)
+                    _print('item end?', item7A, end, echo=echo)
                     if end != -1:
                         break
                 if end == -1:        # ITEM 7A end does not exist
                     for item8 in next_beg:    # often get exception undefined
                         end = item8.search(text, pos=begin + 1)
                         end = end.start() if end else -1
-                        if echo:
-                            print('next begin?', item8, end)
+                        _print('next begin?', item8, end, echo=echo)
                         if end != -1:
                             break
                 if end > begin:       # extract this found item
                     mda = text[begin:end].strip()
                 else:
                     end = 0
-            if echo: print(f"(parse_helper) {len(mda)}, {end} / {len(text)}")
+            _print(f"(parse_helper) {len(mda)}, {end}/{len(text)}", echo=echo)
             return mda, end
 
         # clean-up for item headers
@@ -395,7 +437,7 @@ class EdgarClone(Edgar):
     Examples
     --------
     # zip -r 2019.zip 2019
-    ed = EdgarClone(prefix=settings['10X'], zipped=False)
+    ed = EdgarClone(prefix=config.datapath['10X'], zipped=False)
     files = ed.open(date=2021)   # 10-K and 10-Q (in prefix)
     files = ed.open(date=2021, item='detail')
     files = ed.open(form='8-K', date=2021)
@@ -405,7 +447,7 @@ class EdgarClone(Edgar):
     files = ed.open(date=20210323, item='detail')
     files = ed.open(form='8-K', date=20210323, item='detail')
 
-    ed = EdgarClone(prefix=settings['10X'], zipped=True)
+    ed = EdgarClone(prefix=config.datapath['10X'], zipped=True)
     files = ed.open(date=2020)   # 10-K and 10-Q (in prefix)
     files = ed.open(date=2020, item='detail')
 
@@ -427,18 +469,18 @@ class EdgarClone(Edgar):
     ~/<form>/<YYYY>/<YYYYMMDD>/*.txt : form docs for date YYYYMMDD
     ~/<form>/detail/<YYYY>/<YYYYMMDD>/*.txt : form details for date YYYYMMDD
     """
-    def __init__(self, prefix='', zipped=True, echo=ECHO):
+    def __init__(self, prefix='', zipped=True, echo=config.ECHO):
         """To access (zipped or unzipped) Edgar cloned archives"""
         self.prefix = prefix
         self.zipped = zipped
         self.echo_ = echo
 
-    def to_path(self, basename, form, date=None, item=None, permno=None):
-        """Construct local full path name for clone archive"""
+    def to_path(self, basename, form, date=None, item='', permno='', cik=None):
+        """Construct local full path name for cloned archive"""
         s = os.path.join(self.prefix,
                          str(form),
-                         str(item) if item else '',
-                         str(permno) if permno else '',
+                         str(item), 
+                         str(permno),
                          str(date // 10000) if date else '',
                          str(date) if date else '',
                          basename)
@@ -470,8 +512,7 @@ class EdgarClone(Edgar):
             with zipfile.ZipFile(p) as clone:
                 for pathname in clone.namelist():
                     if pathname.endswith('/'):
-                        if self.echo_:
-                            print(pathname)
+                        _print(pathname, echo=self.echo_)
                     else:
                         r.append(from_clonepath(pathname=pathname))
             df = DataFrame(r).drop_duplicates(['pathname','date','form','cik'])
@@ -516,8 +557,8 @@ class EdgarClone(Edgar):
                                     for r in q], ignore_index=True)
             self.keys_ = df
             self.archive = p
-        if self.echo_:
-            print(self.zipped if self.zipped else self.archive, len(self.keys_))
+        _print(self.zipped if self.zipped else self.archive, len(self.keys_),
+               echo=self.echo_)
         return self.keys_
 
     def close(self):
@@ -544,91 +585,97 @@ class EdgarClone(Edgar):
 #    
 # download 10-K's, 10-Q's, and 8-Ks from Edgar
 #
-if False: 
-    #from finds.edgar import Edgar, EdgarClone
-    from settings import settings
-    import time, os
-    import numpy as np
-    from pandas import DataFrame, Series
-    ed = EdgarClone(settings['10X'], zipped=True)
-    forms = Edgar.forms_['10-K'] + Edgar.forms_['10-Q'] + Edgar.forms_['8-K']
+import time, os
+import numpy as np
+from pandas import DataFrame, Series
+import config
+from tqdm import tqdm
 
+start_year = 2021 
+start_quarter = 2 
+end_year = start_year
+end_quarter = start_quarter
+
+def load_10X(start_year, start_quarter, end_year, end_quarter):  
+    ed = EdgarClone(config.datapath['10X'], zipped=True)
+    forms = Edgar.forms_['10-K'] + Edgar.forms_['10-Q'] + Edgar.forms_['8-K']
     logger = {}
-    quarters = [2021.25] # np.arange(2012, 2019, 0.25):
     tic = time.time()
-    year = quarters[0]
+    quarters = list(np.arange(start_year + ((start_quarter-1)/4),
+                              end_year + (end_quarter/4), 1/4))
     for year in quarters:
         y = int(year)
-        q = int(1 + ((year - y)*4))
-        files = Edgar.fetch_index(year=y, quarter=q)
-        r = files.iloc[3]
-        for i, r in files.iterrows():  # 294124
-            if r['form'] in forms:
+        files = Edgar.fetch_index(year=y, quarter=int(1 + ((year - y) * 4)))
+        restart = 0 #  29486 67426 83580 111448 161102 220591
+
+        for i, r in tqdm(files.iterrows()):
+            if i >= restart and r['form'] in forms:
                 form8k = '8-K' if r['form'] in Edgar.forms_['8-K'] else ''
 
                 # To save detail page
                 detail = Edgar.fetch_detail(pathname=r['pathname'])
-                if detail is None and ECHO:     # filing detail page missing!
-                    print('****', r['name'], r['pathname'], '****')
+                if detail is None:   # filing detail page missing!
+                    _print("***MISSING DETAIL***", r['name'], r['pathname'])
                     continue
                 s = ed.to_path(form=form8k, item='detail', cik=r['cik'],
-                               date=r['date'], basename=Edgar.basename(*r))
+                               date=r['date'], basename=Edgar.basename(**r))
                 with open(s, 'wb') as f:
                     f.write(detail)
-                if ECHO:
-                    print(r['date'], r['form'], r['cik'], f"*{i}/{len(files)}*")
+                _print("--- Found Detail ---", r['date'], r['form'], r['cik'],
+                       f"{time.time()-tic:.0f}s *** {i}/{len(files)} ***")
                     
                 # To save main filing document text
                 filenames = Edgar.extract_filenames(detail)  # retrieve filings
                 if form8k and ".htm" in filenames[0]:
-                    text = "\n".join(
+                    lines = "\n".join(
                         [Edgar.fetch_filing(
                             Edgar.from_path(r['pathname'], f), form8k=True)
                          for f in filenames if ".htm" in f])
                 else:
-                    text = Edgar.fetch_filing(
+                    lines = Edgar.fetch_filing(
                         Edgar.from_path(r['pathname'], filenames[0]),
                         form8k=form8k)
-                if not text:
-                    text = Edgar.fetch_filing(r['pathname'], form8k=form8k)
+                if not lines:
+                    lines = Edgar.fetch_filing(r['pathname'], form8k=form8k)
                 s = ed.to_path(date=r['date'], form=form8k, cik=r['cik'],
-                               basename=Edgar.basename(*r))
+                               basename=Edgar.basename(**r))
                 with open(s, 'wt') as f:
-                    f.write(text)
+                    f.write(lines)
                     
                 logger[r['pathname'].split('/')[-1]] = r.append(
-                    Series({'len': len(text)})).drop('pathname')
-                if ECHO:
-                    print(*r.values, f"*{i}/{len(files)}*")
+                    Series({'len': len(lines)})).drop('pathname')
+                _print("--- Saved Filing ---", *r.values, f"{i}/{len(files)}")
+
     logger = DataFrame.from_dict(logger, orient='index')
+    return logger
 
 #
 # Extract and save MDA and BUS text
 #
-if False: 
-    from finds.database import SQL
-    from finds.structured import PSTAT
-    from finds.busday import BusDay
-    from settings import settings
-    from finds.edgar import Edgar
-    
-    ed = EdgarClone(settings['10X'], zipped=False)
-    sql = SQL(**settings['sql'])
+import time, os
+import numpy as np
+from pandas import DataFrame, Series
+from finds.database import SQL
+from finds.structured import PSTAT
+from finds.busday import BusDay
+import config
+
+years = [2021]
+def parse_items(years=years):
+    ed = EdgarClone(config.datapath['10X'], zipped=False)
+    sql = SQL(**config.credentials['sql'])
     bday = BusDay(sql)
-    rdb = None
     pstat = PSTAT(sql, bday)
     to_permno = pstat.build_lookup(target='lpermno', source='cik', fillna=0)
 
-    mindate = 20210101   # 20201001
     items = {'10-K': ['bus10K', 'mda10K']}  # '10-Q': ['mda10Q']}
     logger = []
-    year = 2021
-    for year in [2021]:    #2019, 2021):  # Start 1998++
+    for year in years:    #2019, 2021):  # Start 1998++
         rows = ed.open(date=year)
         row = rows.iloc[0]
         for i, row in rows.iterrows():
             permno = to_permno(int(row['cik']))
-            if row['form'] in items and permno and row['date'] >= mindate:
+            if row['form'] in items and permno:
                 filing = ed[row['pathname']]
                 for item in items[row['form']]:
                     extract = Edgar.extract_item(filing, item)
@@ -643,5 +690,4 @@ if False:
                          'item_w': len(extract.split())}
                     logger.append(r)
                     print(", ".join([f"{k}: {v}" for k,v in r.items()]))
-
     logger = DataFrame.from_records(logger)

@@ -25,16 +25,16 @@ import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
 from pandas.api import types
 import time
-from .readers import requests_get
+from .edgar import requests_get
 from .busday import str2date, to_monthend
-
-try:
-    from settings import ECHO
-except:
-    ECHO = False
+import config
 
 # From https://research.stlouisfed.org/econ/mccracken/fred-databases/
 _fred_md_url = 'https://files.stlouisfed.org/files/htdocs/fred-md/'
+
+def _print(*args, echo=config.ECHO, **kwargs):
+    """helper to echo debugging messages"""
+    if echo: print(*args, **kwargs)
 
 def _int2date(date):
     """helper method to convert int date to FRED api string format"""
@@ -60,7 +60,7 @@ def multpl(page):
     return df
 
 
-def fred_md(vintage=0, url=None, echo=ECHO):
+def fred_md(vintage=0, url=None, echo=config.ECHO):
     """Retrieve and parse current or vintage csv from McCracken FRED-MD site
 
     Parameters
@@ -98,8 +98,7 @@ def fred_md(vintage=0, url=None, echo=ECHO):
         vintage = csvfile_
     else:
         vintage = vintage or 'monthly/current.csv'
-    if echo:
-        print(vintage)
+    _print(vintage, echo=echo)
     url = url or url_
     if url.endswith('.zip'):
         if url.startswith('http'):
@@ -144,8 +143,7 @@ def fred_qd(vintage=0, url=None, echo=False):
         vintage = f"quarterly/{vintage // 100}-{vintage % 100:02d}.csv"
     else:
         vintage = 'quarterly/current.csv'
-    if echo:
-        print(vintage)
+    _print(vintage, echo=echo)
     df = pd.read_csv(os.path.join(url, vintage), header=0)
     df.columns = df.columns.str.rstrip('x')
     meta = dict()
@@ -268,7 +266,7 @@ class Alfred:
                     "file_type=json{args}").format
     start = 17760704
     end = 99991231
-    echo_ = ECHO
+    echo_ = config.ECHO
     api_key = None
 
     def header(self, series_id, column='title'):
@@ -309,7 +307,7 @@ class Alfred:
         return df[columns or keep]
 
     def __init__(self, api_key, start=17760704, end=99991231, savefile=None,
-                 echo=ECHO):
+                 echo=config.ECHO):
         """Create object, with api_key, for FRED access and data manipulation"""
         self.api_key = api_key
         self.start = start

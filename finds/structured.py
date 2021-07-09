@@ -63,7 +63,7 @@ def parse_where(where, prefix):
         return " " + prefix + " " + where
     return ''
 
-def _as_dtypes(df, columns, drop_duplicates=[], sort_values=[], keep='first',
+def as_dtypes(df, columns, drop_duplicates=[], sort_values=[], keep='first',
               replace={}):
     """Helper method to convert dtypes of data frame, from sqlalchemy types
 
@@ -161,8 +161,8 @@ class Structured(object):
 
     def dtypes(self, dataset):
         """Return empty DataFrame with columns of corresponding dtype"""
-        return _as_dtypes(None, {k : v.type
-                                 for k,v in self[dataset].columns.items()})
+        return as_dtypes(None, {k : v.type
+                                for k,v in self[dataset].columns.items()})
         
     def create_all(self):
         """Create all tables and indexes in SQL using associated schemas"""
@@ -209,7 +209,7 @@ class Structured(object):
         for col, vals in drop.items():  # drop rows where col has value val
             df.drop(index=df.index[df[col].isin(vals)], inplace=True)
 
-        df = _as_dtypes(
+        df = as_dtypes(
             df=df,
             columns={k.lower(): v.type for k, v in table.columns.items()},
             drop_duplicates=[p.key.lower() for p in table.primary_key],
@@ -1875,8 +1875,8 @@ class Signals(Stocks):
         df.index.name = None # 'permno' may be both index level and column label
         df = df.rename(columns={permno: 'permno', rebaldate: 'rebaldate'})
         table = self[label]
-        df = _as_dtypes(df=df, columns={k.lower(): v.type
-                                        for k, v in table.columns.items()})
+        df = as_dtypes(df=df, columns={k.lower(): v.type
+                                       for k, v in table.columns.items()})
         df = df.replace([np.inf, -np.inf], np.nan)
         df = df.sort_values(by=['permno', 'rebaldate', label])
         df.drop_duplicates(['permno', 'rebaldate'], keep='first', inplace=True)

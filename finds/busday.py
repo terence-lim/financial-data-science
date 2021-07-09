@@ -14,10 +14,7 @@ from pandas.tseries.holiday import USFederalHolidayCalendar
 from sqlalchemy import Column, Integer
 from pandas.api.types import is_list_like
 from pandas.tseries.offsets import MonthEnd, YearEnd, QuarterEnd
-try:
-    from settings import ECHO
-except:
-    ECHO = False
+import config
 
 # .to_pydatetime() - convert pandas format (Timestamp, datetime64) to datetime
 # datetime.date.strftime(d, '%Y%m%d') - convert datetime to string
@@ -35,6 +32,14 @@ def to_monthend(dt):
     else:
         d = pd.to_datetime(str(dt)) + MonthEnd(0)
     return int(d.strftime('%Y%m%d'))
+
+from collections import namedtuple
+def int2date(date):
+    if is_list_like(date):
+        return [int2date(d) for d in date]
+    return namedtuple('Date', ['year', 'month', 'day'])(
+        date // 10000, (date // 100) % 100, date % 100)
+
 
 def str2date(date, informat='%Y-%m-%d', outformat='%Y%m%d'):
     """Extract int components from date strings by input and output formats
@@ -55,13 +60,13 @@ def str2date(date, informat='%Y-%m-%d', outformat='%Y%m%d'):
 
     Notes
     -----
-    Formats, per strptime and strftime:
-    %b %B %h = input month name
-    %F = %Y-%m-%d
-    %T = %H:%M:%S
-    %n = whitespace
-    %w %W %U %V = week number
-    %u = day of week (1-7)
+    Formats specified as in strptime() and strftime():
+      %b %B %h = input month name
+      %F = %Y-%m-%d
+      %T = %H:%M:%S
+      %n = whitespace
+      %w %W %U %V = week number
+      %u = day of week (1-7)
     """
     if is_list_like(date):
         return [str2date(s, informat, outformat) for s in date]
@@ -214,31 +219,31 @@ class BusDay:
             return self._map(self.offset, dates, offsets, end=end, roll=roll)
 
     def holding_periods(self, dates):
-        """Returns beg and end dates of realized returns after each rebalance"""
+        """Returns (beg, end) dates of holding periods after rebalances dates"""
         d = sorted(dates)
         return [(self.offset(b, offsets=1), self.offset(e, offsets=0))
                 for b, e in zip(d[:-1], d[1:])]
 
     def endmo(self, date, months=0):
-        """Returns business month end date/s, with optional offset in months"""
+        """Returns (list of) business month end date, optional months offset"""
         return (self._map(self.endmo,date, months) if is_list_like(date) else
                 int((self(date, day=1) + (0 * self.endmo_) +
                      (months * self.endmo_)).strftime('%Y%m%d')))
 
     def begmo(self, date, months=0):
-        """Returns business month begin date/s, with optional offset in months"""
+        """Return (list of) business month begin date, optional months offset"""
         return (self._map(self.begmo, date, months) if is_list_like(date) else
                 int((self(date, day=1) + (0 * self.begmo_) +
                      (months * self.begmo_)).strftime('%Y%m%d')))
 
     def endyr(self, date, years=0):
-        """Returns business year end date/s, with optional offset in years"""
+        """Return (list of) business year end date, optional years offset"""
         return (self._map(self.endyr, date, years) if is_list_like(date) else
                 int((self(date, 12, 1) + (0 * self.endmo_) +
                      (12*years*self.endmo_)).strftime('%Y%m%d')))
 
     def begyr(self, date, years=0):
-        """Returns business year begin date/s, with optional offset in years"""
+        """Return (list of) business year begin date, optional years offset"""
         return (self._map(self.begyr, date, years) if is_list_like(date) else
                 int((self(date, 1, 1) + (0 * self.begmo_) +
                      (12*years*self.begmo_)).strftime('%Y%m%d')))
@@ -271,13 +276,13 @@ class BusDay:
         return int(date) % 100   # input date may exclude year or month
 
     def december_fiscal(self, date):
-        """Determine lagged December fiscal year-end date, FamaFrench-style"""
+        """Lookup lagged December fiscal year-end date, FamaFrench-style"""
         if is_list_like(date):        
             return self._map(self.dec_lag, date) 
         return self.endyr(date, -1 if self.month(date) >= 6 else -2)
 
     def june_universe(self, date):
-        """Determine prior June universe selection date, FamaFrench-style"""
+        """Lookup prior June universe selection date, FamaFrench-style"""
         if is_list_like(date):
             return self._map(self.jan_univ, date) 
         d = self.endmo(self.endyr(date), -6) 
