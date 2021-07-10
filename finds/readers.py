@@ -179,18 +179,22 @@ if __name__ == "__main__":  # hack to splice in latest yahoo finance prices
     dividends = {}
     ignored = []
     for i, symbol in enumerate(symbols.index):
-        try:
-            assert('$' not in symbol)
-            assert('^' not in symbol)
-            assert(not symbols.loc[symbol, 'Test Issue'])
-            ticker = symbol.replace('.','')
-            df = get_price(ticker=ticker, start_date=str(START_DATE))
-            assert(len(df) > 0)
-        except:
-            print(symbol, ' ignored')
+        if (('$' in symbol) or ('^' in symbol) or
+            symbols.loc[symbol, 'Test Issue']):
+            print(symbol, ' ignored (bad symbol)')
             ignored += [symbol]
             continue
-
+        ticker = symbol.replace('.','-')  # yahoo share class follows '-'
+        df = get_price(ticker=ticker, start_date=str(START_DATE))
+        if df is None:
+            print(symbol, ' ignored (get_price error)')
+            ignored += [symbol]
+            continue            
+        if not len(df):
+            print(symbol, ' ignored (len==0)')
+            ignored += [symbol]
+            continue
+        
         # guess dividend dates (ascending order)
         diff = (df.close / df.adjClose).rolling(15).min()
         dates = []
@@ -237,6 +241,7 @@ if __name__ == "__main__":  # hack to splice in latest yahoo finance prices
       .to_csv(os.path.join(outdir, 'dividends.csv.gz'), sep='|', index=False)
     symbols.to_csv(os.path.join(outdir, 'symbols.csv.gz'), sep='|', index=False)
 
+    # Merge daily prices from all downloaded weekly files to form year-to-date
     paths = sorted(glob.glob(os.path.join(downloads, '2*')), reverse=True)
     prices = pd.read_csv(os.path.join(paths[0], 'prices.csv.gz'), sep='|')
     dividends = pd.read_csv(os.path.join(paths[0], 'dividends.csv.gz'), sep='|')
@@ -265,12 +270,15 @@ if __name__ == "__main__":  # hack to splice in latest yahoo finance prices
     price = crsp.get_section('daily', ['prc','shrout'], 'date', date, start=None)
 
     # get tickers to lookup permno
-    tickers = crsp.get_section('names', ['tsymbol', 'date'], 'date', date,
-                               start=0).reindex(price.index)
+    tickers = crsp.get_section(
+        'names', ['tsymbol', 'date'], 'date', date, start=0).reindex(price.index)
     tickers = tickers.sort_values(['tsymbol', 'date'])\
                      .drop_duplicates(keep='last')
     tickers = tickers.reset_index().set_index('tsymbol')['permno']
 
+    # Yahoo has '-' but CRSP has '' between symbol and share class
+    prices['ticker'] = prices['ticker'].str.replace('-','')  # dividends
+    
     # merge permnos into big prices table
     prices = prices.join(tickers, on='ticker', how='inner')
 
@@ -299,9 +307,6 @@ if __name__ == "__main__":  # hack to splice in latest yahoo finance prices
     monthly = monthly[monthly['date'] > date]
     print('monthly:', len(monthly), len(np.unique(monthly['permno'])))
     
-    if DEBUG:
-        raise exception('debug mode: Ready to load sql?')
-
     # clean up prices table to mimic daily table
     prices['ret'] -= 1
     prices['retx'] -= 1
@@ -369,6 +374,8 @@ if __name__ == "__main__":  # hack to splice in latest yahoo finance prices
     table = crsp['daily']
     delete = table.delete().where(table.c['date'] > date)
     sql.run(delete)
+    print(sql.run('select count(*) from daily'))
+    
     sql.load_dataframe(table.key, prices, index_label=None, to_sql=True,
                        if_exists='append')
     print(sql.run(f"select count(*) from daily where date > {date}"))
