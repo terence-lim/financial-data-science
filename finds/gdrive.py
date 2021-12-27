@@ -2,6 +2,8 @@
 
 - google REST api's
 
+#pip install google-api-python-client
+
 Author: Terence Lim
 License: MIT
 """
@@ -20,7 +22,7 @@ _SCOPES = ['https://www.googleapis.com/auth/drive']
 _FOLDER = 'application/vnd.google-apps.folder'   # mimeType of folders
 _HOME = 'root'   # fileId of root folder
 
-class GDRIVE:
+class GDrive:
     """Base class provides basic interface to essential google drive api's
 
     Attributes
@@ -33,7 +35,7 @@ class GDRIVE:
     --------
     # init() prompts for googleapi authorization, which is stored in a tokenfile
     #   in current folder so that not prompted in subsequent executions
-    g = GDRIVE()
+    g = GDrive()
 
     _ = g.ls()                   # display list of folders and files (and types)
 
@@ -426,7 +428,7 @@ class GDRIVE:
         return items
 
 if __name__ == '__main__':
-    g = GDRIVE()
+    g = GDrive()
     silent=False
     _ = g.ls(silent=silent)
 
