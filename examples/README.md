@@ -1,9 +1,10 @@
-# Financial Data Science python code examples
+# Financial Data Science: Exercises in Python
 
 These code examples explore data science and machine learning methods
-on large and textual financial data sets.  Accompanying Jupyter notebooks
-that also contain results output are in the
-[https://github.com/terence-lim/data-science-notebooks](https://github.com/terence-lim/data-science-notebooks) repo.
+on large or textual financial data sets (note that the accompanying Jupyter notebooks
+in the
+[https://github.com/terence-lim/data-science-notebooks](https://github.com/terence-lim/data-science-notebooks) repo
+reflect an older version, and will be updated very soon)
 
 [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
@@ -11,215 +12,244 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 &nbsp;
 
+
 ## Applications in Unsupervised Learning
 
-### Text Analysis with 10-K Business Descriptions from Edgar
 
-[business_description.py](business_description.py)
-
-- part-of-speech tags, lemmatize, named entity recognition
-- jaccard similarity, cosine similarity, multilevel community detection
-- spacy, nltk, sklearn, igraph
-- Hoberg and Phillips (2016), SEC Edgar, Wharton Research Data Services
-
-### Topic models and FOMC meeting minutes
+### Topic Models from FOMC meeting minutes
 
 [fomc_topics.py](fomc_topics.py)
 
-- NMF, LSA, LDA, PLSI matrix decomposition models
+- Topic Models: FOMC minutes text
+- Matrix Decomposition: NMF, LSA, LDA, PLSI
 
-### LSTM networks, state space models and mixtures from FRED-MD
+### Hidden State Models and Economic Time Series
 
 [economic_states.py](economic_states.py)
 
-- Long Short-Term Memory networks, hidden states, state space models, Gaussian mixtures
-- pytorch, hmmlearn, statsmodels, sklearn
-- Chen, Pelger and Zhu (2020) and others
+- Recurrent Neural Networks: LSTM and Elman SRN
+- Linear Dynamic Factor Models
+- Hidden Markov Models and Gaussian Mixture Model
 
-### Clustering economic series and outlier detection
-
-[unsupervised_economics.py](unsupervised_economics.py)
-
-- KMeans, agglomerative, spectral clustering, nearest neighbors, PCA
-- isolated forest, minimum covariance determinant, local outlier factor
-- sklearn, FRED-MD
 
 ## Applications in Supervised Learning
 
-### DAN for text classification
+### Classification of events text
 
-[dan_classifier.py](dan_classifier.py)
+[keydev_classifier.py](keydev_classifier.py)
 
-- deep averaging networks, word embeddings
-- pytorch, spacy, GloVe, S&P Key Developments
+- Text classification: S&P Key Developments events
+- Logistic regression: Generalized Linear Models, stochastic gradient descent
+- nltk: tokenizer, lemmatizer, stemmer
+- sklearn metrics: accuracy, precision, recall, confusion_matrix, auc, roc_curve
 
 ### Classification models and events text
 
 [classification_models.py](classification_models.py)
 
-- naivebayes, logistic, linearsvc, mlp, decisiontree, wordcloud
-- nltk, S&P Key Developments
+- Supervised learning models for classification
 
-### Binary classification of events text
+  - Text classification, S&P Key Developments
+  - gensim: preprocessing, phrases
+  - sklearn: naivebayes, logistic, linearsvc, decisiontree
 
-[keydev_classifier.py](keydev_classifier.py)
+### Deep Averaging Networks for text classification
 
-- text classification, logistic regression, stochastic gradient descent
-- precision, recall, ROC curve, sensitivity, specificity
-- S&P Key Developments
+[dan_classifier.py](dan_classifier.py)
 
-### Sentiment analysis of 10K MD&A in Edgar company filings
+- Feedforward Neural Networks: torch, deep averaging networks
+- Word vectors: spacy, GloVe, relativize, frozen, fine-tuning
+
+
+### Sentiment Analysis of 10K MD&A in Edgar Company Filings
 
 [mda_sentiment.py](mda_sentiment.py)
 
-- Cohen, Malloy and Nguyen (2020), Loughran and McDonald (2011), and others
-- sklearn, nltk, SEC Edgar, Wharton Research Data Services
+- Sentiment Analysis: Loughran and McDonald (2011) sentiment word list
+- 10-K Company Filings: SEC Edgar, Cohen, Malloy and Nguyen (2020), 
+
 
 ### Approximate factor models, VAR and TCN from FRED-MD
 
 [approximate_factors.py](approximate_factors.py)
 
-- PCA, EM, vector autoregression, temporal convolutional networks
-- Bai and Ng (2002), McCracken and Ng (2016), and others
+- Approximate Factor Models, VAR and TCN
 
-### Supervised learning models for regression
+  - PCA, EM
+  - Approximate factors and selection: Bai and Ng (2002), McCracken and Ng (2016)
+  - vector autoregression, temporal convolutional networks
+
+### Supervised Learning Regression Models
 
 [regression_models.py](regression_models.py)
 
-- subset selection, partial least squares, ridge, lasso regression
+- subset selection, partial least squares, ridge, gradient boost, random forest
 - cross validation, feature importances, dimension reduction
-- gradient boosting, random boosting, ensembles
-- sklearn, statsmodels, St Louis Fed FRED, GDP
+- sklearn, statsmodels
 
 ## Applications in Linear Regression
 
-### Forecasting and econometrics
+### Econometrics and Forecasting
 
 [econometric_forecast.py](econometric_forecast.py)
 
-- seasonality, spectral density, unit root, stationarity
-- autocorrelation functions, AR, MA, SARIMAX
-- scipy, statsmodels, seaborn, St Louis Fed FRED
+- Trends: seasonality
+- Autocorrelation Function: AR, MA, SARIMAX
+- Unit root: integration order
+- Forecasting: single-step, multi-step
+- Granger Casuality
+- Vector Auto-Regression: impulse response function
 
-### Linear regression diagonostics and residual plots
+### Linear Regression Diagonostics and Residual Plots
 
 [linear_diagnostics.py](linear_diagnostics.py)
 
-- linear regression assumptions, residual plots, robust standard errors
-- outliers, leverage, multicollinearity
-- statsmodels, St Louis Fed FRED
+- Linear regression diagnostics: HAC robust standard errors
+- Outliers: leverage, influential points, residual plots
+- Multicollinearity: variance inflation factor
+- Interactions and Polynomial Regression
 
-### Economic time series and releases
+### Economic Time Series
 
 [revisions_vintage.py](revisions_vintage.py)
 
-- : revisions and vintages, St Louis Fed FRED/ALFRED
+- St Louis Fed FRED: popular series, api
+- ALFRED: archival, releases, vintages, revisions
+- FRED-MD: release dates
+
 
 ## Applications in Risk Modelling
 
-### Market microstructure
+### Market Microstructure
 
 [market_microstructure.py](market_microstructure.py)
 
-- intraday liquidity, variance ratio, effective spreads, tick sign test
-- tick data, NYSE Daily TAQ 
+- Tick data: NYSE Daily TAQ 
+- Spreads: quoted, effective, price impact, realized
+- Volatility: variance ratio, Parkinsons, Klass-Garman
 
-### Factor and empirical covariance matrix from NYSE TAQ
+### Covariance Matrix and Risk Decomposition
 
-[taq_covariance.py](taq_covariance.py)
+[covariance_matrix.py](covariance_matrix.py)
 
-- covariance matrix shrinkage, PCA, minimum variance portfolios
-- high frequency tick data, NYSE Daily TAQ
+- Covariance Matrix: Principal Components, Shrinkage, EWMA
+- Risk Decomposition, Black-Litterma
 
-### Conditional volatility models
+### Conditional Volatility
 
 [conditional_volatility.py](conditional_volatility.py)
 
-- Value at Risk, GARCH, EWMA, Scholes-Williams Beta
-- VIX, Bitcoin, St Louis Fed FRED
+- Value at Risk, Expected Shortfall
+- GARCH, EWMA
+- VIX, Bitcoin
 
 ### Bond market index components and interest rate indicators
 
 [bond_returns.py](bond_returns.py)
 
-- PCA, St Louis Fed FRED
+- Bond Returns and Interest Rates
 
-### Term structure of interest rates
+- Principal Components Analysis: bond index returns and interest rates
+
+
+### Term Structure of Interest Rates
 
 [term_structure.py](term_structure.py)
 
-- bootstrap, splines, yield curve, duration
-- Liu and Wu (2020), St Louis Fed FRED
+- yield curve, duration, forward rates, spot rates, yield-to-maturity
+- bootstrap, splines
+- reconstructed yield curve (Liu and Wu, 2020), St Louis Fed FRED
+
 
 ## Applications in Network Science
 
-### Social network analysis of BEA industries
-
-[social_iouse.py](social_iouse.py)
-
-- Input-Output Use Tables, Social Relations Regression Model
-- igraph, rpy2, Bureau of Economic Analysis
 
 ### Graph centrality and BEA input-output use tables
 
 [bea_centrality.py](bea_centrality.py)
 
-- igraph, network, centrality, BEA Input-Output Use Table
-- Choi and Foerster (2017), Bureau of Economic Analysis, and others
+- Graph Centrality and BEA Input-Output Use Tables
 
-### Industry sectoring
+  - Centrality: eigenvector, hub, authority, pagerank,
+  - BEA: Input-Output Use Table, Choi and Foerster (2017)
+
+
+### Industry Sectoring and Community Detection
 
 [industry_community.py](industry_community.py)
 
-- igraph, community detection, modularity
+- Community Detection
 - Text-based Network Industry Classification (Hoberg and Phillips, 2016)
 
-### Principal customers network
+### Link Prediction
+
+[link_prediction.py](link_prediction.py)
+
+- Link prediction: resource_allocation, jaccard coefficient, 
+  adamic_adar, preferential_attachment
+- Accuracy: precision, recall, ROC curve, AUC, confusion matrix, 
+- Text-based Network Industry Classification (Hoberg and Phillips, 2016)
+
+### Principal Customers Network
 
 [customer_ego.py](customer_ego.py)
 
-- igraph, ego graph, betweenness centrality
-- S&P Compustat, Wharton Research Data Services
+- Graphs: ego network, induced subgraph
+- Supply chain: principal customers
 
 ## Applications in Quantitative Finance
 
-### Event study abnormal returns
+### Event Study Abnormal Returns
 
 [event_study.py](event_study.py)
 
-- CAR, BHAR, post-event drift, order statistics, Bonferroni adjustment
-- S&P Key Developments, Wharton Research Data Services
+- S&P/Capital IQ Key Developments
+- event study: CAR, BHAR, post-announcement drift (Kolari et al 2010 and others)
+- multiple testing: Holm FWER, Benjmain-Hochberg FDR, Bonferroni p-values
 
-### Weekly reversals strategy
+### Weekly Reversals Strategy
 
 [weekly_reversal.py](weekly_reversal.py)
 
-- information coefficient, slippage, cross-sectional dispersion
-- structural breaks, unknown changepoint
-- rpy2, CRSP, Wharton Research Data Services
+- Weekly reversal contrarian strategy (Lo and Mackinlay 1990, and others)
+- Structural change with unknown breakpoint
+- Implementation slippage
 
-### Factor investing
+
+### Survivorship-bias and low-price stocks strategy
+
+[lowprice_survivors.py](lowprice_survivors.py)
+
+- Low-price portfolio spread returns
+- Survivorship-bias
+- Autocorrelation-consistent standard errors: Newey-West
+
+### Stock Prices and Adjustments
+
+[stock_prices.py](stock_prices.py)
+
+- Total stock returns: splits and dividend adjustment factors
+
+
+
+### Factor Investing
 
 [quant_factors.py](quant_factors.py)
 
-- return predicting signals, portfolios sorts, backtests
-- CRSP, Compustat, IBES, Wharton Research Data Services
-- Green, Hand and Zhang (2013) and others
+- return predicting signals (Green, Hand and Zhang, 2013, and others)
+- CRSP, Compustat, IBES
 
-### Risk premiums from Fama-Macbeth cross-sectional regressions
+### Risk Premiums from Fama-Macbeth Cross-sectional Regression
 
 [fama_macbeth.py](fama_macbeth.py)
 
-- pandas datareader, Fama French data library
-
-### Fama-French and momentum research factors
+- Fama-Macbeth cross-sectional regression: risk premiums
+- CRSP, Compustat, 
+- Ken French Data Library: Fama-French test assets
+### Fama-French Research Factors
 
 [fama_french.py](fama_french.py)
 
-- CRSP, Compustat, Wharton Research Data Services
-
-### Current Market Estimates
-
-[realtime_monitor.py](realtime_monitor.py)
-
-- UNDER CONSTRUCTION
+- Fama-French monthly research factors: HML, SMB, Mom, STRev
+- Portfolio sorts
+- CRSP, Compustat, Ken French Data Library
