@@ -1,7 +1,7 @@
 # Financial Data Science python library
 
 These modules support retrieving and manipulating structured and
-unstructured financial data sets, and fitting and testing quant and
+unstructured financial data sets, and fitting and testing quant finance and
 machine learning models.
 
 [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
@@ -13,104 +13,112 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 ### [taq.py](taq.py)
 
-- Class and methods to preprocess and analyze TAQ trade and quotes tick data
+- Class and methods to process TAQ trade and quotes tick data
 
-  - NYSE Daily TAQ, bid-ask quotes, trade conditions, tick test
-
+  - NYSE Daily TAQ: Master, NBBO, Trades
+  - market microstructure: bid-ask spreads, trade conditions, tick test
 
 ### [sectors.py](sectors.py)
 
-- Implement industry sectoring, and convenience methods for BEA data
+- Implement industry sectoring, and wrapper over BEA web api and data
 
-  - pandas, requests, sqlalchemy, json
-  - SIC, NAICS, Fama-French industry crosswalks
-  - Bureau of Economic Analysis, Input-Output Use Tables
+  - Bureau of Economic Analysis: Input-Output Use Tables
+  - SIC, NAICS crosswalks: https://www.naics.com/
+  - Fama-French industry codes
 
 ### [graph.py](graph.py)
 
-- Convenience methods for igraph and networkx modules
+- Graph network convenience wrapper
 
-  - Network science, community detection, centrality, modularity
-  - igraph, networkx
-
+  - networkx: link prediction, community detection, centrality
 
 ### [alfred.py](alfred.py)
 
-- Convenience class and methods to access ALFRED/FRED apis and FRED-MD/FRED-QD
+- Class and methods to access ALFRED/FRED apis, and FRED-MD/FRED-QD
 
-  - FRED, ALFRED, revisions vintages
-  - PCA, approximate factor model, EM algorithm
+  - FRED, ALFRED: St Louis Fed api's, with revision vintages
+  - FRED-MD, FRED-QD: McCracken website at St Louis Fed
+  - Bai and Ng (2002), McCracken and Ng (2015, 2020) factors-EM algorithm
+
+    - https://research.stlouisfed.org/econ/mccracken/fred-databases/
 
 ### [edgar.py](edgar.py)
 
-- Class and methods to retrieve and analyze EDGAR text data
+- Class and methods to retrieve and manipulate EDGAR text data
 
-  - SEC Edgar, 10K, 8K, MD&A, Business Descriptions
-  - BeautifulSoup, requests, regular expressions
+  - SEC Edgar: 10-K, 10-Q, 8-K
+  - MD&A and Business Descriptions items
 
 ### [unstructured.py](unstructured.py)
 
-- Implements interface for unstructured data sets
+- Classes to implement interface for unstructured and textual datasets
 
-  - pymongo, S&P CapitalIQ key developments
-
-### [readers.py](readers.py)
-
-- Perform web requests and retrievals
-
-  - pandas_datareader, Fama-French data library
-  - Loughran McDonald financial word lists, FOMC minutes, Liu and Wu yield curve
+  - FOMC minutes
+  - Loughran and McDonald words
+  - S&P CapitalIQ key developments situations text
 
 ### [structured.py](structured.py)
 
-- Implements interface for structured data sets
+- Classes to implement interface for structured data sets
 
-  - CRSP, Compustat, IBES, delistings, distributions, shares outstanding
+  - CRSP (daily, monthly, names, delistings, distributions, shares outstanding)
+  - S&P/CapitalIQ Compustat (Annual, Quarterly, Key Development, customers)
+  - IBES Summary
+
+- Redis store: SQL query results are (optionally) cached in in Redis
+
+- Signals class to store and retrieve derived signal values
+
+- Subclasses to mimic parent class interfaces with pre-loaded batch in memory
+
+- Lookup identifiers within and across data sets
+
 
 ### [busday.py](busday.py)
 
-- Implement custom daily and weekly trading day calendars and datetime methods
+- Implement custom trading-day business date calendar 
 
-  - pandas custom business calendar
-
+  - Numpy busdaycalendar
+  - Pandas CustomBusinessDay and offsets
+  - FamaFrench daily research factors
 
 ### [database.py](database.py)
 
-- Convenience class and methods to interface with database engines
+- Wrappers for database engines
 
-  - SQL, sqlalchemy
-  - MongoDB, pymongo
-  - redis
+  - SQL: sqlalchemy
+  - MongoDB: pymongo
+  - Redis NoSQL key-value store: redis
+
+- Convenience methods to:
+
+  - Load, store and manipulate pandas DataFrames with SQLAlchemy database schemas
+  - Serialize DataFrames to Redis key-value store (for caching SQL query results)
 
 ### [backtesting.py](backtesting.py)
 
-- Class and methods to evaluate backtests, event studies and risk premiums
+- Evaluate backtests, event studies and risk premiums
 
-  - Event studies, cumulative abnormal returns
-  - Risk premiums, Fama-MacBeth regressions
-  - Sharpe ratio, appraisal ratio, walk-forward backtests
+  - Event studies: cumulative abnormal returns
+  - Risk premiums: Fama-MacBeth regressions
+  - Walk-forward portfolio rebalances Backtest: Sharpe ratio, appraisal ratio, ...
+  - DailyPerformance: Daily returns performance of periodic portfolio holding
 
 
-### [solve.py](solve.py)
+### [recipes.py](recipes.py)
 
-- Quant, financial and econometrics helpers
+- Numerical and data helper functions
 
-  - linear algebra, stationarity, robust covariances
-  - maturity, bootstrap, annuity, compounding, rate of discount and interest
-  - value at risk, duration, half-life
-
-### [learning.py](learning.py)
-
-- Convenience methods for textual, statistical, machine and deep learning
-
-  - relativized embeddings, word2idx, stratified train-test split, minibatch
-  - sklearn, pytorch, nltk
+- econometrics: unit root, linear regression
+- FFT: convolutions and correlations
+- data filters
+- financial: bonds and risk math
 
 ### [pyR.py](pyR.py)
 
-- Convenience class methods to use rpy2 package and R environment
+- Wrapper class over rpy2 package to interface with R environment
 
-  - rpy2
+  - Deconstruct and expose an rpy2 or numpy/pandas object interchangeably.
 
 ### [gdrive.py](gdrive.py)
 
@@ -121,15 +129,15 @@ by: [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 ### [display.py](display.py)
 
-- Convenience methods for data visualization
+- Convenience wrappers for data plotting and display
 
-  - matplotlib, seaborn, statsmodels, pandas
-
-
-### [printing.py](printing.py)
-
-- Convenience methods for pretty printing
-
+  - matplotlib
+  - seaborn
+  - statsmodels
   - pandas
 
+- Functions for:
 
+  - chart types: date axis, time axis, confidence bands, bar, hist, scatter
+  - plotting linear regression diagnostics
+  - formatting DataFrames
