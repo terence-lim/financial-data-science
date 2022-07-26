@@ -4,9 +4,13 @@ This repo contains a Python modules library, code examples, and
 Jupyter notebooks for exploring data science and machine learning
 methods on structured and unstructured financial data sets.
 
-[https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
+__NEW!__ [See documentation in sphinx-format](https://terence-lim.github.io/financial-data-science-docs/)
 
-by: [Terence Lim](https://www.linkedin.com/in/terencelim)
+Copyright 2002, by [Terence Lim](https://www.linkedin.com/in/terencelim)
+
+License: MIT
+
+repo: [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
 
 &nbsp;
