@@ -7,7 +7,9 @@ machine learning models.
 __NEW!__ [See documentation in sphinx-format](https://terence-lim.github.io/financial-data-science-docs/)
 
 
-by: [Terence Lim](https://www.linkedin.com/in/terencelim)
+Copyright 2002, by [Terence Lim](https://www.linkedin.com/in/terencelim)
+
+License: MIT
 
 repo: [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
