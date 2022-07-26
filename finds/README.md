@@ -4,6 +4,8 @@ These modules support retrieving and manipulating structured and
 unstructured financial data sets, and fitting and testing quant finance and
 machine learning models.
 
+*NEW* [Documentation in sphinx-format](https://terence-lim.github.io/financial-data-science-docs/)
+
 [https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
 
 by: [Terence Lim](https://www.linkedin.com/in/terencelim)
