@@ -1,10 +1,14 @@
-"""Convenience class and methods to access ALFRED/FRED apis and FRED-MD/FRED-QD
+"""Class and methods to access ALFRED/FRED apis, and FRED-MD/FRED-QD
 
-- FRED, ALFRED, revisions vintages
-- PCA, approximate factor model, EM algorithm
+- FRED, ALFRED: St Louis Fed api's, with revision vintages
+- FRED-MD, FRED-QD: McCracken website at St Louis Fed
+- Bai and Ng (2002), McCracken and Ng (2015, 2020) factors-EM algorithm
 
-Author: Terence Lim
-License: MIT
+  - https://research.stlouisfed.org/econ/mccracken/fred-databases/
+
+Copyright 2022, Terence Lim
+
+MIT License
 """
 import os
 import sys
@@ -12,8 +16,9 @@ import json
 import io
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Series
+from pandas import DataFrame, Series, Timestamp
 from pandas.tseries.offsets import MonthEnd, YearEnd, QuarterEnd
+from pandas.api.types import is_list_like
 from datetime import datetime, date
 import requests
 from bs4 import BeautifulSoup
@@ -21,38 +26,51 @@ from io import StringIO
 import pickle
 import zipfile
 import re
-import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
 from pandas.api import types
 import time
-from .edgar import requests_get
-from .busday import str2date, to_monthend
-import config
+from finds.database import requests_get
+from finds.busday import to_date, to_monthend
+from typing import Dict, List, Tuple
 
-# From https://research.stlouisfed.org/econ/mccracken/fred-databases/
-_fred_md_url = 'https://files.stlouisfed.org/files/htdocs/fred-md/'
+_VERBOSE = 0
 
-def _print(*args, echo=config.ECHO, **kwargs):
-    """helper to echo debugging messages"""
-    if echo: print(*args, **kwargs)
+fred_md_url = 'https://files.stlouisfed.org/files/htdocs/fred-md/'
+
+def _print(*args, **kwargs):
+    """helper to print verbose messages"""
+    if _VERBOSE:
+            print(*args, **kwargs)
 
 def _int2date(date):
     """helper method to convert int date to FRED api string format"""
-    return ([_int2date(d) for d in date] if types.is_list_like(date) 
-            else "-".join(str(date)[a:b] for a, b in [[0,4], [4,6], [6,8]]))
+    if types.is_list_like(date):    
+        return [_int2date(d) for d in date] 
+    else:
+        return "-".join(str(date)[a:b] for a, b in [[0,4], [4,6], [6,8]])
 
 def _date2int(date):
     """helper method to convert FRED api string format to int date"""
-    return ([_date2int(d) for d in date] if types.is_list_like(date)
-            else int(re.sub('\D', '', str(date)[:10])))
+    if types.is_list_like(date):
+        return [_date2int(d) for d in date]
+    else:
+        return int(re.sub('\D', '', str(date)[:10]))
 
-def multpl(page):
-    """Helper method to retrieve shiller series by parsing multpl.com web page"""
+def multpl(page: str) -> DataFrame:
+    """Helper method to retrieve shiller series by scraping multpl.com
+
+    Args:
+       page: Web page name in {'s-p-500-dividend-yield', 'shiller-pe'}
+
+    Returns:
+       Dataframe of monthly series (for updating FRED-MD)
+    """
     url = f"https://www.multpl.com/{page}/table/by-month"
-    soup = BeautifulSoup(requests.get(url).content, 'html.parser')
+    soup = BeautifulSoup(requests.get(url).content,
+                         'html.parser')
     tables = soup.findChildren('table')
     df = pd.read_html(tables[0].decode())[0]
-    df.iloc[:,0] = str2date(df.iloc[:,0], '%b %d, %Y', '%Y%m%d')
+    df.iloc[:,0] = to_date(df.iloc[:,0], format='%b %d, %Y')
     df['date'] = to_monthend(df.iloc[:, 0])
     df = df.sort_values('Date').groupby('date').last().iloc[:,-1]
     if not types.is_numeric_dtype(df):
@@ -60,45 +78,41 @@ def multpl(page):
     return df
 
 
-def fred_md(vintage=0, url=None, echo=config.ECHO):
+def fred_md(vintage: int | str = 0, url: str = '',
+            verbose: int = _VERBOSE)-> DataFrame:
     """Retrieve and parse current or vintage csv from McCracken FRED-MD site
 
-    Parameters
-    ----------
-    vintage : str or int, default 0 (for current.csv)
-        file name relative to base url or zipfile archive, or int date YYYYMM
-    url : str, default is None
-        base name of url, local file path or zipfile archive
+    Args:
+        vintage: file name relative to base url or zipfile, or int date YYYYMM
+        url: base name of url, local file path or zipfile archive
 
-    Returns
-    -------
-    df : DataFrame
-        indexed by end-of-month date
+    Returns:
+       DataFrame indexed by end-of-month date
 
-    Notes
-    -----
-    if vintage is int: then derive vintage csv file name from input date YYYYMM
-    if url is None: then derive subfolder or zip archive name, from vintage
+    Notes:
 
-    Examples
-    --------
-    md_df, mt = fredmd(csvfile='Historical FRED-MD Vintages Final/2013-12.csv',
-                       url=md_url + 'Historical_FRED-MD.zip') # pre-2015
-    md_df, mt = fredmd(csvfile='monthly/2015-05.csv',
-                       url=md_url + 'FRED_MD.zip')            # post-2015
+    - if vintage is int: derive vintage csv file name from input date YYYYMM
+    - if url is '': derive subfolder or zip archive name, from vintage
+
+    Examples:
+
+    >>> md_df, mt = fred_md()  # current in monthly/current.csv
+    >>> md_df, mt = fred_md('Historical FRED-MD Vintages Final/2013-12.csv',
+                            url=fred_md_url+'Historical_FRED-MD.zip') # pre-2015
+    >>> md_df, mt = fred_md('monthly/2015-05.csv',
+                            url=fred_md_url+'FRED_MD.zip')      # post-2015
     """
-    url_ = _fred_md_url
+    url_ = fred_md_url
     if isinstance(vintage, int) and vintage:
-        csvfile_ = f"{vintage // 100}-{vintage % 100:02d}.csv"
+        csvfile = f"{vintage // 100}-{vintage % 100:02d}.csv"
         if vintage < 201500:
             url_ = url_ + 'Historical_FRED-MD.zip'
-            csvfile_ = 'Historical FRED-MD Vintages Final/' + csvfile_
+            vintage = 'Historical FRED-MD Vintages Final/' + csvfile
         else:
-            csvfile_ = 'monthly/' + csvfile_
-        vintage = csvfile_
+            vintage = 'monthly/' + csvfile
     else:
         vintage = vintage or 'monthly/current.csv'
-    _print(vintage, echo=echo)
+    _print(vintage)
     url = url or url_
     if url.endswith('.zip'):
         if url.startswith('http'):
@@ -114,36 +128,31 @@ def fred_md(vintage=0, url=None, echo=config.ECHO):
             label = re.sub("[^a-z]", '', row[0].lower()) # simplify label str
             meta[label] = row[1:].astype(int).to_dict()  # as dict of int codes
     df = df[df.iloc[:, 0].str.find('/') > 0]      # keep rows with valid date
-    df.index = str2date(df.iloc[:, 0], '%m/%d/%Y', '%Y%m%d')
+    df.index = to_date(df.iloc[:, 0], format='%m/%d/%Y')
     df.index = to_monthend(df.index)
     return df.iloc[:, 1:], DataFrame(meta)
 
-def fred_qd(vintage=0, url=None, echo=False):
+def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = 0):
     """Retrieve and parse current or vintage csv from McCracken FRED-MD site
 
-    Parameters
-    ----------
-    vintage : str or int, default 0 (i.e. current.csv)
-        file name relative to base url or zipfile archive, or int date YYYYMM
-    url : str, default is None
-        base name of url, local file path or zipfile archive
+    Args:
+        vintage: file name relative to base url or zipfile, or int date YYYYMM
+        url: base name of url, local file path or zipfile archive
 
-    Returns
-    -------
-    df : DataFrame
-        indexed by end-of-month date
+    Returns:
+       DataFrame indexed by end-of-month date
 
-    Notes
-    -----
-    if csvfile is int: then derive vintage csv file name from input date YYYYMM
-    if url is None: then derive subfolder name from vintage 
+    Notes:
+
+    - if vintage is int: derive vintage csv file name from input date YYYYMM
+    - if url is '': derive subfolder or zip archive name, from vintage
     """
-    url = url or _fred_md_url
+    url = url or fred_md_url
     if isinstance(vintage, int) and vintage:
         vintage = f"quarterly/{vintage // 100}-{vintage % 100:02d}.csv"
     else:
         vintage = 'quarterly/current.csv'
-    _print(vintage, echo=echo)
+    _print(vintage)
     df = pd.read_csv(os.path.join(url, vintage), header=0)
     df.columns = df.columns.str.rstrip('x')
     meta = dict()
@@ -152,7 +161,7 @@ def fred_qd(vintage=0, url=None, echo=False):
             label = re.sub("[^a-z]", '', row[0].lower()) # simplify label str
             meta[label] = row[1:].astype(int).to_dict()  # as dict of int codes
     df = df[df.iloc[:, 0].str.find('/') > 0]      # keep rows with valid date
-    df.index = str2date(df.iloc[:, 0], '%m/%d/%Y', '%Y%m%d')
+    df.index = to_date(df.iloc[:, 0], format='%m/%d/%Y')
     df.index = to_monthend(df.index)
     return df.iloc[:, 1:], DataFrame(meta)
         
@@ -160,26 +169,14 @@ def fred_qd(vintage=0, url=None, echo=False):
 class Alfred:
     """Base class for Alfred/Fred access, and manipulating retrieved data series
 
-    Parameters
-    ----------
-    cache_ : dict
-        cached series and observations
-    tcode_ : dict 
-        transformation codes
-    Notes
-    -----
-    lin = Levels (No transformation) [default]
-    chg = Change x(t) - x(t-1)
-    ch1 = Change from Year Ago x(t) - x(t-n_obs_per_yr)
-    pch = Percent Change ((x(t)/x(t-1)) - 1) * 100
-    pc1 = Percent Change from Year Ago ((x(t)/x(t-n_obs_per_yr)) - 1) * 100
-    pca = Compounded Annual Rate of Change (x(t)/x(t-1))**n_obs_per_yr - 1
-    cch = Continuously Compounded Rate of Change (ln(x(t)) - ln(x(t-1)))
-    cca = Continuously Compounded Annual Rate of Change 
-            (ln(x(t)) - ln(x(t-1)))  * n_obs_per_yr
-    log = Natural Log ln(x(t))
+    Attributes:
+        _tcode: Reference dict of transformation codes
+        _splice_fredmd: Reference dict for splicing/adjusting series for Fred-MD
+        _fred_url(): Formatter to construct FRED api query from key-value string
+        _alfred_url(): Formatter to construct vintage FRED api query
+        _category_url(): Formatter to construct FRED category api query
     """
-    tcode_ = {1: {'diff': 0, 'log': 0},
+    _tcode = {1: {'diff': 0, 'log': 0},
               2: {'diff': 1, 'log': 0},
               3: {'diff': 2, 'log': 0},
               4: {'diff': 0, 'log': 1},
@@ -197,7 +194,33 @@ class Alfred:
               'lin': {'diff': 0, 'log': 0},
               'log': {'diff': 0, 'log': 1}}
 
-    header_ = {
+    # units - string that indicates a data value transformation.
+    #   lin = Levels (No transformation) [default]
+    #   chg = Change x(t) - x(t-1)
+    #   ch1 = Change from Year Ago x(t) - x(t-n_obs_per_yr)
+    #   pch = Percent Change ((x(t)/x(t-1)) - 1) * 100
+    #   pc1 = Percent Change from Year Ago ((x(t)/x(t-n_obs_per_yr)) - 1) * 100
+    #   pca = Compounded Annual Rate of Change (((x(t)/x(t-1))
+    #                                           ** (n_obs_per_yr)) - 1) * 100
+    #   cch = Cont Compounded Rate of Change (ln(x(t)) - ln(x(t-1))) * 100
+    #   cca = Cont Compounded Annual Rate of Change = cch * n_obs_per_yr
+    #   log = Natural Log ln(x(t))
+    # Frequency
+    #   A = Annual
+    #   SA = Semiannual
+    #   Q = Quarterly
+    #   M = Monthly
+    #   BW = Biweekly
+    #   W = Weekly
+    #   D = Daily
+    # Seasonal Adjustment
+    #   SA = Seasonally Adjusted
+    #   NSA = Not Seasonally Adjusted
+    #   SAAR = Seasonally Adjusted Annual Rate
+    #   SSA = Smoothed Seasonally Adjusted
+    #   NA = Not Applicable
+    
+    _header = {    # starter Dict of series descriptions
         k : {'id': k, 'title': v} for k,v in
         [['CPF3MTB3M', '3-Month Commercial Paper Minus 3-Month Treasury Bill'],
          ['CLAIMS', 'Initial Claims'],
@@ -215,35 +238,33 @@ class Alfred:
          ['S&P: indust', "S&P's Common Stock Price Index: Industrials"]]}
 
     
-    @classmethod
-    def transform(self, data, tcode=1, freq=None, **kwargs):
-        """Classmethod to apply time series transformations
+    @staticmethod
+    def transform(data: DataFrame, tcode: int | str = 1,
+                  freq: str = '', **kwargs) -> DataFrame:
+        """Static method to apply time series transformations
 
-        Parameters
-        ----------
-        data : DataFrame
-            input data
-        tcode : int in {1, ..., 7}, default is 1
-            transformation code 
-        freq : str in {'M', 'Q', 'A'}, default is None
-            set periodicity of dates
-        log : int, default is 0
-            number of times to take log
-        diff : int, default is 0
-            number of times to take difference
-        pct_change : bool
-            whether to apply pct_change operator
-        periods : int, default is 1
-            number of periods to lag for pct_change or diff operator
-        annualize : int. default is 1
-            annualization factor
-        shift : int, default is 0
-            number of rows to shift output (negative to lag)
+        Args:
+            data: DataFrame of input data
+            tcode: int transformation code in {1, ..., 7} or str. describing ho
+                   to apply sequence of operators to make series stationary
+            freq: str periodicity of dates in {'M', 'Q', 'A'}
+            kwargs: transformation operators and number of times
+
+        Transformation operators:
+
+          - log (int): Number of times to take log (default 0)
+          - diff (int): Number of times to take difference (default 0)
+          - pct_change (bool): Whether to apply pct_change operator
+          - periods (int): lags for pct_change or diff operator (default 1)
+          - annualize (int): annualization multiplier (default 1)
         """
-        t = {'periods':1, 'shift':0, 'pct_change':False, 'annualize':1}
-        t.update(self.tcode_[tcode])
+
+        # build up desired transformation set from input tcode and kwargs
+        t = {'periods': 1, 'shift': 0, 'pct_change': False, 'annualize': 1}
+        t.update(Alfred._tcode[tcode])
         t.update(kwargs)
-        df = data.sort_index()
+        
+        df = data.sort_index()      
         if t['pct_change']:
             #df = df.pct_change(fill_method='pad')
             df = df.pct_change(fill_method=None)
@@ -256,187 +277,146 @@ class Alfred:
             df = df * t['annualize']               # by adding
         return df.shift(t['shift'])
 
-    alfred_api = ("https://api.stlouisfed.org/fred/{api}?series_id={series_id}"
-                  "&realtime_start={start}&realtime_end={end}"
-                  "&api_key={api_key}&file_type=json").format
-    fred_api = ("https://api.stlouisfed.org/fred/{api}?series_id={series_id}"
-                "&api_key={api_key}&file_type=json").format
-    category_api = ("https://api.stlouisfed.org/fred/{api}?"
+    # Format input key-values to form fred api's
+    _alfred_url = ("https://api.stlouisfed.org/fred/{api}?series_id={series_id}"
+                   "&realtime_start={start}&realtime_end={end}"
+                   "&api_key={api_key}&file_type=json").format
+    _fred_url = ("https://api.stlouisfed.org/fred/{api}?series_id={series_id}"
+                 "&api_key={api_key}&file_type=json").format
+    _category_url = ("https://api.stlouisfed.org/fred/{api}?"
                     "category_id={category_id}&api_key={api_key}&"
                     "file_type=json{args}").format
-    start = 17760704
-    end = 99991231
-    echo_ = config.ECHO
-    api_key = None
 
-    def header(self, series_id, column='title'):
-        """Returns a column from last meta record of a series"""
-        if series_id not in self.header_:
+    def date_spans(self, series_id: str = 'USREC',
+                   threshold: int = 0) -> List[Tuple[Timestamp, Timestamp]]:
+        """Return recession span dates as tuples of Timestamp"""
+        usrec = self(series_id)
+        usrec.index = pd.DatetimeIndex(usrec.index.astype(str), freq='infer')
+        g = (usrec > threshold) \
+            | (usrec.shift(-1, fill_value=threshold) > threshold)
+        g = (g != g.shift(fill_value=False)).cumsum()[g].to_frame()
+        g = g.reset_index().groupby(series_id)['date'].agg(['first','last'])
+        vspans = list(g.itertuples(index=False, name=None))
+        return vspans
+
+    def header(self, series_id: str | List[str], column: str = 'title'):
+        """Returns the title or column from last meta record of a series"""
+        if is_list_like(series_id):
+            return [self.header(s, column=column) for s in series_id]
+        if series_id not in self._header:
             try:
-                if series_id not in self.cache_:  # load via api if not in cache
-                    self.get(series_id)
-                self.header_[series_id] = self[series_id]['series'].iloc[-1]
+                if series_id not in self._cache:  # load via api if not in cache
+                    self.get_series(series_id)
+                self._header[series_id] = self[series_id]['series'].iloc[-1]
             except:
                 return f"*** {series_id} ***"
-        return self.header_[series_id].get(column, f"*** {series_id} ***")
+        return self._header[series_id].get(column, f"*** {series_id} ***")
 
     def keys(self):
         """Return id names of all loaded series data"""
-        return list(self.cache_.keys())
+        return list(self._cache.keys())
 
-    def values(self, columns=None):
+    def values(self, columns: List[str] = ['id',
+                                           'observation_start',
+                                           'observation_end',
+                                           'frequency_short',
+                                           'title',
+                                           'popularity',
+                                           'seasonal_adjustment_short',
+                                           'units_short']) -> DataFrame:
         """Return headers (last metadata row) of all loaded series
 
-        Parameters
-        ----------
-        columns: list of str, default is None
-            subset of header columns to return
+        Args:
+            columns: subset of header columns to return
 
-        Returns
-        -------
-        df : DataFrame
-            headers of all series loaded
+        Returns:
+            DataFrame of latest headers of all series loaded
         """
-        df = DataFrame()
-        keep = ['id', 'observation_start', 'observation_end', 'frequency_short',
-                'title', 'popularity', 'seasonal_adjustment_short',
-                'units_short']   # default list of columns to display
-        for v in self.cache_.values():
-            df = df.append(v['series'].iloc[-1], ignore_index=True)
+        df = pd.concat([v['series'].iloc[[-1]] for v in self._cache.values()],
+                       axis=0,
+                       ignore_index=True)
         df = df.set_index('id', drop=False)
-        return df[columns or keep]
+        return df[columns]
 
-    def __init__(self, api_key, start=17760704, end=99991231, savefile=None,
-                 echo=config.ECHO):
+    def __init__(self, api_key: str, start: int = 17760704,
+                 end: int = 99991231, savefile: str = '', verbose=_VERBOSE):
         """Create object, with api_key, for FRED access and data manipulation"""
         self.api_key = api_key
-        self.start = start
-        self.end = end
+        self._start = start
+        self._end = end
         self.savefile = savefile
-        self.cache_ = dict()
-        self.header_ = Alfred.header_.copy()
-        self.echo_ = echo
+        self._cache = dict()
+        self._header = Alfred._header.copy()
+        self._verbose = verbose
 
-    def _print(self, *args, echo=None):
-        if echo or self.echo_:
-            print(*args)
+    def _print(self, *args, **kwargs):
+        if _VERBOSE + self._verbose > 0:
+            print(*args, **kwargs)
             
-    def load(self, savefile=None):
-        """Load series data to memory cache from saved file"""
+    def load(self, savefile: str = ''):
+        """Load all series to memory from pickle file, return number loaded"""
         with open(savefile or self.savefile, 'rb') as f:
-            self.cache_.update(**pickle.load(f))
-            
-        return len(self.cache_)
+            self._cache.update(**pickle.load(f))
+        return len(self._cache)
 
-    def dump(self, savefile=None):
-        """Save all memory-cached series data to an output file"""
+    def dump(self, savefile: str = '') -> int:
+        """Save all memory-cached series to pickle file, return number saved"""
         with open(savefile or self.savefile, 'wb') as f:
-             pickle.dump(self.cache_, f)
-        return len(self.cache_)
+             pickle.dump(self._cache, f)
+        return len(self._cache)
 
     def clear(self):
-        self.cache_.clear()
+        """Clear internal memory cache of previously loaded series"""
+        self._cache.clear()
 
-    def pop(self, series_id):
-        return self.cache_.pop(series_id, None)
+    def pop(self, series_id: str) -> Dict[str, DataFrame]:
+        """Pop and return desired series, then clear from memory cache"""
+        return self._cache.pop(series_id, None)
 
-    def get(self, series_id, api_key=None, start=None, end=None):
+    def get_series(self, series_id: str | List[str], api_key: str ='',
+                   start: int = 0, end: int = 0) -> int:
         """Retrieve metadata and full observations of a series with FRED api
 
-        Parameters
-        ----------
-        series_id : str or list of str
-            ids of series to retrieve
+        Args:
+            series_id: list of ids of series to retrieve
 
-        Returns
-        -------
-        n : int
+        Returns:
             length of observations dataframe
         """
         if types.is_list_like(series_id):
-            return [self.get(s, start=start, end=end) for s in series_id]
-        series = self.series(series_id, api_key=api_key, start=start, end=end,
-                             echo=self.echo_)
+            return [self.get_series(s, start=start, end=end) for s in series_id]
+        series = self.request_series(series_id,
+                                     api_key=api_key,
+                                     start=start,
+                                     end=end,
+                                     verbose=self._verbose)
         if series is None or series.empty:
             return 0
-        self.cache_[series_id] = {
-            'observations': self.series_observations(
-                series_id, api_key=api_key, start=start, end=end,
-                alfred_mode=True, echo=self.echo_),
+        self._cache[series_id] = {
+            'observations':
+            self.request_series_observations(series_id,
+                                             api_key=api_key,
+                                             start=start,
+                                             end=end,
+                                             alfred_mode=True,
+                                             verbose=self._verbose),
             'series': series}
-        return len(self.cache_[series_id]['observations'])
+        return len(self._cache[series_id]['observations'])
 
-    def __call__(self, series_id, start=None, end=None, release=0,
-                 vintage=99991231, label=None, realtime=False, freq=True,
-                 **kwargs):
-        """Select from full observations of a series and apply transforms
+    @staticmethod
+    def construct_series(observations: DataFrame, vintage: int = 99991231,
+                         release: int | pd.DateOffset = 0, start: int = 0,
+                         end: int = 99991231, freq: str = '') -> Series:
+        """Construct series from given full observations dataframe
 
-        Parameters
-        ----------
-        series_id : str or list of str
-            Labels of series to retrieve
-        start, end : int, default is None
-            start and end period dates (inclusive) to keep
-        label : str, default is None
-            New label to rename returned series
-        release : pd.DateOffset or int (default is 0)
-            maximum release number or date offset (inclusive). If 0: latest
-        vintage : int, default is None
-            latest realtime_start date of observations to keep
-        diff, log, pct_change : int
-            number of difference, log and pct_change operations to apply
-        freq : str in {'M', 'A'. 'Q', 'D', 'Y'} or bool (default is True)
-            resample and replace date index with month ends at selected freqs
+        Args:
+            observations: DataFrame from FRED 'series/observations' api call
+            release: release number, or latest up to maximum date offset; 
+                     0 for latest release
+            vintage: Latest realtime_start date (inclusive) allowed
 
-        Returns
-        -------
-        Series or DataFrame
-            transformed values, name set to label if provided else series_id
-        """
-        if (series_id not in self.cache_ and not self.get(series_id)):
-            return None
-        if freq is True:
-            freq = self.header(series_id, 'frequency_short')
-            
-        df = self.as_series(
-            self[series_id]['observations'],
-            release=release,
-            vintage=vintage,
-            start=start or self.start,
-            end=end or self.end,
-            freq=freq)
-        if realtime:
-            s = self.transform(df['value'], **kwargs).to_frame()
-            s['realtime_start'] = df['realtime_start'].values
-            s['realtime_end'] = df['realtime_end'].values
-            return s.rename(columns={'value': label or series_id})
-        return self.transform(df['value'], **kwargs).rename(label or series_id)
-
-    def __getitem__(self, series_id):
-        """Get observations and metadata for {series_id}"""
-        return self.cache_.get(series_id, None)
-
-    @classmethod
-    def as_series(self, observations, release=0, vintage=99991231,
-                  start=0, end=99991231, freq=None):
-        """Classmethod to select a series from alfred observations set
-
-        Parameters
-        ----------
-        observations: DataFrame
-            from FRED 'series/observations' api call
-        release : pd.DateOffset or int (default is 0)
-            maximum release number or date offset (inclusive). If 0: latest
-        vintage : int, default is None
-            Latest realtime_start date (inclusive) allowed
-
-        Returns
-        -------
-        out: Series
-            value of each period date, optionally indexed by realtime_start
-
-        Examples
-        --------
+        Returns:
+            value as of each period date, optionally indexed by realtime_start
         """
         df = observations.copy()
         df['value'] = pd.to_numeric(observations['value'], errors='coerce')
@@ -460,59 +440,129 @@ class Alfred:
         df['value'] = pd.to_numeric(df['value'], errors='coerce')
         df = df.sort_values(by=['date', 'realtime_start'])
 
+        """This code is maximum release
         if isinstance(release, int):  # keep latest up to max release
             df['release'] = df.groupby('date').cumcount()
-            df = df[df['release'] + 1 == (release or 99999999)]\
-                 .append(df.drop_duplicates('date', keep='last'))\
-                 .drop_duplicates('date', keep='first')
+            df = pd.concat([df[df['release'] + 1 == (release or 99999999)],
+                            df.drop_duplicates('date', keep='last')])\
+                   .drop_duplicates('date', keep='first')
         else:    # else latest release up through date offset
             df['release'] = (df['date'] + release).dt.strftime('%Y-%m-%d')
             df = df[df['realtime_start'] <= df['release']]\
-                 .drop_duplicates('date', keep='last')
+                .drop_duplicates('date', keep='last')
+        """
+        if not release:
+            df['release'] = df.groupby('date').cumcount()
+            df = df.drop_duplicates('date', keep='last')
+        elif isinstance(release, int):  # keep exactly release number
+            df['release'] = df.groupby('date').cumcount()
+            df = df[df['release'] + 1 == release]\
+                .drop_duplicates('date', keep='first')
+        else:    # else latest release up through date offset
+            df['release'] = (df['date'] + release).dt.strftime('%Y-%m-%d')
+            df = df[df['realtime_start'] <= df['release']]\
+                .drop_duplicates('date', keep='last')
+        
         df['date'] = df['date'].dt.strftime('%Y%m%d').astype(int)
         df['realtime_start'] = _date2int(df['realtime_start'])
         df['realtime_end'] = _date2int(df['realtime_end'])
-        df = df.set_index('date').sort_index().drop(columns=['release'])
-        return df[(df.index <= min(end, vintage)) & (df.index >= start)]
+        df = df.set_index('date')\
+               .sort_index()\
+               .drop(columns=['release'])
+        return df[(df.index <= min(end, vintage))
+                  & (df.index >= start)]
                  
 
-    def series(self, series_id, api_key=None, start=None, end=None,
-               echo=ECHO):
-        """API wrapper to retrieve series metadata as dataframe"""
-        url = self.alfred_api(api="series",
-                              series_id=series_id,
-                              start=_int2date(start or self.start),
-                              end=_int2date(end or self.end),
-                              api_key=api_key or self.api_key)
-        r = requests_get(url, echo=echo)
+    def __call__(self, series_id: str, start: int = 0, end: int = 0,
+                 release: int | pd.DateOffset = 0, vintage: int = 99991231,
+                 label: str = '', realtime: bool = False,
+                 freq: str = '', **kwargs) -> Series | None:
+        """Select from cached, else retrieve observations and apply transforms
+
+        Args:
+            series_id: Label of series to retrieve
+            start, end: Start and end period dates (inclusive) to keep
+            label: New label to rename returned series
+            release: release number, or latest up to maximum date offset; 
+                     0 for latest release
+            vintage: Latest realtime_start date of observations to keep
+            freq: Resample and replace date index with at periodic frequency;
+                   in {'M', 'A'. 'Q', 'D', 'Y'}, else blank '' to auto select
+            diff: Number of difference operations to apply
+            log: Number of log operations to apply
+            pct_change: Number of pct_change to apply
+
+        Returns:
+            transformed values; name is set to label if provided else series_id
+        """
+        assert isinstance(series_id, str)
+        if (series_id not in self._cache and not self.get_series(series_id)):
+            return None
+        if not freq:
+            freq = self.header(series_id, 'frequency_short')
+            
+        df = Alfred.construct_series(self[series_id]['observations'],
+                                     release=release,
+                                     vintage=vintage,
+                                     start=start or self._start,
+                                     end=end or self._end,
+                                     freq=freq)
+        if realtime:
+            s = Alfred.transform(df['value'], **kwargs).to_frame()
+            s['realtime_start'] = df['realtime_start'].values
+            s['realtime_end'] = df['realtime_end'].values
+            return s.rename(columns={'value': label or series_id})
+        return Alfred.transform(df['value'], **kwargs)\
+                     .rename(label or series_id)
+
+    def __getitem__(self, series_id: str) -> Dict:
+        """Get observations and metadata for {series_id}"""
+        return self._cache.get(series_id, None)
+
+    def request_series(self, series_id: str, api_key: str = '', start: int = 0,
+                       end : int = 0, verbose: int = _VERBOSE) -> DataFrame:
+        """Requests 'series' API for series metadata"""
+        url = self._alfred_url(api="series",
+                               series_id=series_id,
+                               start=_int2date(start or self._start),
+                               end=_int2date(end or self._end),
+                               api_key=api_key or self.api_key)
+        r = requests_get(url, verbose=-1)
         if r is None:
-            url = self.fred_api(api="series",
-                                series_id=series_id,
-                                api_key=api_key or self.api_key)
-            r = requests_get(url, echo=echo)
+            url = self._fred_url(api="series",
+                                 series_id=series_id,
+                                 api_key=api_key or self.api_key)
+            r = requests_get(url, verbose=verbose)
             if r is None:
                 return DataFrame()
+#        else:
+#            self._print(url)
         v = json.loads(r.content)
         df = DataFrame(v['seriess'])
         df.index.name = str(datetime.now())
         return df
 
-    def series_observations(self, series_id, api_key=None, start=None, end=None,
-                            alfred_mode=False, echo=ECHO):
-        """API wrapper to retrieve full observations of a series as dataframe"""
-        url = self.alfred_api(api="series/observations",
-                              series_id=series_id,
-                              start=_int2date(start or self.start),
-                              end=_int2date(end or self.end),
-                              api_key=api_key or self.api_key)
-        r = requests_get(url, echo=echo)
+    def request_series_observations(self, series_id: str, api_key: str = '',
+                                    start: int = 0, end: int = 0,
+                                    alfred_mode: bool = False,
+                                    verbose: int = _VERBOSE) -> DataFrame:
+        """Request 'series/observations' API for full observations data"""
+        url = self._alfred_url(api="series/observations",
+                               series_id=series_id,
+                               start=_int2date(start or self._start),
+                               end=_int2date(end or self._end),
+                               api_key=api_key or self.api_key)
+        r = requests_get(url, verbose=-1)
         if r is None:
-            url = self.fred_api(api="series/observations",
-                                series_id=series_id,
-                                api_key=api_key or self.api_key)
-            r = requests_get(url, echo=echo)
+            url = self._fred_url(api="series/observations",
+                                 series_id=series_id,
+                                 api_key=api_key or self.api_key)
+            r = requests_get(url, verbose=verbose)
             if r is None:
                 return DataFrame()
+#        else:
+#            self._print(url)
+
         contents = json.loads(r.content)
         df = DataFrame(contents['observations'])
         if alfred_mode:  # convert fred to alfred by backfilling realtime_start
@@ -521,71 +571,88 @@ class Alfred:
             df.loc[f, 'realtime_start'] = df.loc[f, 'date']
         return df
 
-    def get_category(self, category_id, api_key=None):
-        c = self.category(category_id, api="category", api_key=api_key)
+    def get_category(self, category_id: str, api_key: str = ''):
+        """Retrieve category data by calling related API
+        
+        Args:
+            category_id: id of category to retrieve
+            api_key: credentials to FRED
+
+        Notes:
+
+        Uses request_category method to call these FRED API on given category_id
+
+        - 'category' API gets meta information
+        - 'category/series' API gets series_ids
+        - 'category/children' API gets child categories
+        """
+        c = self.request_category(category_id, api="category", api_key=api_key)
         if 'categories' not in c:
             return None
         c = c['categories'][0]
-        c['children'] = self.category(category_id,
-                                      api="category/children",
-                                      api_key=api_key).get('categories', [])
+        c['children'] = self.request_category(category_id,
+                                              api="category/children",
+                                              api_key=api_key)\
+                            .get('categories', [])
         c['series'] = []
         offset = 0
         while True:
-            s = self.category(category_id,
-                              api="category/series",
-                              api_key=api_key,
-                              offset=offset)
+            s = self.request_category(category_id,
+                                      api="category/series",
+                                      api_key=api_key,
+                                      offset=offset)
             if not s['seriess']:
                 break
             c['series'].extend(s['seriess'])
             offset += s['limit']        
         return c
         
-    def category(self, category_id, api="category", api_key=None, echo=ECHO,
-                 **kwargs):
-        """API wrapper to retrieve category data as dict"""
+    def request_category(self, category_id: str, api: str = "category",
+                         api_key: str = '', verbose: int = _VERBOSE,
+                         **kwargs) -> Dict:
+        """Request 'category' and related API for category data"""
         args = "&".join([f"{k}={v}" for k,v in kwargs.items()])
-        url = self.category_api(api=api,
-                                category_id=category_id,
-                                api_key=api_key or self.api_key,
-                                args="&" + args if args else '')
-        r = requests_get(url, echo=echo)
+        url = self._category_url(api=api,
+                                 category_id=category_id,
+                                 api_key=api_key or self.api_key,
+                                 args="&" + args if args else '')
+        r = requests_get(url, verbose=verbose)
         return dict() if r is None else json.loads(r.content)
 
 
-    @classmethod
-    def popular(self, page=1):
-        """Classmethod to web scrape popular series names, by page number"""
+    @staticmethod
+    def popular(page: int = 1):
+        """Static method to web scrape popular series names, by page number"""
         assert(page > 0)
         url = f"https://fred.stlouisfed.org/tags/series?ob=pv&pageID={page}"
         data = requests.get(url).content
         soup = BeautifulSoup(data, 'lxml')
         tags = soup.findAll(name='a', attrs={'class': 'series-title'})
         details = [tag.get('href').split('/')[-1] for tag in tags]
-        return details
         #tags = soup.findAll(name='input',attrs={'class':'pager-item-checkbox'})
         #details = [tag.get('value') for tag in tags]
-        #return details
+        return details
 
-    fred_adjust = {'HWI': 'JTSJOL',
-                   'AMDMNO': 'DGORDER',
-                   'S&P 500': 'SP500',
-                   'RETAIL': 'RSAFS',
-                   'OILPRICE': 'MCOILWTICO',
-                   'COMPAPFF': 'CPFF',
-                   'CP3M': 'CPF3M',
-                   'CLAIMS': 'ICNSA',  # weekly
-                   'HWIURATIO': [Series.div, 'JTSJOL', 'UNEMPLOY'],
-                   'CPF3MTB3M': [Series.sub, 'CPF3M', 'DTB3'],
-                   'CONSPI': [Series.div, 'NONREVSL', 'PI']}
+    _splice_fredmd: Dict = {'HWI': 'JTSJOL',
+                           'AMDMNO': 'DGORDER',
+                           'S&P 500': 'SP500',
+                           'RETAIL': 'RSAFS',
+                           'OILPRICE': 'MCOILWTICO',
+                           'COMPAPFF': 'CPFF',
+                           'CP3M': 'CPF3M',
+                           'CLAIMS': 'ICNSA',  # weekly
+                           'HWIURATIO': [Series.div, 'JTSJOL', 'UNEMPLOY'],
+                           'CPF3MTB3M': [Series.sub, 'CPF3M', 'DTB3'],
+                           'CONSPI': [Series.div, 'NONREVSL', 'PI']}
 
-    def adjusted_series(self, series_id, start=19590101, freq='M'):
-        """Retrieve a raw series to update FRED-MD dataset
+    def splice_series(self, series_id: str, start: int = 19590101,
+                    freq: str = 'M') -> Series:
+        """Retrieve raw series to update a FRED-MD series
 
-        Notes
-        -----
-        http://www.econ.yale.edu/~shiller/data/ie_data.xls        
+        e.g. Shiller series: 
+
+        - http://www.econ.yale.edu/~shiller/data/ie_data.xls
+        - multpl.com
         """
         shiller = {'S&P div yield': 's-p-500-dividend-yield',
                    'S&P PE ratio': 'shiller-pe'}
@@ -598,169 +665,167 @@ class Alfred:
         elif series_id in shiller.keys():
             v = shiller[series_id]
             s = multpl(v)
-        elif series_id in self.fred_adjust.keys():
-            v = adjust[series_id]
-            s = (self(v, freq=freq) if isinstance(v, str) \
-                 else v[0](self(v[1], freq=freq),
-                           self(v[2], freq=freq)))
+        elif series_id in self._splice_fredmd.keys():
+            v = self._splice_fredmd[series_id]
+            if isinstance(v, str):
+                s = self(v, freq=freq) 
+            else:
+                s = v[0](self(v[1], freq=freq), self(v[2], freq=freq))
         else:
             s = self(series_id, auto_request=True, freq=freq)
         return s[s.index >= start].rename(series_id)
-    
-    
-def pcaEM(X, kmax=None, p=2, tol=1e-12, n_iter=2000, echo=ECHO):
-    """Fill in missing data with factor model and EM algorithm of
-    Rubin & Thayer (1982), Stock & Watson (1998) and Bai & Ng (2002)
 
-    Parameters
-    ----------
-    X : 2D array
-        T observations/samples in rows, N variables/features in columns
-    kmax : int, default is None
-        Maximum number of factors.  If None, set to rank from SVD minus 1
-    p : int in [0, 1, 2, 3], default is 2 (i.e. 'ICp2' criterion)
-        If 0, number of factors is fixed as kmax.  Else picks one of three
-        methods in Bai & Ng (2002) to auto-determine number in every iteration
 
-    Returns
-    -------
-    x : 2D arrayint
-        X with nan's replaced by PCA EM
-    model : dict
-        Model results 'u', 's', 'vT', 'kmax', 'converge', 'n_iter'
+def remove_outliers(X: DataFrame, method: str = 'iq10') -> DataFrame:
+    """Set column-wise outliers to np.nan
+
+    Args:
+        X: Input array to test element-wise
+        method: method to filter outliers, in {'iq{D}', 'tukey', 'farout'}
+
+    Returns:
+        DataFrame with outliers set to NaN
+
+    Notes:
+    - 'iq{D}' -  within [median +/- D times (Q3-Q1)]
+    - 'tukey' -  within [Q1 - 1.5(Q3-Q1), Q3 + 1.5(Q3-Q1)] 
+    - 'farout' - within [Q1 - 3(Q3-Q1), Q3 + 3(Q3-Q1)] 
     """
-    X = X.copy()      # passed by reference
-    Y = np.isnan(X)   # identify missing entries
-    assert(not np.any(np.all(Y, axis=1)))  # no row can be all missing
-    assert(not np.any(np.all(Y, axis=0)))  # no column can be all missing
-    for col in np.flatnonzero(np.any(Y, axis=0)): # replace with column means
-        X[Y[:, col], col] = np.nanmean(X[:, col])
-    M = dict()   # latest fitted model parameters
-    for M['n_iter'] in range(1, n_iter + 1):
-        old = X.copy()
-        mean, std = X.mean(axis=0).reshape(1, -1), X.std(axis=0).reshape(1, -1)
-        X = (X - mean) / std  # standardize
+    Z = X.copy()
+    q1 = Z.quantile(1/4)
+    q2 = Z.quantile(1/2)
+    q3 = Z.quantile(3/4)
+    iq = q3 - q1
+    if method.lower().startswith(('tukey', 'far')):
+        scalar = 1.5 if method[0].lower() == 't' else 3.0
+        outlier = Z.lt(q1 - scalar * iq) | Z.gt(q3 + scalar * iq)
+        Z[outlier] = np.nan
+    elif method.lower().startswith('iq'):
+        scalar = float(method[2:])
+        outlier = (Z - Z.median()).abs().gt(scalar * iq)
+        Z[outlier] = np.nan
+    return Z
 
-        # "M" step: estimate factors
-        M['u'], M['s'], M['vT'] = np.linalg.svd(X)
 
-        # auto-select number of factors if p>0 else fix number of factors
-        r = BaiNg(X, p, kmax or len(M['s'])-1) if p else kmax or len(M['s'])-1
-
-        # "E" step: update missing entries
-        y = M['u'][:, :r] @ np.diag(M['s'][:r]) @ M['vT'][:r, :]  # "E" step
-        X[Y] = y[Y]
-        
-        X = (X * std) + mean  # undo standardization
-        M['kmax'] = r
-        M['converge'] = np.sum((X - old)**2)/np.sum(X**2)  # diff**2/prev**2
-        if echo:
-            print(f"{M['n_iter']:4d} {M['converge']:8.3g} {r}")
-        if M['converge'] < tol:
-            break
-    return X, M
-    
-def BaiNg(x, p=2, kmax=None, standardize=False, echo=ECHO):
-    """Determine number of factors based on Bai & Ng (2002) criterion
-
-    Parameters
-    ----------
-    x : 2D array
-        T observations/samples in rows, N variables/features in columns
-    p : int in [1, 2, 3], default is 2
-        use PCp1 or PCp2 or PCp3 penalty
-    kmax : int, default is None
-        maximum number of factors.  If None, set to rank from SVD
-    standardize : bool, default is False
-        if True, then standardize data before processing (works better)
-
-    Returns
-    -------
-    r : int
-        best number of factors based on ICp{p} criterion, or 0 if not determined
-
-    Notes
-    -----
-    See Bai and Ng (2002) and McCracken at
-      https://research.stlouisfed.org/econ/mccracken/fred-databases/
-    """
-    if standardize:
-        x = ((x-x.mean(axis=0).reshape(1,-1))/x.std(axis=0,ddof=0).reshape(1,-1))
-    T, N = x.shape
-    #mR2 = np.sum(marginalR2(x), axis=1)
-    u, s, vT = np.linalg.svd(x, full_matrices=False)
-    kmax = min(len(s), kmax or len(s))
-    mR2 = [0] + list(s**2 / (N * T))   # first case is when no factors used
-    var = (sum(mR2) - np.cumsum(mR2))  # variance of residuals after k components
-    lnvar = np.log(np.where(var > 0, var, 1e-26))
-    NT2 = (N * T)/(N + T)
-    C2 = min(N, T)
-    penalty = [np.log(NT2) / NT2, np.log(C2) / NT2, np.log(C2) / C2][p - 1]
-    ic = (lnvar + np.arange(len(mR2))*penalty)[:(kmax + 2)]
-    sign = np.sign(ic[1:] - ic[:-1])
-    r = np.flatnonzero(sign>0)
-    return min(r) if len(r) else 0   # first min point
-
-def marginalR2(x, kmax=None, standardize=False):
+def mrsq(X: DataFrame, kmax: int) -> DataFrame:
     """Return marginal R2 of each variable from incrementally adding factors
 
-    Parameters
-    ----------
-    x : 2D array
-        T observations/samples in rows, N variables/features in columns
-    kmax : int, default is None
-        maximum number of factors.  If None, set to rank from SVD
-    standardize : bool, default is False
-        if True, then standardize data before processing (works better)
+    Args:
+        X: T observations/samples in rows, N variables/features in columns
+        kmax: maximum number of factors.  If 0, set to rank from SVD
 
-    Returns
-    -------
-    mR2 : 2D array
-        each row corresponds to adding one factor component
-        values are the incremental R2 for the variable in the column
+    Returns:
+        DataFrame with marginal R2 with component in each column
 
-    Notes
-    -----
-    See Bai and Ng (2002) and McCracken at
+    Notes:
+
+    From matlab code, Bai and Ng (2002) and McCracken at
       https://research.stlouisfed.org/econ/mccracken/fred-databases/
-
-    pca.components_[i,:] is vT[i, :]
-    pca.explained_variance_ is s**2/(T-1)
-    y = pca.transform(x)    # y = s * u: T x n "projection"
-    beta = np.diag(pca.singular_values_) @ pca.components_  # "loadings"
-    x.T @ x = beta.T @ beta is covariance matrix
     """
-    if standardize:
-        x = (x-x.mean(axis=0).reshape(1,-1))/x.std(axis=0,ddof=0).reshape(1, -1)
-    u, s, vT = np.linalg.svd(x, full_matrices=False)
+    # pca.components_[i,:] is vT[i, :]
+    # pca.explained_variance_ is s**2/(T-1)
+    # y = pca.transform(x)    # y = s * u: T x n "projection"
+    # beta = np.diag(pca.singular_values_) @ pca.components_  # "loadings"
+    # x.T @ x = beta.T @ beta is covariance matrix
     
-    # increase in R2 from adding kth (orthogonal) factor as a regressor
-    mR2 = np.vstack([np.mean((u[:,k-1:k] @ u[:,k-1:k].T @ x)**2, axis=0)
-                     for k in (np.arange(kmax or len(s)) + 1)])
-    mR2 = mR2 / np.mean((u @ u.T @ x)**2, axis=0).reshape(1, - 1)
-    return mR2
+    Z = (X - X.mean()) / X.std(ddof=0)
+    u, s, vT = np.linalg.svd(Z, full_matrices=False)
 
-# units - stromg that indicates a data value transformation.
-#   lin = Levels (No transformation) [default]
-#   chg = Change x(t) - x(t-1)
-#   ch1 = Change from Year Ago x(t) - x(t-n_obs_per_yr)
-#   pch = Percent Change ((x(t)/x(t-1)) - 1) * 100
-#   pc1 = Percent Change from Year Ago ((x(t)/x(t-n_obs_per_yr)) - 1) * 100
-#   pca = Compounded Annual Rate of Change (((x(t)/x(t-1)) ** (n_obs_per_yr)) - 1) * 100
-#   cch = Continuously Compounded Rate of Change (ln(x(t)) - ln(x(t-1))) * 100
-#   cca = Continuously Compounded Annual Rate of Change ((ln(x(t)) - ln(x(t-1))) * 100) * n_obs_per_yr
-#   log = Natural Log ln(x(t))
-# Frequency
-#   A = Annual
-#   SA = Semiannual
-#   Q = Quarterly
-#   M = Monthly
-#   BW = Biweekly
-#   W = Weekly
-#   D = Daily
-# Seasonal Adjustment
-#   SA = Seasonally Adjusted
-#   NSA = Not Seasonally Adjusted
-#   SAAR = Seasonally Adjusted Annual Rate
-#   SSA = Smoothed Seasonally Adjusted
-#   NA = Not Applicable
+    mrsq_ = pd.concat([np.mean((u[:,k-1:k] @ u[:,k-1:k].T @ Z)**2, axis=0)
+                       for k in np.arange(1, (kmax or len(s)) + 1)],
+                      axis=1)
+    return mrsq_.div(np.mean((u @ u.T @ Z)**2, axis=0), axis=0)
+
+
+def select_bai_ng(X: DataFrame, kmax: int = 0, p: int = 2) -> int:
+    """Determine number of factors based on Bai & Ng (2002) info criterion
+
+    Args:
+
+        X: T observations/samples in rows, N variables/features in columns
+        p: int in [1, 2, 3] to use PCp1 or PCp2 or PCp3 penalty
+        kmax: Maximum number of factors.  If 0, set to rank from SVD
+
+    Returns:
+        best number of factors based on ICp{p} criterion, or 0 if not determined
+
+    Notes:
+
+    - Simplified the calculation of residual variance from adding components:
+      is just the eigenvalues, no need to compute projections
+    - The IC curve appears may have multiple minimums: the first "local"
+      minimum is selected -- may also be related to why authors suggest a
+      prior bound on number of factors.
+    """
+    assert p > 0
+    Z = ((X - X.mean()) / X.std(ddof=0)).to_numpy()
+    T, N = Z.shape
+    NT = N * T
+    NT1 = N + T
+    GCT = min(N, T)    
+    CT = [np.log(NT/NT1) * (NT1/NT),
+          (NT1/NT) * np.log(GCT),
+          np.log(GCT) / GCT]
+    CT = [i * CT[p-1] for i in range(GCT)]
+
+    u, s, vT = np.linalg.svd(Z, full_matrices=False)
+    eigval = s**2
+    residual_variance = np.roll(np.sum(eigval) - eigval.cumsum(), 1)
+    residual_variance[0] = sum(eigval)
+    sigma = residual_variance / sum(eigval)
+    ic = (np.log(sigma) + CT)[:(kmax or GCT)]
+    return np.where((ic[:-1] - ic[1:]) < 0)[0][0]
+
+
+def factors_em(X: DataFrame, kmax: int = 0, p: int = 2, max_iter: int = 50,
+           tol: float = 1e-12, verbose: int = _VERBOSE) -> DataFrame:
+    """Fill in missing values with factor model EM algorithm Bai and Ng (2002)
+
+    Args:
+        X: T observations/samples in rows, N variables/features in columns
+        kmax: Maximum number of factors.  If 0, set to rank from SVD minus 1
+        p: If 0, number of factors is fixed as kmax.  Else picks one of three
+           information criterion methods in Bai & Ng (2002) to auto-select
+
+    Returns:
+        DataFrame with missing values imputed with factor EM algorithm
+    """
+    Z = X.copy()          # passed by reference
+    Y = np.isnan(Z)       # missing entries
+    assert(not np.any(np.all(Y, axis=1)))  # no row can be all missing
+    assert(not np.any(np.all(Y, axis=0)))  # no column can be all missing
+
+    # identify cols with missing values, and initially fill with column mean
+    missing_cols = Z.isnull().sum().to_numpy().nonzero()[0]
+    for col in missing_cols:
+        Z.iloc[Y.iloc[:, col], col] = Z.iloc[:, col].mean()
+
+    for n_iter in range(max_iter):
+        old_Z = Z.copy()
+        mean = Z.mean()
+        std = Z.std()
+        Z = (Z - mean) / std             # standardize the data
+
+        # "M" step: estimate factors
+        u, s, vT = np.linalg.svd(Z)
+
+        # auto-select number of factors if p>0 else fix number of factors
+        if p:
+            r = select_bai_ng(Z, p=p, kmax=kmax or len(s) - 1)
+        else:
+            r = kmax or len(s) - 1
+
+        # "E" step: update missing entries
+        E = u[:, :r] @ np.diag(s[:r]) @ vT[:r, :]
+        for col in missing_cols:
+            Z.iloc[Y.iloc[:, col], col] = E[Y.iloc[:, col], col]
+
+        Z = (Z * std) + mean  # undo standardization
+
+        delta = (np.linalg.norm(Z - old_Z) / np.linalg.norm(Z))**2
+        if verbose:
+            print(f"{n_iter:4d} {delta:8.3g} {r}")
+        if delta < tol:       # diff**2/prev**2
+            break
+    return Z
+

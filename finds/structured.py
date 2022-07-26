@@ -1,93 +1,69 @@
-"""Implements interface for structured data sets
+"""Classes to implement interface for structured data sets
 
-- CRSP, Compustat, IBES, delistings, distributions, shares outstanding
+- CRSP (daily, monthly, names, delistings, distributions, shares outstanding)
+- S&P/CapitalIQ Compustat (Annual, Quarterly, Key Development, customers)
+- IBES Summary
 
-Author: Terence Lim
-License: MIT
+Redis store: SQL query results are (optionally) cached in in Redis
+
+Signals class to store and retrieve derived signal values
+
+Subclasses to mimic parent class interfaces with pre-loaded batch in memory
+
+Lookup identifiers within and across data sets
+
+
+
+Copyright 2022, Terence Lim
+
+MIT License
 """
+from typing import Iterable, List, Dict, Mapping, Any, Callable, Tuple
+import random
+import sys
+import os
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-from sqlalchemy import Column, Index
-from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, BigInteger
-from pandas.api import types
-from .solve import fractiles
-try:
-    from settings import ECHO
-except:
-    ECHO = False
+from pandas.api.types import is_list_like, is_integer_dtype
+from sqlalchemy import Table, Column, Index, Integer, String, Float, \
+    SmallInteger, Boolean, BigInteger
+from datetime import datetime
+from finds.database import SQL, Redis
+from finds.busday import BusDay, to_date
+from finds.recipes import fractiles
+from finds.busday import to_datetime
 
-def parse_where(where, prefix):
-    """Helper method to parse a dict to SQL where clause query
+_VERBOSE = 1
 
-    Parameters
-    ----------
-    where : dict (key, value)
-        Key may be field name optionally appended with filtering operator:
-      name_eq 	  be equal to the value
-      name_ne     be equal to the value
-      name_lt     less than the value
-      name_le     less than or equal to the value
-      name_gt     greater than the value
-      name_ge     greater than or equal to the value
-      name_in     be included in the value
-      name_notin  not be included in the value
-    prefix : str in {'AND','WHERE'}
-        Whether this is continuation of a longer where clause
+def as_dtypes(df: DataFrame, 
+              columns: Dict, 
+              drop_duplicates: List[str] = [], 
+              sort_values: List[str] = [], 
+              keep: str ='first',
+              replace : Dict[str, Tuple[Any, Any]] = {}) -> DataFrame:
+    """Convert DataFrame dtypes to the given sqlalchemy Column types
+
+    Args:
+        df: Input DataFrame to apply new data types from target columns
+        columns: Target sqlalchemy column types as dict of {column: type}
+        sort_values: List of column names to sort by
+        drop_duplicates: list of fields if all duplicated to drop rows
+        keep : 'first' or 'last' row to keep if drop duplicates
+        replace : dict of {column label: tuple(old, replacement) values}
+
+    Returns:
+        DataFrame with columns and rows transformed
+
+    Notes:
+
+    - Columns of DataFrame are dropped if not specified in columns input
+    - If input is None, then return empty DataFrame with given column types
+    - Blank values in boolean and int fields are set to False/0.
+    - Invalid/blank values in double field are coerced to NaN.
+    - Invalid values in int field are coerced to 0
     """
-    def parse(name, value):
-        """helper method to process filtering operator, if any"""
-        if name.endswith('_eq'):
-            return f"{name[:-3]} = '{value}'"
-        elif name.endswith('_ne'):
-            return f"{name[:-3]} != '{value}'"
-        elif name.endswith('_le'):
-            return f"{name[:-3]} <= '{value}'"
-        elif name.endswith('_lt'):
-            return f"{name[:-3]} < '{value}'"
-        elif name.endswith('_ge'):
-            return f"{name[:-3]} >= '{value}'"
-        elif name.endswith('_gt'):
-            return f"{name[:-3]} > '{value}'"
-        elif name.endswith('_in'):
-            value = "','".join(value)
-            return f"{name[:-3]} in ('{value}')"
-        elif name.endswith('_notin'):
-            value = "','".join(value)
-            return f"{name[:-6]} not in ('{value}')"
-        else:
-            return f"{name} = '{value}'"            
-    if where:
-        if isinstance(where, dict):
-            where = " AND ".join(f"{parse(k, v)}'" for k,v in where.items())
-        return " " + prefix + " " + where
-    return ''
 
-def as_dtypes(df, columns, drop_duplicates=[], sort_values=[], keep='first',
-              replace={}):
-    """Helper method to convert dtypes of data frame, from sqlalchemy types
-
-    Parameters
-    ----------
-    df : DataFrame
-        Apply new data types from target columns dict
-    columns : dict of {label : sqlalchemy type}
-        Target (sqlalchemy) column types
-    sort_values: str or list of str
-        Column names to sort by
-    drop_duplicates: list of string
-        Subset of fields to drop duplicate
-    keep : 'first' or 'last'
-        If drop_duplicates, which row to keep
-    replace : dict of {column str : tuple of old and new values}
-        Each tuple is ([list of old values], new value)
-
-    Notes
-    -----
-    Blank values in boolean and int fields are set to False/0.
-    Invalid/blank values in double field are coerced to NaN.
-    Invalid values in int field are coerced to NaN.
-    """
     if df is None:
         df = DataFrame(columns=list(columns))
     df.columns = df.columns.map(str.lower).map(str.rstrip) # clean column names
@@ -112,33 +88,30 @@ def as_dtypes(df, columns, drop_duplicates=[], sort_values=[], keep='first',
             raise Exception('Unknown type for column ' + col)
     return df
 
+
 class Structured(object):
-    """Base class for interface to structured datasets, internally stored in SQL
+    """Base class for interface to structured datasets, stored in SQL
 
-    Parameters
-    ----------
-    sql : SQL instance
-        Connection to mysql database
-    bd : BusDay instance
-        Custom business calendar object
-    tables : dict of {label: Table}
-        Sqlalchemy Table objects, and their labels
-    identifier : str
-        Field name of unique identifier key
-    name : str
-        Display name for this instance
-    rdb : Redis object, default is None
-        Connector to Redis cache, if desired
+    Args:
+        sql: Connection instance to mysql database
+        bd: Custom business calendar instance
+        tables: Sqlalchemy Tables and names defined for this datasets group
+        identifier: Name of field of unique identifier key
+        name: Display name for this datasets group
+        rdb: Connector to Redis cache store, if desired
 
-    Attribute
-    ---------
-    identifier : str
-        Field name of identifier key used by datasets in this instance
-    name : str
-        Display name for this instance
+    Attributes:
+        identifier: Field name of identifier key by this datasets group
+        name: Display name for this datasets group
     """
 
-    def __init__(self, sql, bd, tables, identifier, name, rdb=None, echo=ECHO):
+    def __init__(self, sql: SQL, 
+                       bd: BusDay, 
+                       tables: Dict[str, Table], 
+                       identifier: str,
+                       name: str, 
+                       rdb: Redis | None = None, 
+                       verbose: int = _VERBOSE):
         """Initialize a connection to structured datasets"""
         self.bd = bd
         self.sql = sql
@@ -146,24 +119,22 @@ class Structured(object):
         self.rdb = rdb
         self.identifier = identifier
         self.name = name
-        self.echo_ = echo
+        self._verbose = verbose
         
-    def _print(self, *args, echo=None):
-        if echo or self.echo_:
-            print(*args)
+    def _print(self, *args, verbose: int = _VERBOSE, level: int = 0, **kwargs):
+        """helper to print verbose messages"""
+        if max(verbose, self._verbose) > 0:
+            print(*args, **kwargs)
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """String to identify this class of datasets group"""
         return self.name
 
-    def __getitem__(self, dataset):
-        """Return the table object corresponding to a dataset label"""
-        return self.tables_.get(dataset, None)
+    def __getitem__(self, dataset: str) -> Table:
+        """Return the table object corresponding to a dataset name"""
+        assert dataset in self.tables_
+        return self.tables_[dataset]
 
-    def dtypes(self, dataset):
-        """Return empty DataFrame with columns of corresponding dtype"""
-        return as_dtypes(None, {k : v.type
-                                for k,v in self[dataset].columns.items()})
-        
     def create_all(self):
         """Create all tables and indexes in SQL using associated schemas"""
         if self.tables_:
@@ -176,74 +147,133 @@ class Structured(object):
             for table in self.tables_.values():
                 table.drop()
 
-    def load_csv(self, dataset, csvfile, drop={}, replace={}, sep=',',
-                 encoding='latin-1', header=0, low_memory=False,
-                 na_filter=False, **kwargs):
-        """Insert ignore into a SQL table from a csvfile
+    def load_dataframe(self, df: DataFrame, table: Table,
+                       to_replace: Any = None, value: Any = None,
+                       overwrite: bool = True) -> int:
+        """Load dataframe to SQLAlchemy table object using associated schema
 
-        Parameters
-        ----------
-        dataset : str
-            dataset name
-        csvfile : str
-            csv file name
-        drop : dict of {column : value}
-            drop rows where column has value, e.g. {'gvkey' : 0}
-        replace : dict of {column: [to_replace, replace_with]}
-            values to be replaced in a column
-        sep : string, optional
-            csv file delimiter
+        Args:
+            df: DataFrame to load from
+            table: Destination Table object
+            to_replace: Original value or list of values to replace
+            value: Value to replace with
+            overwrite: Whether to overwrite or append
 
-        Notes
-        -----
-        Create new table, if not exists, using associated schema
-        New records with duplicate key are dropped (insert ignore used)
+        Returns:
+            Number of rows loaded
+
+        Notes:
+
+        - DataFrame should contain same column names as Table,
+        - DataFrame columns types are converted to Table column types
+        - Duplicate primary fields are removed, keeping first        
         """
-        table = self[dataset]
+        df = as_dtypes(df=df,
+                       columns={k.lower(): v.type
+                                for k, v in table.columns.items()})
+        if to_replace is not None and value is not None:
+            df = df.replace(to_replace, value)
+        primary = table.primary_key.columns.keys()
+        if primary:
+            df = df.sort_values(by=primary)
+            df.drop_duplicates(primary, keep='first', inplace=True)
+        df = df.dropna()        # NaN's last
+        if overwrite:
+            table.drop(checkfirst=True)
+        table.create(checkfirst=True)
+        self.sql.load_dataframe(table=table.key, df=df, index_label=None)
+        self._print("(structured store)", table.key, len(df))
+        return len(df)
+                
+    def read_dataframe(self, table: str, where: str = '') -> DataFrame:
+        """Read signal values from sql and return as data frame
+
+        Args:
+            table: Table to read from
+            where: Where clause str for sql select
+
+        Returns:
+            DataFrame of query
+        """
+        where = bool(where)*'WHERE ' + where
+        return self.sql.read_dataframe(f"SELECT * FROM {table} {where}")
+    
+    def load_csv(self, dataset: str, 
+                       csvfile: str, 
+                       drop: Dict[str, List[Any]] = {}, 
+                       replace: Dict[str, Tuple[Any, Any]] = {}, 
+                       sep: str = ',', 
+                       encoding: str = 'latin-1', 
+                       header: Any = 0, 
+                       low_memory: bool = False, 
+                       na_filter: bool = False, 
+                       **kwargs) -> DataFrame:
+        """Insert ignore into SQL table from csvfile, and return as DataFrame
+
+        Args:
+            dataset: dataset name
+            csvfile: csv file name
+            drop: {column: value} specifies rows with value in column
+            replace: {column: [old,new]} specifies values to replace in column
+            sep, encoding, header, low_memory, na_filter: args for pd.read_csv
+
+        Returns:
+            DataFrame containing loaded data
+
+        Notes:
+
+        - Create new table, if not exists, using associated schema
+        - New records with duplicate key are dropped (insert ignore used)
+        """
+
+        # Load csv to DataFrame
+        table = self[dataset]    # Table object for dataset
+        assert table is not None
         df = pd.read_csv(csvfile, sep=sep, encoding=encoding, header=header,
                          low_memory=low_memory, na_filter=na_filter)
         # 'utf-8' codec can't decode byte 0xf6 => encoding='latin-1'
+        df.columns = df.columns.map(str.lower).map(str.rstrip)
         self._print('(read_csv)', len(df), csvfile)
 
-        df.columns = df.columns.map(str.lower).map(str.rstrip)
+        # clean up column dtypes and rows
         for col, vals in drop.items():  # drop rows where col has value val
-            df.drop(index=df.index[df[col].isin(vals)], inplace=True)
-
+            rows = df.index[df[col].isin(vals)]
+            self._print('Dropping', len(rows), 'rows with', col, 'in', vals)
+            df.drop(index=rows, inplace=True)
         df = as_dtypes(
             df=df,
             columns={k.lower(): v.type for k, v in table.columns.items()},
             drop_duplicates=[p.key.lower() for p in table.primary_key],
             replace=replace)
-
         for col, vals in drop.items():  # drop rows where col has value in val
             df.drop(index=df.index[df[col].isin(vals)], inplace=True)
         self._print("(load_csv)", len(df), table)
+
+        # Create sql table and load from DataFrame
         table.create(checkfirst=True)
         self.sql.load_dataframe(table=table.key, df=df, index_label=None)
         return df
 
-    class _lookup:
-        """Builds callable to look-up a record by identifier and prevailing date
+    class Lookup:
+        """Loads dated identifier mappings to memory, to lookup by date
 
-        Parameters
-        ----------
-        source : str
-            name of source identifier
-        target : str
-            name of target identifier to return
-        date_field : str
-            name of date field in database
-        table : str
-            physical table name containing identifier records
-
-        Examples
-        --------
+            Args:
+                sql: SQL connection instance
+                source: Name of source identifier key
+                target: Name of target identifier key to return
+                date_field: Name of date field in database table
+                table: Physical SQL table name containing identifier mappings
+                fillna: Value to return if not found
         """
-        def __init__(self, sql, source, target, date_field, table, fillna):
+        def __init__(self, sql: SQL, source: str, target: str, 
+                     date_field: str, table: str, fillna: Any):
             lookups = sql.read_dataframe(
-                f"SELECT {source} as source, {target} AS target, "
-                f"{date_field} AS date FROM {table} "
-                f"WHERE {source} IS NOT NULL AND {target} IS NOT NULL")
+                f"SELECT {source} as source,"
+                f"  {target} AS target,"
+                f"  {date_field} AS date"
+                f"  FROM {table}"
+                f"  WHERE {source} IS NOT NULL"
+                f"    AND {target} IS NOT NULL")
             lookups = lookups.sort_values(['source', 'target', 'date'])
             try:
                 lookups = lookups.loc[lookups['source'] > 0]
@@ -255,59 +285,66 @@ class Structured(object):
             self.target = target
             self.fillna = fillna
 
-        def __call__(self, label, date=99999999):
-            if types.is_list_like(label):
+        def __call__(self, label: str, date: int = 99999999) -> Any:
+            """Return target identifiers matched to source as of date"""
+            if is_list_like(label):
                 return [self(b) for b in label]
             if label in self.keys:
                 a = self.lookups.get_group(label)
-                b = a[a['date'] <= date]  # prevailing (if any), else first
+                b = a[a['date'] <= date]  # prevailing date, else first
                 return (b.iloc[-1] if len(b) else a.iloc[0]).at['target']
             return self.fillna
 
         def __getitem__(self, labels):
             return self(labels)
 
-    def build_lookup(self, source, target, date_field, table, fillna):
-        """Builds callable to lookup record by identifiers and prevailing date"""
-        if not (source in self[table].c and target in self[table].c):
-            raise Exception(f"{source} and {target} must be in {table}")
-        return self._lookup(self.sql, source, target, date_field, table, fillna)
+    def build_lookup(self, source: str, target: str, date_field: str,
+                     dataset: str, fillna: Any) -> Any:
+        """Helper to build lookup of target from source identifiers"""
+        table = self[dataset]    # Table object for dataset
+        assert table is not None
+        assert source in table.c
+        assert target in table.c
+        return self.Lookup(sql=self.sql, source=source, target=target,
+                           date_field=date_field, table=table.key,
+                           fillna=fillna)
 
-        
-    def get_links(self, keys, date, link_perm, link_date, permno='permno'):
-        """Returns matching permnos as of a prevailing from 'links' table
+    def get_permnos(self, keys: List[str], 
+                          date: int, 
+                          link_perm: str,
+                          link_date: str, 
+                          permno: str) -> DataFrame:
+        """Returns matching permnos as of a prevailing date from 'links' table
 
-        Parameters
-        ----------
-        keys: list
-            Input list of identifiers to lookup
-        date: int
-            Prevailing date of link
-        link_perm: str
-            Name of permno field in 'links' table
-        link_date: str
-            Name of link date field in 'links' table
+        Args:
+            keys: Input list of identifiers to lookup
+            date: Prevailing date of link
+            link_perm: Name of permno field in 'links' table
+            link_date: Name of link date field in 'links' table
+            permno: Name of field to output permnos to
 
-        Returns
-        -------
-        permnos: list
-            Linked permnos, as of prevailing date; 0 if not found
+        Returns:
+            List of Linked permnos, as of prevailing date; missing set to 0
         """
-        s = ("SELECT {table}.{key}, {table}.{link_perm} AS {permno}, "
-             "{table}.{link_date} FROM"
-             "  (SELECT {key}, MAX({link_date}) AS dt FROM {table} "
+        assert self['links'] is not None
+        key = self.identifier
+        s = ("SELECT {links}.{key},"
+             "       {links}.{link_perm} AS {permno}, "
+             "       {links}.{link_date} FROM"
+             "  (SELECT {key}, MAX({link_date})"
+             "    AS dt FROM {links} "
              "    WHERE {link_date} <= {date} "
              "      AND {link_perm} > 0 "
-             "    GROUP BY {key}, {link_date}) AS a"
-             "  INNER JOIN {table} "
-             "    ON {table}.{key} = a.{key} "
-             "      AND {table}.{link_date} = a.dt").format(
-                 table=self['links'].key,
-                 date=date,
-                 link_perm=link_perm,
-                 link_date=link_date,
-                 permno=permno,
-                 key=self.identifier)
+             "      GROUP BY {key}, {link_date}) AS a"
+             "    INNER JOIN {links} "
+             "      ON {links}.{key} = a.{key} "
+             "         AND {links}.{link_date} = a.dt").format(
+                key=self.identifier,
+                date=date,
+                links = self['links'].key,   # Table object for links dataset
+                link_perm=link_perm,   
+                link_date=link_date,   
+                permno=permno)
         permnos = self.sql.read_dataframe(s).set_index(self.identifier)
         permnos = permnos[~permnos.index.duplicated(keep='last')]
         keys = DataFrame(keys)
@@ -315,37 +352,34 @@ class Structured(object):
         result = keys.join(permnos, on=self.identifier, how='left')[permno]
         return result.fillna(0).astype(int).to_list()
 
-    def get_linked(self, dataset, date_field, fields, link_perm, link_date,
-                   where='', limit=None):
-        """Query dataset, and join 'links' table to return data with permno
+    def get_linked(self, dataset: str, 
+                         fields: List[str], 
+                         date_field: str, 
+                         link_perm: str, 
+                         link_date: str, 
+                         where: str = '', 
+                         limit: int | str | None = None) -> DataFrame:
+        """Query a dataset, and join 'links' table to return data with permno
 
-        Parameters
-        ----------
-        dataset: str
-            Name internal Table to query data from
-        date_field : str
-            Name of date field in data table
-        fields: list of str
-            Data fields to retrieve
-        link_date: str
-            Name of link date field in 'links' table
-        link_perm: str
-            Name of permno field in 'links' table
-        where: str or dict, optional
-            Where clause (default '')
-        limit: int, optional
-            Maximum rows to return (default None to return all)
+        Args:
+            dataset: Name internal Table to query data from
+            fields: Data fields to retrieve
+            date_field: Name of date field in data table
+            link_date: Name of link date field in 'links' table
+            link_perm: Name of permno field in 'links' table
+            where: Where clause (optional)
+            limit: Maximum rows to return (optional)
 
-        Returns
-        -------
-        DataFrame
-            result of query
+        Returns:
+            DataFrame containing result of query
         """
-        where = parse_where(where, 'AND')
+
+        if where:
+            where = ' AND ' + where
         limit = " LIMIT " + str(limit) if limit else ''
-        fields = ", ".join(
-            [f"{self[dataset].key}.{f.lower()}"
-             for f in list(set(fields + [self.identifier, date_field]))])
+        fields = ", ".join([f"{self[dataset].key}.{f.lower()}"
+                            for f in set([self.identifier, date_field]
+                                         + fields)])        
         q = ("SELECT {links}.{link_perm} as {permno}, "
              "       {links}.{link_date}, "
              "       {fields} "
@@ -365,7 +399,7 @@ class Structured(object):
                 link_perm=link_perm,
                 link_date=link_date,
                 fields=fields,
-                table=self[dataset],
+                table=self[dataset].key,
                 key=self.identifier,
                 date_field=date_field,
                 where=where,
@@ -374,120 +408,113 @@ class Structured(object):
         return self.sql.read_dataframe(q)
 
 class Stocks(Structured):
-    """Provide interface to structured stock price data sets
+    """Provide interface to structured stock price datasets"""
 
-    Parameters
-    ----------
-    sql : SQL instance
-        Connection to mysql database
-    bd: BusDay instance
-        Custom business calendar object
-    tables: dict of {label: Table}
-        Sqlalchemy Table objects, and their label
-    identifier: str
-        Field name of unique identifier key
-
-    Attribute
-    ---------
-    identifier: str
-        Field name of identifier key used by datasets in this instance
-    """
-
-    def __init__(self, sql, bd, tables, identifier, name, rdb=None, echo=ECHO):
-        """Initialize a connection to Stocks-type structured datasets"""
+    def __init__(self, sql: SQL, 
+                       bd: BusDay, 
+                       tables: Dict[str, Table], 
+                       identifier: str, name: str, 
+                       rdb: Redis | None = None,
+                       verbose: int = _VERBOSE):   
+        """Initialize a connection to Stocks structured datasets"""
         super().__init__(sql, bd, tables, identifier=identifier, name=name,
-                         rdb=rdb, echo=echo)
+                         rdb=rdb, verbose=verbose)
 
-    def get_series(self, permnos, field, start=19000000, end=29001231,
-                   dataset='daily'):
-        """Return time series of a field for multiple permnos as data frame
+    def get_series(self, permnos: int | str | List[str | int], 
+                         field: str = 'ret', 
+                         date_field: str = 'date',
+                         dataset: str = 'daily', 
+                         start: int = 19000000, 
+                         end: int = 29001231) -> DataFrame | Series:
+        """Return time series of a field for multiple permnos as DataFrame
 
-        Parameters
-        ----------
-        permnos: str or list of str
-            Identifiers to filter
-        field: str
-            Name of column to extract
-        start: int, optional (default is earliest available)
-            Inclusive start date (YYYYMMDD)
-        end: int, optional (default is latest available
-            Inclusive end date (YYYYMMDD)
-        table: str, optional
-            Dataset name of table to retrieve ret (default is 'daily' table)
+        Args:
+            permnos: Identifiers to filter
+            field: Name of column to extract
+            start: Inclusive start date (YYYYMMDD)
+            end: Inclusive end date (YYYYMMDD)
+            dataset: Name of dataset to retrieve `ret` (default is `daily`)
 
-        Returns
-        -------
-        DataFrame or Series
-            Values of desired field, indexed by date, with permnos in columns
+        Returns:
+            DataFrame indexed by date with permnos in columns
         """
-        if isinstance(permnos, str):
-            q = ("SELECT date, {field} FROM {table}"
-                 "  WHERE date >= {start} AND date <= {end} "
-                 "    AND {permno} = {permnos}").format(
+        assert self[dataset] is not None
+        if isinstance(permnos, (int, str)) :
+            q = ("SELECT {date_field}, {field}"
+                 "  FROM {table}"
+                 "  WHERE {date_field} >= {start} AND {date_field} <= {end} "
+                 "    AND {permno} = '{permnos}'").format(
                      permno=self.identifier,
                      field=field,
+                     date_field=date_field,
                      table=self[dataset].key,
                      start=int(start),
                      end=int(end),
                      permnos=permnos)
-            self._print('(get_series)', q)
-            return self.sql.read_dataframe(q)[field].rename(permnos)
+            self._print('(get_series single)', q)
+            return self.sql.read_dataframe(q)\
+                .set_index(date_field)[field].sort_index().rename(permnos)
         else:
-            q = ("SELECT date, {permno}, {field} FROM {table}"
-                 "  WHERE date >= {start} AND date <= {end} "
+            q = ("SELECT {date_field}, {permno}, {field} "
+                 "  FROM {table}"
+                 "  WHERE {date_field} >= {start} AND {date_field} <= {end} "
                  "    AND {permno} IN ('{permnos}')").format(
                      permno=self.identifier,
                      field=field,
+                     date_field=date_field,
                      table=self[dataset].key,
                      start=int(start),
                      end=int(end),
                      permnos="', '".join([str(p) for p in permnos]))
-            self._print('(get_series)', q)
-            return self.sql.read_dataframe(q).pivot(
-                index='date', columns=self.identifier, values=field)[permnos]
+            self._print('(get_series many)', q)
+            return self.sql.read_dataframe(q)\
+                    .pivot(index='date', 
+                           columns=self.identifier, 
+                           values=field)[permnos].sort_index()
 
-    def get_ret(self, start, end, dataset='daily', field='ret',
-                use_cache=True):
-        """Compound returns between start and end dates, return as data frame
+    def get_ret(self, start: int, 
+                      end: int, 
+                      dataset: str = 'daily', 
+                      field: str = 'ret', 
+                      date_field: str = 'date',
+                      use_cache: bool | None = True) -> Series:
+        """Compounded returns between start and end dates of all stocks
 
-        Parameters
-        ----------
-        start: int
-            Inclusive start date (YYYYMMDD)
-        end: int
-            Inclusive end date (YYYYMMDD)
-        dataset: str, optional
-            Dataset name of table to retrieve ret (default is 'daily' table)
-        use_cache: bool, default is True (read, if exists, and write cache)
-            If False, then write but not read cache.  None to ignore cache
+        Args:
+            start: Inclusive start date (YYYYMMDD)
+            end: Inclusive end date (YYYYMMDD)
+            dataset: Name of dataset to retrieve (default is `daily`)
+            field: Name of returns field
+            date_field: Name of date field
+            use_cache: True to read and and write cache; 
+                False to write but not read cache; None to ignore cache
 
-        Returns
-        -------
-        DataFrame
-            prod(min_count=1) of returns in column 'ret', indexed by permno
+        Series:
+            DataFrame with prod(min_count=1) of returns in column `ret`, 
+            with rows indexed by permno
 
-        Notes
-        -----
-        If start and end are first and last business dates of a month, then:
+        Notes:
+
+        - If start and end are first and last business dates of a month, then
           search range is expanded to include first and last calendar dates
-          of respective months and 'monthly' table is queries
-        if start and end are first and last business date of a month, then:
-          return section from weekly returns table
+          of respective months, and `monthly` table is queried
         """
-        if self.use_monthly(start, end):
+        if self._use_monthly(start, end):  # use monthly if input dates align
             dataset = 'monthly'
             start = (start // 100) * 100
             end = (end // 100 * 100) + 99
         rkey = "_".join([field, str(self), str(start), str(end)])
         if use_cache and self.rdb and self.rdb.redis.exists(rkey):
             self._print('(get_ret load)', rkey)
-            return self.rdb.load(rkey)
+            return self.rdb.load(rkey)[field]    # use cache
 
         if dataset == 'monthly' and (start // 100) == (end // 100):
             q = ("SELECT {field}, {identifier} FROM {table} "
-                 " WHERE date >= {start} AND date <= {end}").format(
+                 " WHERE {date_field} >= {start} "
+                 "   AND {date_field} <= {end}").format(
                      table=self[dataset].key,
                      field=field,
+                     date_field=date_field,
                      identifier=self.identifier,
                      start=start,
                      end=end)
@@ -501,41 +528,47 @@ class Stocks(Structured):
                      end=end)
         self._print('(get_ret)', q)
         df = self.sql.read_dataframe(q).sort_values(self.identifier)
+
+        # computed compounded returns
         df[field] += 1
-        df = (df.groupby(self.identifier).prod(min_count=1) - 1).dropna()
-        if use_cache is not None and self.rdb and start != end:
+        df = (df.groupby(self.identifier).prod(min_count=1)-1).dropna()
+
+        if use_cache is not None and self.rdb and start != end:  # if cache
             self._print('(get_ret dump)', rkey)
             self.rdb.dump(rkey, df)
-        return df
+        return df[field]
 
-    def get_compounded(self, periods, permnos, use_cache=True):
+    def get_compounded(self, periods: List[Tuple[int, int]], 
+                             permnos: List[int], 
+                             use_cache: bool | None = True) -> DataFrame:
         """Compound returns within list of periods, for given permnos
 
-        Parameters
-        ----------
-        periods: list of tuple(beg: int, end: int)
-            Each tuple is begin and end date (inclusive) of returns period
-        permnos: list
-            List of permnos
-        use_cache: bool, default is True (read, if exists, and write cache)
-            If False, then write but not read cache.  None to ignore cache
+        Args:
+            periods: Tuples of inclusive begin and end dates of returns period
+            permnos: List of permnos
+            use_cache: If True, then read and write cache; If False, then
+                write but not read cache.  None to ignore cache
 
-        Returns
-        -------
-        DataFrame
-            Time series of compounded returns (in rows), for permnos (in cols)
+        Returns:
+            DataFrame of compounded returns in rows, for permnos in cols
         """
         # accumulate horizontally, then finally transpose
         r = DataFrame(index=permnos)
         for beg, end in periods:
-            r[end] = self.get_ret(beg, end, use_cache=use_cache).reindex(permnos)
+            r[end] = self.get_ret(beg, end, use_cache=use_cache)\
+                                 .reindex(permnos)
         return r.transpose()
 
-    def cache_ret(self, dates, field='ret', dataset='daily', date_field='date',
-                  overwrite=False):
+    def cache_ret(self, dates: List[Tuple[int, int]], 
+                        replace: bool, 
+                        field: str = 'ret', 
+                        date_field: str ='date',
+                        dataset: str = 'daily'):
         """Pre-generate compounded returns from daily for redis store"""
+        assert self.rdb is not None
         q = ("SELECT {field}, {identifier}, {date_field} FROM {table} "
-             " WHERE date >= {start} AND date <= {end}").format(
+             " WHERE {date_field} >= {start} "
+             "   AND {date_field} <= {end}").format(
                  table=self[dataset].key,
                  field=field,
                  identifier=self.identifier,
@@ -548,7 +581,7 @@ class Stocks(Structured):
         
         for start, end in dates:
             rkey = "_".join([field, str(self), str(start), str(end)])
-            if not overwrite and self.rdb.redis.exists(rkey):
+            if not replace and self.rdb.redis.exists(rkey):
                 self._print('(cache_ret exists)', rkey)
                 continue
             df = rets[rets['date'].ge(start) & rets['date'].le(end)]\
@@ -558,31 +591,27 @@ class Stocks(Structured):
             self.rdb.dump(rkey, df)
     
     
-    def get_window(self, dataset, field, permnos, date_field, dates, left, right,
-                   avg=False):
-        """Retrieve field values for permnos in a window centered around dates
+    def get_window(self, dataset: str, 
+                         field: str, 
+                         permnos: List[Any], 
+                         date_field: str, 
+                         dates: List[int], 
+                         left: int, 
+                         right: int, 
+                         avg: bool = False) -> DataFrame:
+        """Retrieve field values for permnos in window centered around dates
 
-        Parameters
-        ----------
-        dataset : str
-            Dataset label
-        field : str
-            Name of field to retrieve
-        permnos : list
-            List of identifiers to retrieve
-        date_field : str
-            Name of date field in database
-        dates : list of int
-            List of corresponding dates of center of event window
-        left : int
-            Relative (inclusive) offset of start of event window
-        right : int
-            Relative (inclusive) offset of end of event window
+        Args:
+            dataset: Name of dataset
+            field: Name of field to retrieve
+            permnos: List of identifiers to retrieve
+            date_field: Name of date field in database
+            dates : List of corresponding dates of center of event window
+            left : Relative (inclusive) offset of start of event window
+            right : Relative (inclusive) offset of end of event window
 
         Returns:
-        --------
-        DataFrame
-            Columns [0:(right-left)] contain field values in event window
+            DataFrame columns [0:(right-left)] of field values in event window
         """
         dates = list(dates)
         permnos = list(permnos)
@@ -592,12 +621,14 @@ class Stocks(Structured):
                             'b': self.bd.offset(dates, right),
                             self.identifier: permnos},
                            index=np.arange(len(dates)))
-            self.sql.load_dataframe(table=self.sql.temp_, df=df,
-                                    index_label='n', if_exists='replace')
-            if types.is_integer_dtype(df[self.identifier].dtype):
-                q = f"CREATE INDEX a on {self.sql.temp_} ({self.identifier},a,b)"
+            self.sql.load_dataframe(table=self.sql._t,
+                                    df=df,
+                                    index_label='n',
+                                    replace=True)
+            if is_integer_dtype(df[self.identifier].dtype):
+                q = f"CREATE INDEX a on {self.sql._t} ({self.identifier},a,b)"
                 self.sql.run(q)
-                q = f"CREATE INDEX b on {self.sql.temp_} ({self.identifier},b,a)"
+                q = f"CREATE INDEX b on {self.sql._t} ({self.identifier},b,a)"
                 self.sql.run(q)
 
             # join on (permno, date) and retrieve from target table
@@ -607,7 +638,7 @@ class Stocks(Structured):
                  " WHERE {table}.{date_field} >= {temp}.a "
                  " AND {table}.{date_field} <= {temp}.b"
                  " GROUP BY {temp}.n").format(
-                     temp=self.sql.temp_,
+                     temp=self.sql._t,
                      identifier=self.identifier,
                      field=field,
                      date_field=date_field,
@@ -615,21 +646,23 @@ class Stocks(Structured):
             df = self.sql.read_dataframe(q).drop_duplicates(subset=['n'])\
                                            .set_index('n')
             result = DataFrame({'permno': permnos, 'date': dates},
-                               index=np.arange(len(dates))).join(df, how='left')
+                               index=np.arange(len(dates)))\
+                        .join(df, how='left')
         else:
             # Generate and save dates to sql temp
             cols = ["day" + str(i) for i in range(1 + right - left)]
-            df = DataFrame(data=self.bd.offset(dates, left, right), columns=cols)
+            df = DataFrame(data=self.bd.offset(dates, left, right), 
+                           columns=cols)
             df[self.identifier] = permnos
-            self.sql.load_dataframe(self.sql.temp_, df, if_exists='replace')
+            self.sql.load_dataframe(self.sql._t, df, replace=True)
 
             # Loop over each date, and join as columns of result
             result = DataFrame({'permno': permnos, 'date': dates})
             for col in cols:
                 # create index on date to speed up join with target table
-                if types.is_integer_dtype(df[self.identifier].dtype):
+                if is_integer_dtype(df[self.identifier].dtype):
                     q = "CREATE INDEX {col} on {temp} ({ident}, {col})".format(
-                        temp=self.sql.temp_, ident=self.identifier, col=col)
+                        temp=self.sql._t, ident=self.identifier, col=col)
                     self.sql.run(q)
 
                 # join on (permno, date) and retrieve from target table
@@ -637,7 +670,7 @@ class Stocks(Structured):
                      " FROM {temp} LEFT JOIN {table}"
                      " ON {table}.{identifier} = {temp}.{identifier} "
                      "  AND {table}.{date_field} = {temp}.{col}").format(
-                         temp=self.sql.temp_,
+                         temp=self.sql._t,
                          identifier=self.identifier,
                          field=field,
                          date_field=date_field,
@@ -646,48 +679,44 @@ class Stocks(Structured):
                 df = self.sql.read_dataframe(q)
                 # left join, so assume same order
                 result[col] = df[field].values
-        self.sql.run('drop table if exists ' + self.sql.temp_)
+        self.sql.run('drop table if exists ' + self.sql._t)
         result.columns = [int(c[3:]) if c.startswith('day') else c
                           for c in result.columns]
         return result.reset_index(drop=True)
 
-    def get_many(self, dataset, permnos, fields, date_field, dates, exact=True):
+    def get_many(self, dataset: str, 
+                       permnos: List[str | int], 
+                       fields: List[str], 
+                       date_field: str, 
+                       dates: List[int], 
+                       exact: bool = True) -> DataFrame:
         """Retrieve multiple fields for lists of permnos and dates
 
-        Parameters
-        ----------
-        dataset : str
-            Dataset label
-        permnos : list
-            List of identifiers to retrieve
-        dates : list of int
-            List of corresponding dates of center of event window
-        field : list of str
-            Names of fields to retrieve
-        date_field : str
-            Names of date field in database
-        exact : bool, default is True
-            Whether require exact date match, or allow (most recent) earlier date
+        Args:
+            dataset: Name of dataset
+            permnos: List of identifiers to retrieve
+            dates: List of corresponding dates of center of event window
+            field: Names of fields to retrieve
+            date_field: Names of date field in database
+            exact: Whether require exact date match, or allow most recent
 
-        Returns
-        -------
-        DataFrame
-            with permno, date, and retrieved field values across columns
+        Returns:
+            DataFrame with permno, date, and retrieved fields across columns
         """
         field = "`, `".join(list(fields))
-        self.sql.load_dataframe(table=self.sql.temp_,
+        self.sql.load_dataframe(table=self.sql._t,
                                 df=DataFrame({self.identifier: list(permnos),
                                               'date': list(dates)},
                                              index=np.arange(len(permnos))),
                                 index_label='_seq',
-                                if_exists='replace')
+                                replace=True)
         if exact:
             q = ("SELECT {temp}._seq, {temp}.{identifier}, "
                  "  {temp}.date AS date, `{field}` "
                  "  FROM {temp} LEFT JOIN {table}"
                  "    ON {table}.{identifier} = {temp}.{identifier} "
                  "    AND {table}.{date_field} = {temp}.date").format(
-                     temp=self.sql.temp_,
+                     temp=self.sql._t,
                      identifier=self.identifier,
                      date_field=date_field,
                      field=field,
@@ -700,7 +729,7 @@ class Stocks(Structured):
                  "  FROM {temp} LEFT JOIN {table}"
                  "    ON {table}.{identifier} = {temp}.{identifier} "
                  "    AND {table}.{date_field} <= {temp}.date").format(
-                     temp=self.sql.temp_,
+                     temp=self.sql._t,
                      identifier=self.identifier,
                      field=field,
                      date_field=date_field,
@@ -709,51 +738,45 @@ class Stocks(Structured):
                          .sort_values(['_seq', 'date'], na_position='first')\
                          .drop_duplicates(subset=['_seq'], keep='last')\
                          .set_index('_seq').sort_index()
-        self.sql.run('drop table if exists ' + self.sql.temp_)
+        self.sql.run('drop table if exists ' + self.sql._t)
         return df
 
-    def get_section(self, dataset, fields, date_field, date, start=None):
+    def get_section(self, dataset: str, 
+                          fields: List[str], 
+                          date_field: str,
+                          date: int, 
+                          start: int = -1) -> DataFrame:
         """Return a cross-section of values of fields as of a single date
 
-        Parameters
-        ----------
-        dataset : str
-            Dataset to extract from
-        fields: list of str
-            Names of columns to return
-        date_field: str
-            Name of date column in the table
-        date: int
-            Desired date in YYYYMMDD format
-        start: int or None, default is None
-            Inclusive start of date range to return prevailing permno row.
-            If None, then as of date exact.
+        Args:
+            dataset: Dataset to extract from
+            fields: list of columns to return
+            date_field: Name of date column in the table
+            date: Desired date in YYYYMMDD format
+            start: Non-inclusive date of starting range; if -1 then exact date
 
-        Returns
-        -------
-        r : Series (if fields is str) or DataFrame (if fields is list-like)
-            indexed by permno
+        Returns:
+            Most recent row within date range, indexed by permno
 
-        Note
-        ----
-        If start is not None, then the latest prevailing record for each
-        between (non-inclusive) start and (inclusive) date is returned
+        Note:
 
-        Examples
-        --------
-        t = crsp.get_section('shares', ['shrenddt','shrout'], 'shrsdt', date)
-        u = crsp.get_section('names', ['nameendt','comnam'], 'date', date-10000)
+        - If start is not -1, then the latest prevailing record for each
+          between (non-inclusive) start and (inclusive) date is returned
+
+        Examples:
+
+        >>> t = crsp.get_section('shares', ['shrenddt','shrout'], 'shrsdt', dt)
+        >>> u = crsp.get_section('names', ['comnam'], 'date', dt-10000)
         """
-        assert(fields)
-        if not types.is_list_like(fields):
-            fields = [fields]
+
+        assert is_list_like(fields)
         if self.identifier not in fields:
             fields += [self.identifier]
-        if start is None:
+        if start < 0:
             q = ("SELECT {fields} FROM {table} "
                  " WHERE {date_field} = {date}").format(
                      fields=", ".join(fields),
-                     table=self[dataset],
+                     table=self[dataset].key,
                      date_field=date_field,
                      date=date)
         else:
@@ -764,7 +787,7 @@ class Stocks(Structured):
                  "     GROUP BY {permno}) as a "
                  "  USING ({permno}, {date_field})").format(
                      fields=", ".join(fields),
-                     table=self[dataset],
+                     table=self[dataset].key,
                      permno=self.identifier,
                      date_field=date_field,
                      date=date,
@@ -772,52 +795,44 @@ class Stocks(Structured):
         self._print('(get_section)', q)
         return self.sql.read_dataframe(q).set_index(self.identifier)
 
-    def get_range(self, dataset, fields, date_field, beg, end, use_cache=None):
+    def get_range(self, dataset: str, 
+                        fields: List[str] | Dict[str, str],
+                        date_field: str, 
+                        beg: int, 
+                        end: int, 
+                 use_cache: bool | None = None) -> DataFrame:
         """Return field values within a date range
 
-        Parameters
-        ----------
-        dataset : str
-            Dataset to extract from
-        fields: list of str, or dict of {field: new str}
-            Names of columns to return (and rename as)
-        date_field: str
-            Name of date column in the table
-        beg: int
-            Inclusive start date in YYYYMMDD format
-        end: int
-            Inclusive end date in YYYYMMDD format
+        Args:
+            dataset: Name of dataset to extract from
+            fields: Names of columns to return (and optionally rename as)
+            date_field: Name of date column in the table
+            beg: Inclusive start date in YYYYMMDD format
+            end: Inclusive end date in YYYYMMDD format
+            use_cache: True to read and and write cache; 
+                False to write but not read cache; None to ignore cache
 
-        Returns
-        -------
-        r : DataFrame
-            multi-indexed by permno, date
-
-        Examples
-        --------
-        t = crsp.get_section('shares', ['shrenddt','shrout'], 'shrsdt', date)
-        u = crsp.get_section('names', ['nameendt','comnam'], 'date', date-10000)
+        Returns:
+            DataFrame multi-indexed by permno, date
         """
         assert(fields)
-        if types.is_list_like(fields):
-            if isinstance(fields, dict):
-                rename = fields
-                fields = list(fields.keys())
-            else:
-                rename = {k:k for k in fields}
+        if isinstance(fields, dict):
+            rename = fields
+            fields = list(fields.keys())
         else:
-            rename = None
-            fields = [fields]
+            rename = {k:k for k in fields}
         if self.identifier not in fields:
             fields += [self.identifier]
+
         rkey = f"CRSP_{'_'.join(fields)}_{beg}_{end}"
+
         if self.rdb and use_cache and self.rdb.redis.exists(rkey):
             self._print('(get_range load)', rkey)
             return self.rdb.load(rkey)
         q = ("SELECT {fields}, {date_field} FROM {table} WHERE "
              " {date_field} >= {beg} AND {date_field} <= {end}").format(
                  fields=", ".join(fields),
-                 table=self[dataset],
+                 table=self[dataset].key,
                  date_field=date_field,
                  beg=beg,
                  end=end)
@@ -829,30 +844,19 @@ class Stocks(Structured):
             self.rdb.dump(rkey, r)
         return r
 
-    def use_monthly(self, beg, end):
-        """Check if is bus month beg and end, and exists 'monthly' table"""
+    def _use_monthly(self, beg, end):
+        """Check beg and end align with bus month, and monthly table exists"""
         if 'monthly' in self.tables_:
             return beg <= self.bd.begmo(beg) and end >= self.bd.endmo(end)
         return False
 
 
 class Benchmarks(Stocks):
-    """Provide structured stocks data interface to benchmark and index returns
+    """Provide Structured Stocks interface to benchmark and index returns"""
 
-    Parameters
-    ----------
-    sql : SQL instance
-        Connection to mysql database
-    bd: BusDay instance
-        Custom business calendar object
-
-    Attributes
-    ----------
-    identifier: 'permno'
-        Field name of unique identifier key
-    """
-
-    def __init__(self, sql, bd, echo=ECHO):
+    def __init__(self, sql: SQL, 
+                       bd: BusDay, 
+                       verbose: int = _VERBOSE):
         """Initialize connection to a benchmark index returns dataset"""
         tables = {
             'daily': sql.Table(
@@ -867,60 +871,124 @@ class Benchmarks(Stocks):
                 Column('item', String(8)))}
         tables['monthly'] = tables['daily']
         super().__init__(sql, bd, tables, identifier='permno',
-                         name='benchmarks', echo=echo)
+                         name='benchmarks', verbose=verbose)
     
-    def load_series(self, df, name='', item=''):
+    def load_series(self, df: DataFrame, 
+                          name: str = '', 
+                          item: str = '', 
+                          monthly: bool = False) -> DataFrame:
         """Loads a Series containing benchmark returns to sql
 
-        Parameters
-        ----------
-        df : Series
-            Each column is a time-series to load to sql
-        name: str
-            Primary label for this source to insert into ident table
-        item: str
-            Secondary label for this source to insert into ident table
+        Args:
+            df : DataFrame with time-series in each column to load to sql
+            name: Primary label for this source to insert into ident table
+            item: Secondary label for this source to insert into ident table
+            monthly: if True: convert index to business calendar endmo dates
 
-        Notes
-        -----
-        Each column of input data frame is loaded to sql table 'daily',
-        with its series name as 'permno' field, values as 'ret' field,
-        and series index as 'date' field.
+        Returns:
+            DataFrame of identifiers metadata for series successfully loaded
+
+        Notes:
+
+        - Each column of input data frame is loaded to sql table 'daily',
+          with its series name as 'permno' field, values as 'ret' field,
+          and series index as 'date' field.
+        - 'idents' table in sql is also updated with identifier and metadata    
         """
         self['daily'].create(checkfirst=True)
         permno = df.name
         df = df.rename('ret').to_frame()
         df['permno'] = permno
-        delete = self['daily'].delete().where(self['daily'].c['permno']==permno)
-        self.sql.run(delete)
+        self.sql.run(self['daily'].delete()\
+                     .where(self['daily'].c['permno'] == permno))
         self.sql.load_dataframe(self['daily'].key, df=df, index_label='date')
-        self['ident'].create(checkfirst=True)
-        delete = self['ident'].delete().where(self['ident'].c['permno']==permno)
-        self.sql.run(delete)
-        ident = DataFrame.from_dict({0: {'permno': permno, 'name': name,
-                                         'item':item}}, orient='index')
-        self.sql.load_dataframe(self['ident'].key, df=ident)
-        return permno
 
+        self['ident'].create(checkfirst=True)
+        self.sql.run(self['ident'].delete()\
+                    .where(self['ident'].c['permno'] == permno))
+        ident = DataFrame.from_dict({0: {'permno': permno,
+                                         'name': name,
+                                         'item':item}},
+                                    orient='index')
+        self.sql.load_dataframe(self['ident'].key, df=ident)
+        return ident
+
+import pandas_datareader as pdr
+
+class FFReader:
+    """Wraps over pandas_datareader to extract FamaFrench factors
+
+    Attributes:
+        _datasets: List of common FF factors/industries
+    """
+    _datasets: List[Tuple[str, int, str]] = [
+        ('F-F_Research_Data_5_Factors_2x3_daily', 0, ''),
+        ('F-F_Research_Data_5_Factors_2x3', 0, '(mo)'),
+        ('F-F_Research_Data_Factors_daily', 0, ''),
+        ('F-F_Research_Data_Factors', 0, '(mo)'),   # "(mo)" for monthly
+        ('F-F_Momentum_Factor_daily', 0, ''),
+        ('F-F_Momentum_Factor', 0, '(mo)'),
+        ('F-F_LT_Reversal_Factor_daily', 0, ''),
+        ('F-F_LT_Reversal_Factor', 0, '(mo)'),
+        ('F-F_ST_Reversal_Factor_daily', 0, ''),
+        ('F-F_ST_Reversal_Factor', 0, '(mo)'),
+        ('49_Industry_Portfolios_daily', 0, '49vw'), # append suffix
+        ('48_Industry_Portfolios_daily', 0, '48vw'), #  to differentiate
+        ('49_Industry_Portfolios_daily', 1, '49ew'), #  value-weighted vs
+        ('48_Industry_Portfolios_daily', 1, '48ew')] #  equal-weighted
+
+    @staticmethod
+    def fetch(name: str, 
+              item: int = 0, 
+              suffix: str = '', 
+              start: int = 19260101, 
+              end: int = 20271231, 
+              date_formatter = lambda x: x) -> DataFrame:
+        """Retrieve item and return as DataFrame
+
+        Args:
+            name: Name of research factor in Ken French website
+            item: Index of item to research (e.g. 0 is usually value-weighted)
+            suffix: Suffix string to append to name when stored in sql
+            start: earliest date to retrieve
+            end: latest date to retrieve 
+            date_formatter: to reformat dates, e.g. bd.offset or bd.endmo
+        """
+        start = to_datetime(start)
+        end = to_datetime(end)
+        df = pdr.data.DataReader(name=name,
+                                 data_source='famafrench',
+                                 start=start,
+                                 end=end)[item]
+        try:
+            df.index = df.index.to_timestamp()
+        except:
+            pass     # else invalid comparison error!
+        df = df[(df.index >= start) & (df.index <= end)]
+        df.index = [date_formatter(d) for d in df.index]
+        df.columns = [c.rstrip() + suffix for c in df.columns]
+        df.where(df > -99.99, other=np.nan, inplace=True)  # replace NaNs
+        df = df / 100   # change percentage returns in source to decimals
+        return df
 
 class CRSP(Stocks):
-    """Provide interface to CRSP structured stocks data sets
+    """Implements an interface to CRSP structured stocks datasets
 
-    Parameters
-    ----------
-    sql : SQL instance
-        Connection to mysql database
-    dates: BusDates instance
-        Business dates object
-    rdb : Redis instance, optional (default None)
-        Redis store to cache common query results
+    Args:
+        sql: Connection to mysql database
+        dates: Business dates object
+        rdb: Optional connection to Redis for caching selected query results
 
-    Notes
-    -----
-    Earliest CRSP prc 19251231, FF 19260701 (except STRev daily 19260126)
+    Notes:
+
+    - Earliest CRSP prc is 19251231, FF is 19260701 
+      (except STRev daily is 19260126)
     """
 
-    def __init__(self, sql, bd, rdb=None, echo=ECHO):
+    def __init__(self, sql: SQL, 
+                       bd: BusDay, 
+                       rdb: Redis | None = None, 
+                       verbose: int = _VERBOSE):
         """Initialize connection to CRSP datasets"""
         tables = {
             'daily': sql.Table(
@@ -936,6 +1004,7 @@ class CRSP(Stocks):
                 Column('bid', Float),
                 Column('ask', Float),
                 Column('shrout', Integer, default=0),
+#                Column('shrout', Float),
                 Column('openprc', Float),
             ),
             'shares': sql.Table(
@@ -1003,57 +1072,67 @@ class CRSP(Stocks):
             )
         }
         super().__init__(sql, bd, tables, identifier='permno', name='CRSP',
-                         rdb=rdb, echo=echo)
+                         rdb=rdb, verbose=verbose)
 
-    def build_lookup(self, source, target, date_field='date',
-                     table='names', fillna=None):
-        """Builds callable to look-up record by identifier and prevailing date"""
-        if not (source in self[table].c and target in self[table].c):
-            raise Exception(f"{source} and {target} must be in {table}")
-        return self._lookup(self.sql, source, target, date_field,
-                            self[table].key, fillna)
+    def build_lookup(self, source: str, target: str, date_field='date', 
+                     dataset: str = 'names', fillna: Any = 0) -> Any:
+        """Build lookup function to return target identifier from source"""
+        return super().build_lookup(source=source, target=target,
+                                    date_field=date_field, dataset=dataset,
+                                    fillna=fillna)
 
-    def get_cap(self, date, use_cache=True, use_daily=True, use_permco=True):
+    def get_cap(self, date: int, 
+                      use_cache: bool | None = True, 
+                      use_daily: bool = True, 
+                      use_permco: bool = True) -> Series:
         """Compute a cross-section of market capitalization values
 
-        Parameters
-        ----------
-        date : int
-            As of YYYYMMDD date format
-        use_cache: bool, default is True (both read, if exists, and write cache)
-            If False, then write but not read cache.  None to ignore cache
-        use_daily: bool, default is True
-            If True, use shrout from 'daily' table, else from 'shares' table
-        use_permco: bool, default is True
-            If True, sum caps by permco (default), else by original permno
+        Args:
+            date: YYYYMMDD int date of market cap
+            use_cache: Is True, then both read and write cache; if False, then
+                write but not read cache; If None, then ignore cache
+            use_daily: If True, use shrout from 'daily' table, else 'shares'
+            use_permco: If True, sum caps by permco, else by permno
+
+        Returns:
+            Series of market cap indexed by permno
         """
         rkey = f"cap{'co' if use_permco else ''}_{str(self)}_{date}"
         if self.rdb and use_cache and self.rdb.redis.exists(rkey):
             self._print('(get_cap load)', rkey)
-            return self.rdb.load(rkey)
+            return self.rdb.load(rkey)['cap']
         if use_daily:   # where 'daily' table contains 'shrout'
-            cap = self.get_section(dataset='daily', fields=['prc', 'shrout'],
-                                   date_field='date', date=date)
+            cap = self.get_section(dataset='daily', 
+                                   fields=['prc', 'shrout'],
+                                   date_field='date', 
+                                   date=date)
             df = DataFrame(cap['shrout'] * cap['prc'].abs(), columns=['cap'])
         else:   # else get 'shrout' from 'shares' table
-            permnos = list(self.get_section(
-                dataset='daily', fields=[self.identifier], date_field='date',
-                date=date).index)
+            permnos = list(self.get_section(dataset='daily',
+                                            fields=[self.identifier],
+                                            date_field='date',
+                                            date=date).index)
             self._print('LENGTH PERMNOS =', len(permnos))
 
-            prc = self.get_section(dataset='daily', fields=['prc'],
-                                   date_field='date', date=date).reindex(permnos)
-            self._print('NULL PRC =', sum(prc['prc'].isna()))
+            prc = self.get_section(dataset='daily',
+                                   fields=['prc'],
+                                   date_field='date',
+                                   date=date).reindex(permnos)
+            self._print('NULL PRC =', prc['prc'].isna().sum())
 
-            shr = self.get_section(dataset='shares', fields=['shrout'],
-                                   date_field='shrsdt', date=date,
+            shr = self.get_section(dataset='shares',
+                                   fields=['shrout'],
+                                   date_field='shrsdt',
+                                   date=date,
                                    start=0).reindex(permnos)
-            self._print('NULL SHR =', sum(shr['shrout'].isna()))
+            self._print('NULL SHR =', shr['shrout'].isna().sum())
 
             df = DataFrame(shr['shrout'] * prc['prc'].abs(), columns=['cap'])
         if use_permco:
-            df = df.join(self.get_section(dataset='names', fields=['permco'],
-                                          date_field='date', date=date,
+            df = df.join(self.get_section(dataset='names',
+                                          fields=['permco'],
+                                          date_field='date',
+                                          date=date,
                                           start=0).reindex(df.index))
             sumcap = df.groupby(['permco'])[['cap']].sum()
             df = df[['permco']].join(sumcap, on='permco')[['cap']]
@@ -1062,75 +1141,81 @@ class CRSP(Stocks):
         if self.rdb and use_cache is not None:
             self._print('(get_cap dump)', rkey)
             self.rdb.dump(rkey, df)
-        return df
+        return df['cap']
 
-    def get_universe(self, date, minprc=0.0, use_cache=True):
-        """Return screened standard CRSP universe of US-domiciled common stocks
+    def get_universe(self, date: int, 
+                           minprc: float = 0.0, 
+                           use_cache : bool | None = True) -> DataFrame:
+        """Return standard CRSP universe of US-domiciled common stocks
 
-        Parameters
-        ----------
-        date: int
-            Desired rebalance date (YYYYMMDD)
-        minprc: float, default 0.0
-            Minimum share price
-        use_cache: bool, default is True (read, if exists, and write cache)
-            If False, then write but not read cache.  None to ignore cache
+        Args:
+            date: Rebalance date (YYYYMMDD)
+            minprc: Minimum share price filter
+            use_cache: If True, then read and write cache; if False, then
+                write but not read cache; If None then ignore cache
 
-        Returns
-        -------
-        DataFrame
-            Valid universe, indexed by permno, with columns: 
-            market cap "decile" (1..10), "nyse" bool, and "siccd", "prc", "cap"
+        Returns:
+            DataFrame of screened universe, indexed by permno, with columns: 
+            market cap "decile" (1..10), "nyse" bool, "siccd", "prc", "cap"
 
-        Notes
-        -----
-        market cap must be available on date, with prc > 0.0
-        shrcd isin [10, 11], exchcd isin [1, 2, 3]
+        Notes:
+
+        - Market cap must be available on date, with prc > 0.0
+        - shrcd in [10, 11], exchcd in [1, 2, 3]
+        - TODO: market cap by permco
         """
         rkey = "_".join(["universe", str(self), str(date)])
         if use_cache and self.rdb and self.rdb.redis.exists(rkey):
             self._print('(get_universe load)', rkey)
-            return self.rdb.load(rkey)
-        df = self.get_section(dataset='daily', fields=['prc', 'shrout'],
-                              date_field='date', date=date)
-        df['cap'] = df['shrout'] * df['prc'].abs()
-        df = df.join(self.get_section(dataset='names',
-                                      fields=['shrcd','exchcd','siccd','naics'],
-                                      date_field='date', date=date, start=0),
-                     how='left')
-        self._print('LENGTH PERMNOS', str(len(df)))
-        self._print('PRC NULL:', sum(df['prc'].isna()),
-                      'NEG:', sum(df['prc'] <= 0))
-        self._print('SHR ZERO:', sum(df.shrout <= 0))
-        self._print('CAP NON-POSITIVE:', len(df) - sum(df.cap.gt(0)))
+            df = self.rdb.load(rkey)
+        else: 
+            df = self.get_section(dataset='daily',
+                                  fields=['prc', 'shrout'],
+                                  date_field='date',
+                                  date=date)
+            df['cap'] = df['shrout'] * df['prc'].abs()
 
-        df = df[df['cap'].notna() & df['cap'].gt(0) & df['prc'].abs().gt(minprc)
-                & df['shrcd'].isin([10, 11]) & df['exchcd'].isin([1, 2, 3])]
-        df['nyse'] = df['exchcd'].eq(1)                    # nyse indicator
-        df['decile'] = fractiles(values=df['cap'],         #  size deciles 
-                                 pctiles=np.arange(10, 100, 10),
-                                 keys=df.loc[df['nyse'], 'cap'], ascending=False)
-        df = df[['cap', 'decile', 'nyse', 'siccd', 'prc', 'naics']]
-        if use_cache is not None and self.rdb:
-            self._print('(get_universe dump)', rkey)
-            self.rdb.dump(rkey, df)
-        return df
+            #
+            # TODO: market cap by permco
+            #
+            
+            df = df.join(self.get_section(dataset='names',
+                                          fields=['shrcd', 'exchcd',
+                                                  'siccd', 'naics'],
+                                          date_field='date',
+                                          date=date,
+                                          start=0),
+                         how='left')
+            self._print('LENGTH PERMNOS', str(len(df)))
+            self._print('PRC NULL:', df['prc'].isna().sum(),
+                        'NEG:', df['prc'].le(0).sum())
+            self._print('SHR ZERO:', df['shrout'].le(0).sum())
+            self._print('CAP NON-POSITIVE:', len(df) - df['cap'].gt(0).sum())
+            
+            df = df[df['cap'].gt(0) & 
+                    df['shrcd'].isin([10, 11]) &
+                    df['exchcd'].isin([1, 2, 3])]
+            df['nyse'] = df['exchcd'].eq(1)                    # nyse indicator
+            df['decile'] = fractiles(values=df['cap'], # size deciles 
+                                     pct=np.arange(10, 100, 10),
+                                     keys=df.loc[df['nyse'], 'cap'],
+                                     ascending=False)
+            df = df[['cap', 'decile', 'nyse', 'siccd', 'prc', 'naics']]
+            if use_cache is not None and self.rdb:
+                self._print('(get_universe dump)', rkey)
+                self.rdb.dump(rkey, df)
+        return df[df['prc'].abs().gt(minprc)] if minprc > 0.0 else df
 
-    def get_divamt(self, start, end):
+    def get_divamt(self, start: int, 
+                         end: int) -> DataFrame:
         """Accmumulates total dollar dividends between start and end dates
 
-        Parameters
-        ----------
-        start: int
-            Inclusive start date (YYYYMMDD)
-        end: int
-            Inclusive end date (YYYYMMDD)
+        Args:
+            start: Inclusive start date (YYYYMMDD)
+            end: Inclusive end date (YYYYMMDD)
 
-        Returns
-        -------
-        DataFrame
-            Accumulated divamt = per share divamt * shrout, indexed by permno
-
+        Returns:
+            DataFrame with accumulated divamts = per share divamt * shrout
         """
         q = ("SELECT {dist}.{identifier} AS {identifier}, "
              " SUM({table}.shrout * {dist}.divamt) AS divamt "
@@ -1146,27 +1231,24 @@ class CRSP(Stocks):
                  end=end)
         return self.sql.read_dataframe(q).set_index(self.identifier)
 
-    def get_dlstret(self, start, end, use_cache=True):
-        """Compound delisting returns from start to end dates for all permnos
+    def get_dlstret(self, start: int, 
+                          end: int, 
+                          use_cache: bool | None = True) -> Series:
+        """Compounded delisting returns from start to end dates for all permnos
 
-        Parameters
-        ----------
-        start: int
-            Inclusive start date (YYYYMMDD)
-        end: int
-            Inclusive end date (YYYYMMDD)
-        use_cache: bool, default is True (read, if exists, and write cache)
-            If False, then write but not read cache.  None to ignore cache
+        Args:
+            start: Inclusive start date (YYYYMMDD)
+            end: Inclusive end date (YYYYMMDD)
+            use_cache: If True, then read and write cache; if False, then
+                write but not read cache; If None then ignore cache
 
-        Returns
-        -------
-        DataFrame (possibly empty)
-            Compounded returns in column 'ret', indexed by permno
+        Returns:
+            Series of compounded returns
         """
         rkey = "_".join(["dlst", str(self), str(start), str(end)])
         if use_cache and self.rdb and self.rdb.redis.exists(rkey):
             self._print("(get_dlstret load)", rkey, str(self))
-            return self.rdb.load(rkey)
+            return self.rdb.load(rkey)['ret']
 
         q = ("SELECT (1+dlret) AS ret, {identifier} FROM {table} "
              "  WHERE dlstdt >= {start} AND dlstdt <= {end}").format(
@@ -1176,46 +1258,43 @@ class CRSP(Stocks):
                  end=end)
         self._print('(get_dlst)', q)
         df = self.sql.read_dataframe(q).sort_values(self.identifier)
-        df = (df.groupby(self.identifier).prod(min_count=1) - 1).dropna()
+        if len(df):
+            df = (df.groupby(self.identifier).prod(min_count=1)-1).dropna()
         if use_cache is not None and self.rdb:
             self._print("(get_dlstret dump)", rkey, str(self))
             self.rdb.dump(rkey, df)
-        return df
+        return df['ret']
 
-    def get_ret(self, start, end, *args, delist=False, **kwargs):
+    def get_ret(self, start: int, end: int, *args, 
+                      delist: bool = False, **kwargs) -> Series:
         """Get compounded returns, with option to include delist returns"""
         ret = super().get_ret(start, end, *args, **kwargs)
-        if (delist and 'delist' in self.tables_ and
-            self.use_monthly(start, end)):  # if using delist and monthly tables
+        if (delist and 'delist' in self.tables_        # if using delist and
+                and self._use_monthly(start, end)):    #   monthly tables
             dlst = self.get_dlstret(start, end)
-            permnos = list(set(ret.index).intersection(dlst.index))
+            permnos = ret.index.intersection(dlst.index)
             if len(permnos):
-                ret.loc[permnos,'ret'] = ((1 + ret.loc[permnos,'ret']) *
-                                          (1 + dlst.loc[permnos,'ret'])) - 1
+                ret[permnos] = (1+ret[permnos]) * (1+dlst[permnos]) - 1
         return ret
-
 
 class PSTAT(Structured):
     """Provide interface to Compustat structured data sets
 
-    Parameters
-    ----------
-    sql : SQL instance
-        Connection to mysql database
-    bd: BusDays instance
-        Custom business days object
+    Args:
+        sql: Connection to mysql database
+        bd: Custom business days object
 
-    Attributes
-    ----------
-    role_, event_ : Series
-        maps role or event id (in index) to description
+    Attributes:
+        _role: Reference Series mapping keydev role id to description
+        _event: Reference Series mapping keydev event id to description
 
-    Notes
-    -----
-    Screen on INDFMT= 'INDL', DATAFMT='STD', POPSRC='D', and CONSOL='C' 
-    to keep vast majority of records and uniquely identifies GVKEY, DATADATE.
+    Notes:
+
+    - Screen on (INDFMT= 'INDL', DATAFMT='STD', POPSRC='D', and CONSOL='C') 
+      keeps majority of records and uniquely identifies GVKEY, DATADATE.
     """
-    role_ = Series({   # Key Development role id labels
+
+    _role = Series({   # Key Development role id labels
         1: 'Target',
         2: 'Advisor',
         3: 'Buyer',
@@ -1227,7 +1306,8 @@ class PSTAT(Structured):
         9: 'TradingItemId',
         10: 'Auditor',
         11: 'Sponsor' }, name='role')
-    event_ = Series({   # Key Development event id labels
+
+    _event = Series({   # Key Development event id labels
         1: 'Seeking to Sell/Divest',            # may be "not sell"
         3: 'Seeking Acquisitions/Investments',
         5: 'Seeking Financing/Partners', # too general, mentions banks
@@ -1393,7 +1473,10 @@ class PSTAT(Structured):
         233: "Buyback Transaction Cancellations",
         234: "Buyback Transaction Closings"}, name='event')
     
-    def __init__(self, sql, bd, name='PSTAT', echo=ECHO):
+    def __init__(self, sql: SQL, 
+                       bd: BusDay, 
+                       name: str = 'PSTAT', 
+                       verbose = _VERBOSE):
         """Initialize connection to Compustat datasets"""
         tables = {
             'links': sql.Table(
@@ -1468,19 +1551,6 @@ class PSTAT(Structured):
                     'txt', 'txw', 'wcap', 'xacc', 'xad',
                     'xido', 'xidoc', 'xint', 'xlr', 'xopr',
                     'xpp', 'xpr', 'xrd', 'xrdp', 'xrent', 'xsga'
-                    #'aco','act','ao','ap','at',
-                    #'capx','ceq','che','cogs','csho',
-                    #'cshrc','dcpstk','dcvt','dlc','dltt',
-                    #'dm','dp','drc','drlt',
-                    #'dv','dvt','ebit','ebitda','emp',
-                    #'fatb','fatl','gdwl','gwo',
-                    #'ib','intan','invt','lco','lct',
-                    #'lo','lt','ni','nopi','oancf',
-                    #'ob','pi','ppegt','ppent','pstk',
-                    #'pstkl','pstkrv','rect',
-                    #'revt','sale','scstkc','seq','spi',
-                    #'txditc','txfed','txfo',
-                    #'txp','txt','xad','xint','xrd','xsga'
                 ]),
             ),
             'quarterly': sql.Table(
@@ -1515,8 +1585,7 @@ class PSTAT(Structured):
                 Column('companyname', String(100)),
                 Column('keydeveventtypeid', SmallInteger, primary_key=True),
                 Column('keydevstatusid', SmallInteger, default=0),
-                Column('keydevtoobjectroletypeid', SmallInteger,
-                       primary_key=True),
+                Column('keydevtoobjectroletypeid', SmallInteger, primary_key=True),
                 Column('announcedate', Integer, primary_key=True),
                 Column('enterdate', Integer, default=0),
                 Column('gvkey', Integer, primary_key=True),
@@ -1540,74 +1609,88 @@ class PSTAT(Structured):
             ),
         }
         super().__init__(sql, bd, tables, identifier='gvkey', name=name,
-                         echo=echo)
+                         verbose=verbose)
 
-    def build_lookup(self, source, target, date_field='linkdt',
-                     table='links', fillna=None):
-        """Builds callable to look-up record by identifier and prevailing date"""
-        if not (source in self[table].c and target in self[table].c):
-            raise Exception(f"{source} and {target} must be in {table}")
-        return self._lookup(self.sql, source, target, date_field,
-                            self[table].key, fillna)
+    def build_lookup(self, source: str, target: str, date_field='linkdt', 
+                     dataset: str = 'links', fillna: Any = None) -> Any:
+        """Build lookup function to return target identifier from source"""
+        return super().build_lookup(source=source, target=target,
+                                    date_field=date_field, dataset=dataset,
+                                    fillna=fillna) 
 
-    def get_links(self, gvkeys, date):
-        """Return list of permnos mapped to gvkeys as of a prevailing date"""
-        return super().get_links(gvkeys, date, 'lpermno', 'linkdt')
+    def get_permnos(self, keys: List[str], date: int, link_perm='lpermno', 
+                    link_date: str ='date', permno='permno') -> DataFrame:
+        """Return list of permnos mapped to gvkeys as of a date
 
-    def get_linked(self, dataset, date_field, fields, where='', limit=None):
+        Args:
+            keys: Input list of gvkeys to lookup
+            date: Prevailing date of link        
+        """
+
+        return super().get_permnos(keys, date, link_perm='lpermno', 
+                                   link_date='date', permno='permno')
+
+    def get_linked(self, dataset: str, fields: List[str],
+                   date_field: str = 'datadate', link_perm: str = 'lpermno', 
+                   link_date: str = 'linkdt', where: str = '', 
+                   limit: int | str | None = None) -> DataFrame:
         """Query a pstat table, and return with linked crsp permno
 
-        Parameters
-        ----------
-        dataset: str
-            Dataset to query
-        date_field: str
-            Name of date field in pstat table to query
-        fields : list of string
-            Fields to return
-        where : string or dict (optional)
-            Sql where clause, as sql string or dict of {field : value}
-        limit : int (optional)
-            Maximum number of records to return (default None for all)
+        Args:
+            dataset: pstat dataset to query
+            fields : Names of fields to return
+            date_field: Name of date field in pstat table to query
+            link_date: Name of link date field in 'links' table
+            link_perm: Name of permno field in 'links' table
+            where : Sql where clause, as sql string (optional)
+            limit : Maximum number of records to return (optional)
 
-        Examples
-        --------
-        df = pstat.get_linked(dataset='annual', date_field='datadate',
-                fields=['ceq','pstkrv','pstkl','pstk'],
-                where='ceq > 0 and datadate>=19930104 and datadate<=20991231')
-        df = keydev.get_linked(dataset='keydev', date_field='announcedate',
+        Returns:
+            DataFrame containing result of query
+
+        Examples:
+
+        >>> df = pstat.get_linked(dataset='annual', date_field='datadate',
+                   fields=['ceq','pstkrv','pstkl','pstk'],
+                   where='ceq > 0 and datadate>=19930104 and datadate<=20991231')
+        >>> df = keydev.get_linked(dataset='keydev', date_field='announcedate',
                    fields=['companyname', 'keydeveventtypeid',
                    'keydevtoobjectroletypeid'],
                    where='', limit=''):
 
-        Notes
-        -----
-        select keydev.companyname, keydev.keydeveventtypeid,
-          keydev.keydevtoobjectroletypeid,
-          keydev.announcedate, keydev.gvkey, lpermno as permno
-        from keydev left join links
-          on keydev.gvkey = links.gvkey and links.linkdt =
-            (select max(c.linkdt) as linkdt from links c
-             where c.gvkey = keydev.gvkey and c.linkdt <= keydev.announcedate)
-        where lpermno is not null and keydev.gvkey > 0 and links.gvkey > 0
-          and announcedate >= 20180301
-        limit 100;
+        Notes:
+
+        ::
+
+            select keydev.companyname, keydev.keydeveventtypeid,
+            keydev.keydevtoobjectroletypeid,
+            keydev.announcedate, keydev.gvkey, lpermno as permno
+            from keydev left join links
+            on keydev.gvkey = links.gvkey and links.linkdt =
+                (select max(c.linkdt) as linkdt from links c
+                where c.gvkey = keydev.gvkey and c.linkdt <= keydev.announcedate)
+            where lpermno is not null and keydev.gvkey > 0 and links.gvkey > 0
+            and announcedate >= 20180301
+            limit 100;
+
         """
-        return super().get_linked(dataset, date_field, fields, 'lpermno',
-                                  'linkdt', where=where, limit=limit)
 
-    
+        return super().get_linked(dataset=dataset, date_field=date_field,
+                fields=fields, link_perm='lpermno', link_date='linkdt', 
+                where=where, limit=limit)
+
 class IBES(Structured):
-    """Provide interface to IBES analyst estimates structured data sets
-
-    Parameters
-    ----------
-    sql : SQL instance
-        Connection to SQL database
-    bd: BusDays instance
-        Custom business days object
+    """Provide interface to IBES analyst estimates structured datasets
+    
+    Args:
+        sql: Connection to SQL database
+        bd: Custom business day calendar object
     """
-    def __init__(self, sql, bd, name='IBES', echo=ECHO):
+
+    def __init__(self, sql: SQL, 
+                       bd: BusDay, 
+                       name='IBES', 
+                       verbose=_VERBOSE):
         """Initialize a connection to IBES datasets"""
         tables = {
             'summary': sql.Table(
@@ -1678,15 +1761,14 @@ class IBES(Structured):
             ),
         }
         super().__init__(sql, bd, tables, identifier='ticker', name=name,
-                         echo=echo)
+                         verbose=verbose)
 
-    def build_lookup(self, source, target, date_field='sdates',
-                     table='ident', fillna=None):
-        """Builds callable to look-up by identifier and prevailing date"""
-        if not (source in self[table].c and target in self[table].c):
-            raise Exception(f"{source} and {target} must be in {table}")
-        return self._lookup(self.sql, source, target, date_field,
-                            self[table].key, fillna)
+    def build_lookup(self, source: str, target: str, date_field='sdates', 
+                     dataset: str = 'ident', fillna: Any = None) -> Any:
+        """Build lookup function to return target identifier from source"""
+        return super().build_lookup(source=source, target=target,
+                                    date_field=date_field, dataset=dataset,
+                                    fillna=fillna) 
 
     def write_links(self):
         """Create links table by merging 'ident' and CRSP 'names' on cusip-8"""
@@ -1705,174 +1787,213 @@ class IBES(Structured):
              f"  COUNT(*) AS count FROM {self['links'].key}")
         return self.sql.read_dataframe(q)
 
-    def get_links(self, tickers, date):
-        """Return list of permnos mapped to tickers as of a prevailing date"""
-        return super().get_links(tickers, date, 'permno', 'sdates')
+    def get_permnos(self, keys: List[str], 
+                          date: int, 
+                          link_perm: str = 'permno', 
+                          link_date: str = 'sdates', 
+                          permno: str = 'permno') -> DataFrame:
+        """Return list of permnos mapped to IBES tickers as of a date
 
-    def get_linked(self, dataset, date_field, fields, where='', limit=None):
+        Args:
+            keys: Input list of IBES tickers to lookup
+            date: Prevailing date of link        
+        """
+        return super().get_permnos(keys, date, link_perm='lpermno', 
+                link_date='date', permno='permno')
+                
+    def get_linked(self, dataset: str, 
+                         fields: List[str], 
+                         date_field: str = 'statpers', 
+                         link_perm: str = 'permno', 
+                         link_date: str = 'sdates', 
+                         where: str = '', 
+                         limit: int | str | None = None) -> DataFrame:
         """Query an ibes table, and return with linked crsp permnos
 
-        Parameters
-        ----------
-        dataset: str
-            Dataset to query
-        date_field: str
-            Name of date field in ibes table to query
-        fields : list of string
-            Fields to return
-        where : string or dict (optional)
-            Sql where clause, as sql string or dict of {field : value}
-        limit : int (optional)
-            Maximum number of records to return (default None for all)
+        Args:
+            dataset: Dataset to query
+            fields : Fields to return
+            date_field: Name of date field in ibes table to query
+            link_perm: Name of permno field in links table
+            link_date: Name of match date in links table
+            where : Sql where clause, as sql string
+            limit : Max number of records to return
 
-        Examples
-        --------
-        ibes.get_linked('ident', date_field='statpers', fields=['cname']):
+        Examples:
 
-        # where fpi='6'  /* 1 is for annual forecasts, 6 is for quarterly */
-        # and statpers < ANNDATS_ACT /* forecasts prior to earnings annoucement
-        # and measure='EPS' and not missing(medest)
-        # and not missing(fpedats)  and (fpedats-statpers)>=0;
-        # (fpedats-statpers)>=0;
+        >>> ibes.get_linked('ident', fields=['cname'], date_field='statpers'):
+
+        Notes:
+
+        ::
+
+            where fpi='6'  /* 1 is for annual forecasts, 6 is for quarterly */
+            and statpers < ANNDATS_ACT /* forecasts prior to earnings annoucement
+            and measure='EPS' and not missing(medest)
+            and not missing(fpedats)  and (fpedats-statpers)>=0;
+            (fpedats-statpers)>=0;
         """
-        return super().get_linked(dataset, date_field, fields, 'permno',
-                                  'sdates', where=where, limit=limit)
 
-class chunk_stocks:
-    """Cached daily returns, to provide Stocks-like interface"""
+        return super().get_linked(dataset=dataset, fields=fields, 
+                date_field=date_field, link_perm='permno', link_date=link_date,
+                where=where, limit=limit)
+
+class StocksBuffer(Stocks):
+    """Cache daily returns into memory, and provide Stocks-like interface"""
     
-    def __init__(self, stocks, beg, end, fields=['ret', 'retx'],
-                 identifier='permno'):
+    def __init__(self, stocks: Stocks, 
+                       beg: int, 
+                       end: int, 
+                       fields: List[str] = ['ret', 'retx'], 
+                       identifier: str = 'permno'):
         """Create object and load daily returns into its cache
 
-        Parameters
-        ----------
-        stocks : Stocks structured data object
-           To access stock returns data
-        beg : int
-            Earliest date of daily stock returns to load
-        end : int
-            Latest date of daily stock returns to load
-        fields : str list, default is ['ret', 'retx']
-            Column names of returns fields to load
+        Args:
+            stocks: Stocks structured data object to access stock returns data
+            beg: Earliest date of daily stock returns to pre-load
+            end: Latest date of daily stock returns to pre-load
+            fields : Column names of returns fields to load
         """
-        q = (f"SELECT permno, date, {', '.join(fields)} FROM "
-             f" {stocks['daily'].key} WHERE date>={beg} AND date<={end}")
+        q = (f"SELECT permno, date, {', '.join(fields)} "
+             f"  FROM {stocks['daily'].key}"
+             f"  WHERE date>={beg} AND date<={end}")
         self.rets = stocks.sql.read_dataframe(q).sort_values(['permno', 'date'])
         self.fields = fields
         self.identifier = identifier
         self.bd = stocks.bd
 
-    def get_ret(self, beg, end, fields=None):
-        """Return compounded stock returns between beg and end dates"""
-        df = self.rets[self.rets['date'].between(beg,end)].drop(columns=['date'])
+    def get_ret(self, beg: int, end: int, field: str = 'ret') -> Series:
+        """Return compounded stock returns between beg and end dates
+
+        Args:
+            beg: Begin date to compound returns
+            end: End date (inclusive) to compound returns
+            field: Name of returns field in dataset, in {'ret', 'retx')
+        """
+        df = self.rets[self.rets['date'].between(beg, end)]\
+            .drop(columns=['date'])
         df.loc[:, self.fields] += 1
         df = (df.groupby(self.identifier).prod(min_count=1) - 1).fillna(0)
-        return df[fields or self.fields]
+        return df[field]
 
-class chunk_signal:
-    """Cache dataframe of signals values, provide Signals-like interface"""
-    def __init__(self, df, identifier='permno'):
-        """Initialize instance from input dataframe"""
-        self.data = df
+
+class StocksFrame(Stocks):
+    """Mimic Stocks object given an input DataFrame of returns
+    
+    Args:
+        df: DataFrame of returns with date in index and permno in columns
+        rsuffix: replicate output columns and append rsuffix to column name
+        identifier: name of identifier column
+
+    Notes:
+
+    - limited interface to manipulate DataFrame of asset returns as Stocks-like
+    """
+
+    class bd:
+        """Class to mimic basic behavior of BusDay object"""
+        @staticmethod
+        def begmo(date: int | List[int]) -> int | List[int]:
+            """Returns same date"""
+            return date
+
+        @staticmethod
+        def endmo(date: int | List[int]) -> int | List[int]:
+            """Returns same date"""
+            return date
+
+        @staticmethod
+        def date_tuples(dates: List[int]) -> List[Tuple[int, int]]:
+            """Returns adjacent dates as the holding date tuples"""
+            return list(zip(dates[1:], dates[1:]))
+
+    def __init__(self, df: DataFrame, 
+                       rsuffix: str = '', 
+                       identifier: str = 'permno'):
+        self.data = DataFrame(df)
+        if rsuffix is not None:
+            self.data = self.data.join(self.data, how='left', rsuffix=rsuffix)
         self.identifier = identifier
 
-    def __call__(self, label, date, start, rebaldate='rebaldate'):
-        """Select from rebaldates that fall between start and date, keep latest
+    def get_series(self, permnos: str | int | List[str | int], 
+                         *arg, **kwarg) -> Series:
+        """Return the series for target permnos"""
+        return self.data[permnos]
 
-        Parameters
-        ----------
-        label : str
-            Column to return
-        date : int
-            End date
-        start : int
-            Non-inclusive start date. Set to [0] for all, 
-            [previous busday] for exact date, [previous endmo] for any in month
-        rebaldate: str, optional (default = 'rebaldate')
-            Column name of rebaldate
-        """        
-        df = self.data.loc[self.data[rebaldate].le(date) &
-                           self.data[rebaldate].gt(start),
-                           [self.identifier, rebaldate, label]]
-        df = df.sort_values([self.identifier, rebaldate], na_position='first')\
-               .drop_duplicates([self.identifier], keep='last').dropna()
-        return df.set_index(self.identifier)
+    def get_ret(self, start: int, end: int, *args, **kwargs) -> Series:
+        """Compounded returns between start and end (inclusive) dates"""
+        df = DataFrame((self.data.loc[(self.data.index >= start)
+                                      & (self.data.index <= end)]
+                        + 1).prod() - 1)
+        df.columns = ['ret']
+        df.index.name = self.identifier
+        return df['ret']
 
 class Signals(Stocks):
     """Provide structured stocks data interface to derived signal values 
 
-    Parameters
-    ----------
-    sql : SQL instance
-        Connection to SQL database
+    Args:
+        sql: Connection to SQL database
     """
-    def __init__(self, sql, echo=ECHO):
+    def __init__(self, sql: SQL, verbose=_VERBOSE):
         """Initalize a connection to derived Signals values datasets"""
-        super().__init__(sql, bd=None, tables=None, identifier='permno',
-                         name='signals', echo=echo)
+        super().__init__(sql=sql, bd= None, tables={}, identifier='permno', 
+                         name='signals', verbose=_VERBOSE)
 
-    def __call__(self, label, date, start=None):
+    def __call__(self, label: str, 
+                       date: int, 
+                       start: int = -1, 
+                       rebaldate: str = 'rebaldate') -> DataFrame:
         """Return cross-section of signal values available as of a date
 
-        Parameters
-        ----------
-        label : str
-            Name of signal to retrieve
-        date : int
-            Rebalance date (YYYYMMDD format)
-        start : int (YYYYMMDD format), optional
-            Non-inclusive start date of range to search for signal value
-            (default None means exact date)
-        """
-        return self.get_section(dataset=label, fields=['rebaldate', label],
-                                date_field='rebaldate', date=date, start=start)
+        Args:
+            label: Name of signal to retrieve
+            date : Rebalance date
+            start : Non-inclusive start of date range; -1 means exact date
+            rebaldate: Name of rebalance date column
 
-    def table_key(self, label):
-        """Helper method generates table key name associated with label"""
+        Returns:
+            DataFrame of signal values prevailing as of input date
+        """
+        return self.get_section(dataset=label, fields=[rebaldate, label],
+                date_field=rebaldate, date=date, start=start)
+
+    def table_key(self, label: str) -> str:
+        """Helper method generates a table key name for the input label"""
         return '__' + label     # prefix with "__"
 
-    def __getitem__(self, label):
-        """Overrides class method to return Table schema of label"""
-        return self.sql.Table(
-            self.table_key(label),   # dynamically generate new table name
-            Column('permno', Integer, primary_key=True),
-            Column('rebaldate', Integer, primary_key=True),
-            Column(label, Float))
+    def __getitem__(self, label) -> Table:
+        """Overrides parent class method to get Table schema of label"""
+        return self.sql.Table(self.table_key(label),
+                              Column('permno', Integer, primary_key=True),
+                              Column('rebaldate', Integer, primary_key=True),
+                              Column(label, Float))
 
-    def summary(self, label):
+    def summary(self, label: str) -> DataFrame:
         """Perform a 'proc summary' by rebaldate on a signal's values"""
         return self.sql.summary(self.table_key(label), label, key='rebaldate')
 
-    def write(self, data, label, overwrite=True, rebaldate='rebaldate',
-              permno='permno'):
+    def write(self, data: DataFrame, label: str, overwrite: bool = True, 
+              rebaldate: str = 'rebaldate', permno: str = 'permno') -> int:
         """Saves a new sql table from dataframe of signal values
 
-        Parameters
-        ----------
-        data : DataFrame
-            Signal values, with columns = ['permno', 'rebaldate', label]
-        label : string
-            Name of signal. becomes name of column and table (prefixed by '__')
-        overwrite : bool, optional (default is True)
-            If False, append to table ignoring duplicates. Else recreate table
-        permno : string (optional), default is 'permno'
-            Column name of permno identifiers in input dataframe
-        rebaldate : string (optional), default is 'rebaldate'
-            Column name of rebalance dates in input dataframe
+        Args:
+            data: Signal values, with columns ['permno', 'rebaldate', label]
+            label: Signal name of column and table (prefixed '__')
+            overwrite: If False, append to table ignoring dups. Else recreate
+            rebaldate: Column name of rebalance dates in input dataframe
+            permno: Column name of permno identifiers in input dataframe
 
-        Returns
-        -------
-        n : int
-            number of rows saved
+        Returns:
+            Number of rows saved
 
-        Notes
-        -----
-        first removes duplicate keys, and drops null rows before saving to table
+        Notes:
+
+        - first removes dup keys, then drops null rows before saving to table
         """
 
         df = data[[permno, rebaldate, label]].copy()
-        df.index.name = None # 'permno' may be both index level and column label
+        df.index.name = None # 'permno' may be both index level or column label
         df = df.rename(columns={permno: 'permno', rebaldate: 'rebaldate'})
         table = self[label]
         df = as_dtypes(df=df, columns={k.lower(): v.type
@@ -1888,215 +2009,92 @@ class Signals(Stocks):
         self._print("(signals_write)", label, len(df))
         return len(df)
 
-    def read(self, label, where=''):
+    def read(self, label: str, where: str = '') -> DataFrame:
         """Read signal values from sql and return as data frame
 
-        Parameters
-        ----------
-        label : str
-            Name of signal
-        where : dict or str
-            Where conditions
+        Args:
+            label: Name of signal
+            where: Where clause for sql select
 
-        Returns
-        -------
-        df : DataFrame
-            columns = ['permno', 'rebaldate', label]
+        Returns:
+            DataFrame of query with columns = ['permno', 'rebaldate', label]
         """
-        where = parse_where(where, 'WHERE')
+        if where:
+            where = 'WHERE' + where
         table = self.table_key(label)
         q = f"SELECT permno, rebaldate, {label} FROM {table} {where}"
         return self.sql.read_dataframe(q).sort_values(['permno', 'rebaldate'])
 
-class Finder:
-    """This class builds a general method to lookup tables by any identifier"""
 
-    def __init__(self, sql, identifier=None, table=None):
-        """Initialize lookup method with optional identifier type and table
+class SignalsFrame(Signals):
+    """Cache dataframe of signals values, provide Signals-like interface"""
 
-        Examples
-        --------
-        find = Find(sql, identifier='comnam', table='names')
-        """
-        self.sql = sql
+    def __init__(self, df: DataFrame, identifier: str = 'permno'):
+        """Initialize instance from input dataframe"""
+        self.data = df
         self.identifier = identifier
-        self.table = table
 
-    def __call__(self, label, identifier=None, table=None, **kwargs):
-        """Lookup a label. Guesses identifier type and table if not specified
-        or initialized
+    def __call__(self, label: str, 
+                       date: int, 
+                       start: int = -1, 
+                       rebaldate: str = 'rebaldate') -> DataFrame:
+        """Select from rebaldates that fall between start and date, keep latest
 
-        Examples
-        --------
-        crsp name:   find('GOOG', 'comnam')
-        pstat name:  find('GOOG', 'conm')
-        ibes name:   find('GOOG', 'cname')
-        crsp permno: find(18144)
-        pstat gvkey: find(328795, 'gvkey')
-        ibes ticker: find('0011', 'ticker', 'ident')
-        crsp ticker: find('aapl')
-        crsp cusip : find('03783310')
-        pstat cusip: find('03783310','cusip','links')
-        ibes cusip : find('03783310','cusip','ident')
-
-        find('45483', 'permco', 'names')
+        Args:
+            label: Name of column to return
+            date: As of this date or possibly earlier
+            start: Non-inclusive start date. Set to 0 for all, -1 for exact 
+            rebaldate: Column name containing rebaldate
         """
-        if len(kwargs):
-            for k,v in kwargs.items():
-                identifier = k
-                label = v
-        label = str(label).upper()
-        if identifier is None:   # guess identifier if not specified
-            if self.identifier is not None:
-                identifier = self.identifier  # was initialized
-            elif len(label) == 5 and label.isnumeric():
-                identifier = 'permno'
-                label = int(label)
-            elif label.isnumeric():
-                identifier = 'gvkey'
-                label = int(label)
-            elif len(label) == 8 or len(label) == 9:
-                identifier = 'ncusip'
-                label = label[:8]
-            else:
-                identifier = 'tsymbol'
-        if table is None:   # guess table if not specified
-            if self.table is not None:
-                table = self.table           # was initialized
-            elif identifier in ['permno', 'ncusip', 'tsymbol', 'comnam']:
-                table = 'names'
-            elif identifier in ['gvkey', 'conm', 'cik']:
-                table = 'links'
-            else:
-                table = 'ident'
-        like = '='
-        if identifier in ['comnam', 'conm', 'cname']:
-            label = '%' + label.upper() + '%'
-            like = 'LIKE'  # for identifiers of str type, match with wildcard
-        elif identifier in ['permno', 'gvkey', 'cik']:
-            label = int(label)
-        elif identifier in ['ncusip', 'cusip']:
-            label = label[:8]
-        q = "SELECT * FROM {table} WHERE {identifier} {like} %s".format(
-            table=table, identifier=identifier, like=like)
-        result = self.sql.run(q, label)
-        return DataFrame(**result) if result is not None else None
+        if start < 0:
+            start = date - 1
+        df = self.data.loc[self.data[rebaldate].le(date) &
+                           self.data[rebaldate].gt(start),
+                           [self.identifier, rebaldate, label]]
+        df = df.sort_values([self.identifier, rebaldate],
+                            na_position='first')\
+               .drop_duplicates([self.identifier],
+                                keep='last')\
+               .dropna()
+        return df.set_index(self.identifier)
 
-def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend, 
-                     window=0, pctiles=[30, 70], leverage=1, months=[], 
-                     minobs=100, minprc=0, mincap=0, maxdecile=10,
-                     rebals='endmo'):
-    """Generate time series of holdings by two-way sort procedure
+def famafrench_sorts(stocks: Stocks, 
+                    label: str, 
+                    signals: Signals, 
+                    rebalbeg: int, 
+                    rebalend: int,
+                    window: int = 0, 
+                    pct: Tuple[float, float] = (30., 70.), 
+                    leverage: float = 1.,
+                    months: List[int] = [], 
+                    minobs: int = 100, 
+                    minprc: float = 0., 
+                    mincap: float = 0., 
+                    maxdecile: int = 10) -> Dict[str, Any]:
+    """Generate monthly time series of holdings by two-way sort procedure
 
-    Parameters
-    ----------
-    stocks : Structured object
-        Stock returns and price data
-    label : string
-        Signal name to retrieve either from Signal sql table or {data} dataframe
-    signals : Signals, or chunk_signal object
-        Call to extract cross section of values for the signal
-    rebalbeg : int
-        First rebalance date (YYYYMMDD)
-    rebalend : int
-        Last holding date (YYYYMMDD)
-    pctiles : tuple of int, default is [30, 70]
-        Percentile breakpoints to sort into high, medium and low buckets
-    window: int, optional (default 0)
-        Number of months to look back for signal values (non-inclusive day),
-        0 (default) is exact date
-    months: list of int, optional
-        Month/s (e.g. 6 = June) to retrieve universe and market cap,
-        [] (default) means every month
-    maxdecile: int, default is 10
-        Include largest stocks from decile 1 through decile (10 is smallest)
-    minobs: int, optional
-        Minimum required universe size with signal values
-    leverage: numerical, default is 1.0
-        Leverage multiplier, if any
-    rebals: str or list of int (default is 'endmo')
-        rebalance freq str, or list of rebaldates
+    Args:
+        stocks: Stocks object for accessing stock returns and price data
+        label: Name of signal to retrieve
+        signals: Call to extract cross section of values for the signal
+        rebalbeg: First rebalance date (YYYYMMDD)
+        rebalend: Last holding date (YYYYMMDD)
+        pct: Percentile breakpoints to sort high, medium and low buckets
+        window: No. of months to look back for signal values; 0 is exact month
+        months: Months (e.g. 6=June) to retrieve univ; empty for all months
+        maxdecile: Include largest stocks decile from 1 through maxdecile
+        mincap: Minimum market cap
+        minobs: Minimum required sample size with non-missing signal values
+        leverage: Multiplier for leverage or shorting
 
-    Notes
-    -----
-    Independent sort by median (NYSE) mkt cap and 30/70 (NYSE) HML percentiles
-    Subportfolios of the intersections are value-weighted; 
-       spread portfolios are equal-weighted subportfolios
-    Portfolio are resorted every June, and other months' holdings are adjusted 
-      by monthly realized retx
+    Notes:
+
+    - Independent sort by median (NYSE) mkt cap and 30/70 (NYSE) HML percentiles
+    - Subportfolios of the intersections are value-weighted; 
+    - Spread portfolios are equal-weighted of subportfolios
+    - Portfolio are resorted every June; and other months' holdings are 
+      adjusted by monthly realized retx (i.e. dividends not reinvested)
     """
-    if isinstance(rebals, str):
-        rebals = stocks.bd.date_range(rebalbeg, rebalend, freq=rebals)
-    else:
-        rebals = sorted(set(rebals).union([rebalbeg, rebalend]))
-    if months:   # identify rebals in range
-        keys = {k: [] for k in set([r//100 for r in rebals])
-                if k % 100 in months}
-        for r in rebals:
-            if (r // 100) in keys:
-                keys[r//100].append(r)
-        months = [max(v) for v in keys.values()]
-    holdings = {label: dict(), 'smb': dict()}  # to return two sets of holdings
-    sizes = {h : dict() for h in ['HB','HS','MB','MS','LB','LS']}
-    for rebal in rebals:  #[:-1]
-
-        # check if this is a rebalance month
-        if not months or rebal in months or not holdings[label]:
-            
-            # rebalance: get this month's universe of stocks with valid data
-            df = stocks.get_universe(rebal)
-            
-            # get signal values within lagged window
-            start = (stocks.bd.endmo(rebal, months=-abs(window)) if window
-                     else stocks.bd.offset(rebal, offsets=-1))
-            signal = signals(label=label, date=rebal, start=start)
-            df[label] = signal[label].reindex(df.index)
-
-            df = df[df['prc'].abs().gt(minprc) &
-                    df['cap'].gt(mincap) &
-                    df['decile'].le(maxdecile)].dropna()
-
-            if (len(df) < minobs):  # skip if insufficient observations
-                continue
-
-            # split signal into desired fractiles, and assign to subportfolios
-            df['fractile'] = fractiles(df[label],
-                                       pctiles=pctiles,
-                                       keys=df[label][df['nyse']],
-                                       ascending=False)
-            subs = {'HB' : (df['fractile'] == 1) & (df['decile'] <= 5),
-                    'MB' : (df['fractile'] == 2) & (df['decile'] <= 5),
-                    'LB' : (df['fractile'] == 3) & (df['decile'] <= 5),
-                    'HS' : (df['fractile'] == 1) & (df['decile'] > 5),
-                    'MS' : (df['fractile'] == 2) & (df['decile'] > 5),
-                    'LS' : (df['fractile'] == 3) & (df['decile'] > 5)}
-            weights = {label: dict(), 'smb': dict()}
-            for subname, weight in zip(['HB','HS','LB','LS'],
-                                       [0.5, 0.5, -0.5, -0.5]):
-                cap = df.loc[subs[subname], 'cap']
-                weights[label][subname] = leverage * weight * cap / cap.sum()
-                sizes[subname][rebal] = sum(subs[subname])
-            for subname, weight in zip(['HB','HS','MB','MS','LB','LS'],
-                                       [-0.5, 0.5, -0.5, 0.5, -0.5, 0.5]):
-                cap = df.loc[subs[subname], 'cap']
-                weights['smb'][subname] = leverage * weight * cap / cap.sum()
-                sizes[subname][rebal] = sum(subs[subname])
-            #print("(famafrench_sorts)", rebal, len(df))
-            
-        else:  # else not a rebalance month, so simply adjust holdings by retx
-            retx = 1 + stocks.get_ret(stocks.bd.offset(prevdate, 1),
-                                      rebal, field='retx')['retx']
-            for port, subports in weights.items():
-                for subport, old in subports.items():
-                    new = old * retx.reindex(old.index, fill_value=1)
-                    weights[port][subport] = new / (abs(np.sum(new))
-                                                    * len(subports) / 2)
-
-        # combine this month's subportfolios
-        for h in holdings:
-            holdings[h][rebal] = pd.concat(list(weights[h].values()))
-        prevdate = rebal
-    return {'holdings': holdings, 'sizes': sizes}
     rebaldates = stocks.bd.date_range(rebalbeg, rebalend, 'endmo')
     holdings = {label: dict(), 'smb': dict()}  # to return two sets of holdings
     sizes = {h : dict() for h in ['HB','HS','MB','MS','LB','LS']}
@@ -2109,21 +2107,24 @@ def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend,
             df = stocks.get_universe(rebaldate)
             
             # get signal values within lagged window
-            start = (stocks.bd.endmo(rebaldate, months=-abs(window)) if window
-                     else stocks.bd.offset(rebaldate, offsets=-1))
-            signal = signals(label=label, date=rebaldate, start=start)
+            if window:
+                start = stocks.bd.endmo(rebaldate, months=-abs(window))
+            else:
+                start = stocks.bd.offset(rebaldate, offsets=-1)
+            signal = signals(label=label,
+                             date=rebaldate,
+                             start=start)
             df[label] = signal[label].reindex(df.index)
 
-            df = df[df['prc'].abs().gt(minprc) &
-                    df['cap'].gt(mincap) &
-                    df['decile'].le(maxdecile)].dropna()
-
+            df = df[df['prc'].abs().gt(minprc)
+                    & df['cap'].gt(mincap)
+                    & df['decile'].le(maxdecile)].dropna()
             if (len(df) < minobs):  # skip if insufficient observations
                 continue
 
             # split signal into desired fractiles, and assign to subportfolios
             df['fractile'] = fractiles(df[label],
-                                       pctiles=pctiles,
+                                       pct=pct,
                                        keys=df[label][df['nyse']],
                                        ascending=False)
             subs = {'HB' : (df['fractile'] == 1) & (df['decile'] <= 5),
@@ -2147,7 +2148,8 @@ def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend,
             
         else:  # else not a rebalance month, so simply adjust holdings by retx
             retx = 1 + stocks.get_ret(stocks.bd.begmo(rebaldate),
-                                      rebaldate, field='retx')['retx']
+                                      rebaldate,
+                                      field='retx')
             for port, subports in weights.items():
                 for subport, old in subports.items():
                     new = old * retx.reindex(old.index, fill_value=1)
@@ -2158,108 +2160,229 @@ def famafrench_sorts(stocks, label, signals, rebalbeg, rebalend,
         for h in holdings:
             holdings[h][rebaldate] = pd.concat(list(weights[h].values()))
     return {'holdings': holdings, 'sizes': sizes}
+    
+class Finder:
+    """Builds a class to lookup identifiers from multiple datasets"""
 
-if False:
-    from settings import settings
-    import os
+    def __init__(self, sql: SQL, identifier: str = '', table: str = ''):
+        """Initialize lookup method with preferred identifier type and table
+
+        Args:
+            sql: SQL connection instance
+            identifier: Type of input identifier for this Finder instance
+            table: Physical name of table to query
+
+        Examples:
+
+        >>> find = Find(sql, identifier='comnam', table='names')
+        """
+
+        self.sql = sql
+        self.identifier = identifier
+        self.table = table
+
+    def __call__(self, label: str = '', 
+                       identifier: str = '', 
+                       table: str = '', 
+                       **kwargs) -> DataFrame:
+        """Lookup an identifier
+
+        Args:
+            label: Input label to lookup
+            identifier: Identifier type of input label
+            table: Physical name of table to query
+            kwargs: Alternate method to specify identifier=label
+
+        Notes:
+
+        Guesses identifier type and table if not specified or initialized
+
+        Examples:
+
+        >>> find('ALPHABET', 'comnam')
+        >>> find('ALPHABET', 'conm')
+        >>> find('ALPHABET', 'cname')
+        >>> find(18144)
+        >>> find(328795, 'gvkey')
+        >>> find('0011', 'ticker', 'ident')
+        >>> find('aapl')
+        >>> find('03783310')
+        >>> find('03783310','cusip','links')
+        >>> find('03783310','cusip','ident')
+        >>> find('45483', 'permco', 'names')
+        """
+
+        if len(kwargs):
+            for k, v in kwargs.items():
+                identifier = k
+                label = v
+        label = str(label).upper()
+        assert label
+        
+        if not identifier:   # guess identifier if not specified
+            if len(label) == 5 and label.isnumeric():
+                identifier = 'permno'
+                label = int(label)
+            elif label.isnumeric():
+                identifier = 'gvkey'
+                label = int(label)
+            elif len(label) == 8 or len(label) == 9:
+                identifier = 'ncusip'
+                label = label[:8]
+            else:
+                identifier = 'tsymbol'
+                
+        if not table:   # guess table if not specified
+            if identifier in ['permno', 'ncusip', 'tsymbol', 'comnam']:
+                table = 'names'
+            elif identifier in ['gvkey', 'conm', 'cik']:
+                table = 'links'
+            else:
+                table = 'ident'
+                
+        like = '='
+        if identifier in ['comnam', 'conm', 'cname']:
+            label = '%' + label.upper() + '%'
+            like = 'LIKE'  # for identifiers of str type, match with wildcard
+        elif identifier in ['permno', 'gvkey', 'cik']:
+            label = int(label)
+        elif identifier in ['ncusip', 'cusip']:
+            label = label[:8]
+        q = "SELECT * FROM {table} WHERE {identifier} {like} %s".format(
+            table=table, identifier=identifier, like=like)
+        result = self.sql.run(q, label)
+        return DataFrame(**result) if result is not None else None
+
+if __name__ == "__main__":
+#    from os.path import dirname, abspath
+#    sys.path.insert(0, dirname(dirname(abspath(__file__))))
+    from conf import credentials, _VERBOSE
+
     import glob
     import time
     from pandas import DataFrame, Series
     from finds.database import SQL, Redis
-    from finds.busday import BusDay, Weekly
-    from finds.structured import PSTAT, CRSP, IBES, Benchmarks, Signals
-    from finds.readers import fetch_FamaFrench
+    from finds.busday import BusDay, WeeklyDay
 
-if False:   # open all structured datasets
-    sql = SQL(**settings['sql'], echo=True)
-    user = SQL(**settings['user'], echo=True)
-    rdb = Redis(**settings['redis'])
-    bd = BusDay(sql)
-    bench = Benchmarks(sql, bd)
-    crsp = CRSP(sql, bd, rdb)
-    pstat = PSTAT(sql, bd)
-    ibes = IBES(sql, bd)
-    signals = Signals(user)
+    VERBOSE = 1
 
-if False:  # to populate SQL data tables from csv raw input
-    downloads = os.path.join(settings['remote'], 'stocks2021')
-    sql = SQL(**settings['sql'], echo=True)
-    rdb = None
-    bd = BusDay(sql)
-        
+    # open all structured datasets
+    if False:
+        VERBOSE = 0
+        sql = SQL(**credentials['sql'], verbose=VERBOSE)
+        user = SQL(**credentials['user'], verbose=VERBOSE)
+        rdb = Redis(**credentials['redis'])
+        bd = BusDay(sql)
+        bench = Benchmarks(sql, bd)
+        find = Finder(sql)
+        print(find('GOOG'))
+
     # load benchmarks (mostly FamaFrench)
-    bench = Benchmarks(sql, bd)
-    datasets = fetch_FamaFrench()
-    print("\n".join(f"[{i}] {d}" for i, d in enumerate(datasets)))
-    for name, item, suffix in datasets:
-        df = fetch_FamaFrench(name=name, item=item, suffix=suffix,
-                              index_formatter=bd.offset)
-        for col in df.columns:
-            bench.load_series(df[col], name=name, item=item)
-    print(DataFrame(**sql.run('select * from ' + bench['ident'].key)))
+    def update_FamaFrench():
+        print("\n".join(f"[{i}] {d}" 
+              for i, d in enumerate(FFReader.datasets)))
+        for name, item, suffix in FFReader.datasets:
+            date_formatter = (bd.endmo if suffix == '(mo)' else bd.offset)
+            df = FFReader.fetch(name=name, 
+                                item=item,
+                                suffix=suffix,
+                                date_formatter=date_formatter)
+            for col in df.columns:
+                print(bench.load_series(df[col], name=name, item=str(item)))
+        print(DataFrame(**sql.run('select * from ' + bench['ident'].key)))
 
-    dirname = os.path.join(downloads, 'CRSP') + '/'
-    df = pd.read_csv(dirname + 'indexes.txt.gz', sep='\t').set_index('DATE')
-    for col in df.columns:
-        bench.load_series(df[col].dropna(), name='crsp')
-    df = pd.read_csv(dirname + 'sbbi.txt.gz', sep='\t').set_index('caldt')
-    df.columns = df.columns + "(mo)"
-    for col in df.columns:
-        bench.load_series(df[col].dropna(), name='sbbi')
+    def test_bench():
+        print(bench.get_series('CMA', 'ret'))
+        print(bench.get_series(['CMA', 'HML'], 'ret'))
+    #update_FamaFrench()
 
-    
+
     # load CRSP: TODO handle missing return codes (< -1, see below)
-    crsp = CRSP(sql, bd, rdb)
-    dirname = os.path.join(downloads, 'CRSP') + '/'
-    crsp.load_csv('names', dirname +  'names.txt.gz', sep='\t')   # 103383
-    crsp.load_csv('shares', dirname + 'shares.txt.gz', sep='\t') # 2346131
-    crsp.load_csv('dist', dirname + 'dist.txt.gz', sep='\t') # 935880
-    crsp.load_csv('delist', dirname + 'delist.txt.gz', sep='\t')  # 33584
-    crsp.load_csv('monthly', dirname + 'monthly.txt.gz', sep='\t') #4606907
-    for i, s in enumerate(sorted(glob.glob(dirname + 'stocks*.txt.gz'))):
-        tic = time.time()
-        crsp.load_csv('daily', s, sep='\t')
-        print(s, time.time() - tic)
+    def update_crsp():
+        downloads = '/home/terence/Downloads/stocks2022/'
+        downloads = '/home/terence/Downloads/stocks2021/'
+        dir = os.path.join(downloads, 'CRSP') + '/'
+        crsp.load_csv('names', dir + 'names.txt.gz', sep='\t')   # 103383
+        crsp.load_csv('shares', dir + 'shares.txt.gz', sep='\t') # 2346131
+        crsp.load_csv('dist', dir + 'dist.txt.gz', sep='\t') # 935880
+        crsp.load_csv('delist', dir + 'delist.txt.gz', sep='\t')  # 33584
+        crsp.load_csv('monthly', dir + 'monthly.txt.gz', sep='\t') #4606907
+        for i, s in enumerate(sorted(glob.glob(dir + 'stocks*.txt.gz'))):
+        # for s in [dir + 'daily2021.txt.gz']:
+            tic = time.time()
+            crsp.load_csv('daily',
+                          csvfile=s,
+                          sep='\t', 
+                          drop={'permno': ['PERMNO', '.'],
+                                'date': ['.'],
+                                'shrout':['.']})
+            print(s, round(time.time() - tic, 0), 'secs')
+    # def_update_crsp()
+
+
+    # Pre-generate weekly returns and save in Redis cache
+    begweek = 19730629  # increased stocks coverage in CRSP around this date
+    middate = 19850628  # increased stocks traded in CRSP around this date
+    endweek = 20211231  # is a Friday
+    def update_weekly():
+        wd = WeeklyDay(sql, 'Fri')   # Generate Friday-end weekly cal
+        rebaldates = wd.date_range(begweek, endweek)
+        r = wd.date_tuples(rebaldates)
+        batchsize = 40
+        batches = [r[i:(i+batchsize)] for i in range(0, len(r), batchsize)]
+        for batch in batches:
+            crsp.cache_ret(batch, replace=True)
+
     
-    # load IBES
-    ibes = IBES(sql, bd)
-    dirname = os.path.join(downloads, 'IBES') + '/'    
-    ibes.load_csv('ident', dirname + 'ident.txt.gz', sep='\t')  # 85550
-    ibes.write_links()  #  (missing, count) = 14642  85550
-    ibes.load_csv('summary', dirname + 'summary.txt.gz', sep='\t') # 8470688
-    #ibes.load_csv('adjust', downloads + 'adjustment.csv') #rows=24777
-    #ibes.load_csv('surprise', downloads + 'surprise.csv')  #rows=528933
-
     # load Compustat
-    pstat = PSTAT(sql, bd)
-    dirname = os.path.join(downloads, 'PSTAT') + '/'
-    df = pstat.load_csv('links', dirname + 'links.txt.gz', sep='\t', # rows=33036
-                        drop={'lpermno': ['0', 0], 'linkprim': ['N', 'J']},
-                        replace={'linkdt': [['C', 'E', 'B'], 0],
-                                 'linkenddt': [['C', 'E', 'B'], 0]})
-    lag = df.shift()
-    f = (lag.gvkey == df.gvkey) & (lag.lpermno != df.lpermno)
-    print('permnos in links changed in ', sum(f), 'of', len(df)) # 1063
-    pstat.load_csv('annual', dirname + 'pstat.csv.gz') #rows = 464753
-    pstat.load_csv('quarterly', dirname +  'quarterly.csv.gz') # 1637274
-    pstat.load_csv('customer', dirname + 'supplychain.csv.gz') #107114
-    for s in glob.glob(dirname +  'keydev*.txt.gz'):
-        tic = time.time()   # 12256909
-        df = pstat.load_csv('keydev', s, sep='\t',
-                            drop={'gvkey': [0, '0'],
-                                  'announcedate': [0, '0'],
-                                  'keydevid': [0, '0']})
-        print(s, time.time() - tic)
+    def update_pstat():
+        downloads = '/home/terence/Downloads/stocks2021/'
+        dir = os.path.join(downloads, 'PSTAT') + '/'
+        df = pstat.load_csv('links',
+                            csvfile=dir + 'links.txt.gz',
+                            sep='\t',    # rows=33036
+                            drop={'lpermno': ['0', 0], 'linkprim': ['N', 'J']},
+                            replace={'linkdt': (['C', 'E', 'B'], 0),
+                                     'linkenddt': (['C', 'E', 'B'], 0)})
+        lag = df.shift()
+        f = (lag.gvkey == df.gvkey) & (lag.lpermno != df.lpermno)
+        print('permnos in links changed in ', sum(f), 'of', len(df)) # 1063
 
+        downloads = '/home/terence/Downloads/stocks2020/'
+        dir = os.path.join(downloads, 'PSTAT') + '/'
+        pstat.load_csv('annual', dir + 'pstat.csv.gz') #rows = 464753
 
-            
-if False:
-    from finds.busday import minibatch
-    rebalbeg, rebalend = 19730701, 20210101
-    rebalbeg = 19251231
-    wd = Weekly(sql, 'Fri', rebalbeg, rebalend)
-    beg = bd.offset(wd.weeks['beg'].to_list(), 1)
-    dates = [(a,b) for a,b in zip(beg, wd.weeks['end'])]
-    #dates = list(wd.weeks[['beg','end']].itertuples(index=False, name=None))
-    for datebatch in minibatch(dates, batchsize=40):
-        crsp.cache_ret(datebatch, overwrite=True)
+        downloads = '/home/terence/Downloads/stocks2020/'
+        dir = os.path.join(downloads, 'PSTAT') + '/'
+        pstat.load_csv('quarterly', dir +  'quarterly.csv.gz') # 1637274
+        pstat.load_csv('customer', dir + 'supplychain.csv.gz') #107114
+
+        downloads = '/home/terence/Downloads/stocks2020/'
+        dir = os.path.join(downloads, 'PSTAT') + '/'
+        for s in glob.glob(dir +  'keydev*.txt.gz'):
+            tic = time.time()   # 12256909
+            df = pstat.load_csv('keydev',
+                                csvfile=s,
+                                sep='\t',
+                                drop={'gvkey': [0, '0'],
+                                      'announcedate': [0, '0'],
+                                      'keydevid': [0, '0']})
+            print(s, time.time() - tic)    
+
+    # load IBES
+    def update_ibes():
+        downloads = '/home/terence/Downloads/stocks2021/'
+        dir = os.path.join(downloads, 'IBES') + '/'    
+        ibes.load_csv('ident', dir + 'ident.txt.gz', sep='\t')  # 85550
+        ibes.write_links()  #  (missing, count) = 14642  85550
+        ibes.load_csv('summary', dir + 'summary.txt.gz', sep='\t') # 8470688
+        #ibes.load_csv('adjust', downloads + 'adjustment.csv') #rows=24777
+        #ibes.load_csv('surprise', downloads + 'surprise.csv')  #rows=528933
+
+    def test_rets():
+        find = StocksBuffer(crsp, 20210101, 20211231)
+        df = find.get_ret(20210101, 20210131)
+        print(df) 
+        m = crsp.get_ret(20210101, 20210131)
+        print(m)
+

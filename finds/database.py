@@ -1,146 +1,196 @@
-"""Convenience class and methods to interface with database engines
+"""Wrappers for database engines
 
-- SQL, sqlalchemy
-- MongoDB, pymongo
-- redis
+- SQL: sqlalchemy
+- MongoDB: pymongo
+- Redis NoSQL key-value store: redis
 
-Author: Terence Lim
-License: MIT
+Convenience methods to:
+
+- Load, store and manipulate pandas DataFrames that match SQL database schemas
+
+- Serialize DataFrames to Redis key-value store (for caching SQL query results)
+
+
+Copyright 2022, Terence Lim
+
+MIT License
 """
-import redis
-import sqlalchemy
-import pymongo
-from pyarrow import default_serialization_context as pa
+from typing import List, Dict, Mapping, Any
+import random
+import sys
+import os
+import time
+import io
+import requests
+import zipfile
+import gzip
+import csv
+import json
+import unicodedata
+import glob
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-import os
-import warnings
-ECHO = False
+import sqlalchemy
+from sqlalchemy.orm import sessionmaker
+import redis
+from pymongo import MongoClient
+from typing import Dict, Any, List
 
-class SQL(object):
-    """Provides convenience interface sqlalchemy engine
+_VERBOSE = 1   # default verbose leverl
+_headers = {'User-Agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/51.0.2704.106 Safari/537.36'
+            'OPR/38.0.2220.41'}
 
-    Parameters
-    ----------
-    user, password, host : string
-        to connect to mysql server
-    port: int
-        to connect to mysql server        
-    database : string
-        database name
+def requests_get(url: str, params: Dict = None, retry: int = 7,
+                 sleep: float = 2., timeout: float = 3., delay: float = 0.25,
+                 trap: bool = False, headers: str = _headers,
+                 verbose: int = _VERBOSE) -> requests.Response | None:
+    """Wrapper over requests.get, with retry loops and delays
 
-    Attributes
-    ----------
-    engine : sqlalchemy engine instance
-        python interface to sqlalchemy commands
-    metadata : sqlalchemy metadata instance
-        collects table objects and their associated schema constructs
+    Args:
+      url: URL address to request
+      params: Payload of &key=value to append to url
+      headers: User-Agent, Connection and other headers parameters
+      timeout: Number of seconds before timing out one request try
+      retry: Number of times to retry request
+      sleep: Number of seconds to wait between retries
+      trap: On timed-out: if True raise exception, else return False
+      delay: Number of seconds to wait initially
+      verbose: Whether to display verbose debugging messages
 
-    Notes
-    -----
-    SQLAlchemy methods:
-    metadata.clear
-    metadata.create_all
-    metadata.remove
-    metadata.tables
-    table.key
-    table.c
-    table.columns
-    table.create
-    table.delete
-    table.drop
-    table.exists
-    table.insert
-    table.select
-    table.update
+    Returns:
+      requests.Response or None if timed-out or status_code != 200
     """
-    def __init__(self, user='', password='', host='localhost', port='3306',
-                 database='', autocommit='true', charset='utf8',
-                 temp = "temp" + str(np.random.randint(8192)), echo=ECHO):
-        """Initialize a sqlalchemy connection"""
-        self.q = (f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?"
-                  f"charset={charset}&local_infile=1&autocommit={autocommit}")
-        self.echo_ = echo
-        self.temp_ = temp  # name of temp table for this process
-        self._create_engine()
+    def _print(*args, **kwargs):
+        """helper to print verbose messages"""
+        if verbose > 0:
+            print(*args, **kwargs)
+            
+    _print(url)
+    if delay:
+        time.sleep(delay + (delay * np.random.rand()))
+    for i in range(retry):
+        try:
+            r = requests.get(url,
+                             headers=headers,
+                             timeout=timeout,
+                             params=params)
+            assert(r.status_code >= 200 and r.status_code <= 404)
+            break
+        except Exception as e:
+            _print(f"(requests_url {i}/{retry})", e)
+            time.sleep(sleep * (2 ** i) + sleep*np.random.rand())
+            r = None
+    if r is None:  # likely timed-out after retries:
+        if trap:     # raise exception if trap, else silently return None
+            raise Exception(f"requests_get: {url} {time.time()}")
+        return None
+    if r.status_code != 200:
+        _print(r.status_code, r.content)
+        return None
+    return r
 
-    def _print(self, *args, echo=None):
-        if echo or self.echo_:
-            print(*args)
 
-    def _create_engine(self):
-        self.engine = sqlalchemy.create_engine(self.q, echo=self.echo_)
-        self.metadata = sqlalchemy.MetaData(self.engine)
+class SQL:
+    """Provide convenience interface to sqlalchemy engine"""
+
+    def __init__(self, user: str, password: str, host: str = 'localhost',
+                 port: str = '3306', database: str = '',
+                 autocommit: str = 'true', charset: str = 'utf8',
+                 temp: str = f"temp{random.randint(0, 8192)}",
+                 verbose: int = _VERBOSE):
+        self.url = \
+            f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?" \
+            + f"charset={charset}&local_infile=1&autocommit={autocommit}"
+        self._verbose = verbose
+        self._t = temp  # name of temp table for this process
+        self.create_engine()
         
-    def Table(self, key, *args, **kwargs):
-        """Wraps sqlalchemy.Table(), to first remove table entry from metadata"""
+    def _print(self, *args, verbose: int = _VERBOSE, level: int = 0, **kwargs):
+        """helper to print verbose messages"""
+        if max(verbose, self._verbose) > 0:
+            print(*args, **kwargs)
+        
+    def create_engine(self):
+        """Wrap sqlalchemy.create_engine() and MetaData(); store attributes"""
+        self.engine = sqlalchemy.create_engine(self.url, echo=self._verbose>0)
+        self.metadata = sqlalchemy.MetaData(self.engine)
+
+    def rollback(self):
+        """Wraps sessionmaker() to rollback current transaction in progress"""
+        Session = sessionmaker(self.engine)
+        with Session() as session:
+            session.rollback()
+    
+    def Table(self, key: str, *args, **kwargs) -> sqlalchemy.Table:
+        """Wrap sqlalchemy.Table() to first remove table entry from metadata"""
         if key in self.metadata.tables:
             self.metadata.remove(self.metadata.tables[key])
         return sqlalchemy.Table(key, self.metadata, *args, **kwargs)
 
     @classmethod
-    def Index(cls, *args):
-        """Wraps sqlalchemy.Index(), to infer an index name from args"""
+    def Index(cls, *args) -> sqlalchemy.Index:
+        """Wrap sqlalchemy.Index(), auto-generates index name from args"""
         return sqlalchemy.Index("_".join(args), *args)
 
-    def remove(self, key):
+    def remove(self, key: str):
         """Remove a table, by its key name, from metadata instance"""
         if key in self.metadata.tables:
             self.metadata.remove(self.metadata.tables[key])
 
-    def run(self, q, *args, **kwargs):
-        """Execute a sql command
+    def run(self, q, *args, **kwargs) -> Dict | None:
+        """Execute an sql command
 
-        Returns
-        -------
-        r : result object
-            A result set or None.
+        Args:
+            q: query string
+            *args: argument list for query
+            **kwargs: keyword arguments for query
 
-        Examples
-        --------
-        sql.run('select * from testing')
-        sql.run('select distinct permno from benchmarks')
-        sql.run("show databases")
-        sql.run("show tables")
-        sql.run("show create table _")
-        sql.run("describe _")
-        sql.run("truncate table _", fetch=False)
+        Returns:
+            The result set {'data', 'columns'}, or None.
+
+        Raises:
+            RuntimeError: failed to run query
+
+        Examples:
+            >>> sql.run("show databases")
+            >>> sql.run("show tables")
+            >>> sql.run('select * from testing')
+            >>> sql.run('select distinct permno from benchmarks')
+            >>> sql.run("show create table _")
+            >>> sql.run("describe _")
+            >>> sql.run("truncate table _", fetch=False)
         """
-        
+
         for _ in range(2):
             try:
                 with self.engine.begin() as conn:
                     try:
                         r = conn.execute(q, *args, **kwargs)
                         return {'data': r.fetchall(), 'columns': r.keys()}
-                    except:
+                    except Exception:
                         return None
                 break
-            except:
-                self._create_engine()
-        raise Exception('(sql.run) ' + q)
+            except Exception as e:
+                self._print(e)
+                self.create_engine()
+        raise RuntimeError('(sql.run) ' + q)
 
-    def summary(self, table, val, key=None):
-        """Return summary statistics of a field, optionally grouped-by
+    def summary(self, table: str, val: str, key: str = '') -> DataFrame:
+        """Return summary statistics for a field, optionally grouped-by
 
-        Parameters
-        ----------
-        table : str
-            Name of table
-        val : str
-            Field name to summarise
-        key : str (optional)
-            Field to group by
+        Args:
+            table: Physical name of table
+            val: Field name to summarise
+            key: Field to group by
 
-        Returns
-        -------
-        DataFrame
-            count, average, max, min
+        Returns:
+            DataFrame with columns (count, average, max, min)
 
-        Examples
-        --------
-        sql.summary('annual','revt','sic')
+        Examples:
+            >>> sql.summary('annual', 'revt', 'sic')
         """
         if key:
             q = (f"SELECT {key}, COUNT(*) as count, AVG({val}) as avg, "
@@ -151,107 +201,110 @@ class SQL(object):
             q = (f"SELECT COUNT(*) as count, AVG({val}) as avg, "
                  f"  MAX({val}) as max, MIN({val}) as min FROM {table}")
             return DataFrame(index=[val], **self.run(q))
-        
-    def load_infile(self, table, csvfile, options=''):
-        """Load table from csv file, using mysql's load data local infile"""
+
+    def load_infile(self, table: str, csvfile: str, options: str =''):
+        """Load table from csv file, using mysql's load data local infile
+
+        Args:
+            table: Physical name of table to load into
+            csvfile: CSV filename
+            options: String appended to SQL load infile query
+        """
         q = (f"LOAD DATA LOCAL INFILE '{csvfile}' INTO TABLE {table} "
-             f" FIELDS TERMINATED BY ',' ENCLOSED BY '\"' LINES TERMINATED "
-             f" BY '\\n' IGNORE 1 ROWS {options};")
+             f" FIELDS TERMINATED BY ',' ENCLOSED BY '\"'"
+             f" LINES TERMINATED BY '\\n' IGNORE 1 ROWS {options};")
         try:
-            if self.echo_:
-                print("(load_infile)", q)
+            self._print("(load_infile)", q)
             self.run(q)
         except Exception as e:
             print("(load_infile) Got exception = ", e, " Query = ", q)
             raise e
 
-    def load_dataframe(self, table, df, index_label=None, to_sql=True,
-                       if_exists='append'):
-        """Load dataframe into sql table, ignoring duplicate keys
+    def load_dataframe(self, table: str, 
+                             df: DataFrame,
+                             index_label: str = '', 
+                             to_sql: bool = True,
+                             replace: bool = False):
+        """Load dataframe into sql table, ignoring duplicate primary keys
 
-        Parameters
-        ----------
-        table : str 
-            Physical name of table to insert into
-        df: DataFrame
-            The source dataframe
-        index_label: string, optional
-            Column name to load dataframe index as, None to not load (default)
-        to_sql: boolean, default True
-            If True, attempt pandas.to_sql(), which may fail if duplicate keys
-            If False or pandas.to_sql() fails, put in temp and insert ignore
-        if_exists: string, optional
-            Action to take if table exists -- 'replace' or 'append' (default)
-        
+        Args:
+            table: Physical name of table to insert into
+            df: Source dataframe
+            index_label: Column name to load index as, None (default) to ignore
+            to_sql: first attempt pandas.to_sql(), which may fail if duplicate
+               keys; then/else insert ignore from temp table instead.
+            replace: set True to overwrite table, else append (default)
         """
+
         df.columns = df.columns.map(str.lower).map(str.rstrip)
-        chunksize = (int) (1024*1024*32 // len(df.columns))
+        chunksize = int(1024*1024*32 // len(df.columns))
         try:     # to_sql raises exception if exist duplicate keys
             assert(to_sql)
             df.to_sql(table,
                       self.engine,
-                      if_exists = if_exists,
+                      if_exists=('replace' if replace else 'append'),
                       chunksize=chunksize,
-                      index = (index_label is not None),
-                      index_label = index_label)
-        except:  # duplicates exists, so to_sql to temp, and insert ignore
-            if self.echo_:
-                print("(load_dataframe) Retrying insert ignore", table)
-            self.run('drop table if exists ' + self.temp_)
-            df.to_sql(self.temp_,
+                      index=bool(index_label),
+                      index_label=index_label)
+        except Exception as e:  # duplicates exist
+            self._print("(load_dataframe) Retrying insert ignore", table)
+            self.run('drop table if exists ' + self._t)
+            df.to_sql(self._t,
                       self.engine,
                       if_exists='replace',
                       chunksize=chunksize,
-                      index=(index_label is not None),
+                      index=bool(index_label),
                       index_label=index_label)
             # warnings.filterwarnings("ignore", category=pymysql.Warning)
             columns = ", ".join(df.columns)
             q = (f"INSERT IGNORE INTO {table} ({columns})"
-                 f" SELECT {columns} FROM {self.temp_}")
+                 f" SELECT {columns} FROM {self._t}")
             self.run(q)
             # warnings.filterwarnings("default", category=pymysql.Warning)
-            self.run('drop table if exists ' + self.temp_)
+            self.run('drop table if exists ' + self._t)
 
-    def read_dataframe(self, query):
+    def read_dataframe(self, q: str):
         """Return sql query result as data frame
 
-        Parameters
-        ----------
-        query: str, or SQLAlchemy Selectable
-            SQL query or a table name
-        coerce_float : boolean, default True
-            Attempt to convert values of non-string, non-numeric to float
+        Args:
+            q: query string or SQLAlchemy Selectable
+
+        Returns:
+            DataFrame of results
+
+        Raises:
+            RuntimeError: Failed to run query
         """
-        result = self.run(query)
+        result = self.run(q)
         if result is None:
-            raise Exception('read_dataframe error in database: ', str(query))
+            raise RuntimeError('read_dataframe error in database: ', str(q))
         return DataFrame(**result)
 
-    def pivot(self, table, index, columns, values, where='', limit=None,
-              chunksize=None):
+    def pivot(self, table: str, 
+                    index: str, 
+                    columns: str, 
+                    values: str, 
+                    where: str = '', 
+                    limit: int | None = None,
+                    chunksize: int | None = None) -> DataFrame:
         """Return sql query result as pivoted data frame
 
-        Parameters
-        ----------
-        table: str
-            Physical name of table to retrieve from
-        index: str
-            Field to select as dataframe index
-        columns: str
-            Field to select as column labels
-        values: str
-            field to select as values
-        where: str or dict
-            Where clause, default ''
-        limit: int, or None (default)
-            Maximum number of rows or chunks to return            
+        Args:
+            table: Physical name of table to retrieve from
+            index: Field name to select as dataframe index
+            columns: Field name to select as column labels
+            values: Field name to select as values
+            where: Where clause, optional
+            limit: Maximum optional number of rows or chunks to return
+            chunksize: To optionally buildup results in chunks of this size
 
-        Returns
-        -------
-        DataFrame
-            pivoted data frame
+        Returns:
+            Query result as a pivoted (wide) DataFrame
         """
-        where = parse_where(where, 'WHERE')
+
+        if where:  # pre-prend where clause with keyword
+            where = 'WHERE ' + where
+
         if isinstance(chunksize, int):  # execute in chunks
             rows = self.read_dataframe(
                 f"SELECT DISTINCT {index} FROM {table} {where}")
@@ -262,8 +315,8 @@ class SQL(object):
             if n_splits * chunksize < n_features:
                 n_splits += 1
             for i in range(n_splits):
-                row = slice(chunksize * i, min(n_features, chunksize * (i + 1)))
-                print(i, n_splits)
+                row = slice(chunksize * i, min(n_features, chunksize * (i+1)))
+                self._print('slice #', i, 'of', n_splits)
                 if isinstance(limit, int) and i >= limit:
                     break
                 where += " AND " if where else " WHERE "
@@ -278,181 +331,223 @@ class SQL(object):
         else:  # execute as single chunk
             where += " LIMIT " + str(limit) if limit else ''
             q = f"SELECT {index}, {columns}, {values} FROM {table} {where}"
-            if self.echo_:
+            if self._verbose:
                 print('(pivot)', q)
             return self.read_dataframe(q).pivot(
                 index=index, columns=columns, values=values)
+
+class Redis:
+    """Provide DataFrames interface with parquet to redis key-value store
+
+    Args:
+       host: Hostname
+       port: Port number
+       charset: Character set
+       decode_responses: Set to False to zlib dataframe
+
+    Attributes:
+        redis: Redis client instance providing interface to all Redis commands
+
+    Redis built-in methods:
+
+        - r.delete(key)      -- delete an item
+        - r.get(key)         -- get an item
+        - r.exists(key)      -- does item exist
+        - r.set(key, value)  -- set an item
+        - r.keys()           -- get keys
+
+    Examples:
+        ::
+
+            $ ./redis-5.0.4/src/redis-server
+            $ ./redis-cli --scan --pattern '*CRSP_2020*' | xargs ./redis-cli del
+            CLI> keys *
+            CLI> flushall
+            CLI> info memory
+    """
+
+    def __init__(self, host: str, port: int, charset: str = 'utf-8',
+                 decode_responses: bool = False, **kwargs):
+        """Open a Redis connection instance"""
+        self.redis = redis.StrictRedis(host=host, port=port, charset=charset,
+                                       decode_responses=decode_responses,
+                                       **kwargs)
         
-class Redis(object):
-    """Provides convenience interface to redis key-value store
+    def dump(self, key: str, df: DataFrame):
+        """Saves dataframe, serialized to parquet, by key name to redis
 
-    Parameters
-    ----------
-    host: str
-        IP address of host
-    post: int
-        Port number
-    **kwargs:
-        Arguments passed on to redis.StrictRedis constructor
+        Args:
+            key: Name of key in the store
+            df: DataFrame to store, serialized with to_parquet
+        """
+        #self.r.set(key, pa.serialize(df).to_buffer().to_pybytes())
+        df = df.copy()
+        for col in df.columns:
+            if pd.api.types.is_object_dtype(df[col]):
+                df[col] = df[col].astype('string')  # parquet fails object
+        self.redis.set(key, df.to_parquet())
 
-    Attributes
-    ----------
-    redis: redis object
-        python interface to all Redis commands
+    def load(self, key: str) -> DataFrame:
+        """Return and deserialize dataframe given its key from redis store
 
-    Notes
-    -----
-    Methods:
-    redis.delete(key)      -- delete an item
-    redis.get(key)         -- get an item
-    redis.exists(key)      -- does item exist
-    redis.set(key, value)  -- set an item
-    redis.keys()           -- get keys
-
-    Command Line:
-    decode_responses=False to zlib dataframe
-    ./redis-5.0.4/src/redis-server
-    ./redis-cli --scan --pattern '*CRSP_2020*' | xargs ./redis-cli del
-    CLI> keys *
-    CLI> flushall
-    CLI> info memory"""
-
-    def __init__(self, **kwargs):
-        """Initialize a Redis connection"""
-        self.redis = redis.StrictRedis(**kwargs)
-        
-    def load(self, key):
-        """Return dataframe, using pyarrow, given its key from redis store"""
-        df = pa().deserialize(self.redis.get(key))  # must use pyarrow
+        Args:
+            key: Name of key in the store
+        """
+        df = pd.read_parquet(io.BytesIO(self.redis.get(key)))
         return df.copy()   # return copy lest flag.writable is False
 
-    def dump(self, key, df):
-        """Saves dataframe, using pyarrow, by key name to redis store"""
-        self.redis.set(key, pa().serialize(df).to_buffer().to_pybytes())
 
-
-class MongoDB(object):
+class MongoDB:
     """Provides convenience interface to pymongo database
 
-    Parameters
-    ----------
-    database : str
-        Name of database in MongoDB
-    host : str
-        IP address of server
-    port: int
-        Port number
+    Args:
+        database: Name of database in MongoDB
+        host: IP address of server
+        port: Port number
 
-    Attributes
-    ----------
-    client: MongoClient object
-       python interface to all MongoDB client commands
+    Attributes:
+        client: MongoClient instance providing MongoDB interface
 
-    Examples
-    --------
-    >>> serverStatusResult = client.admin.command("serverStatus")
-    >>> pprint(serverStatusResult)
-    >>> collections = client['database'].list_collection_names()
-    >>> self.client[database][collections[0]].estimated_document_count()
+    Examples:
+        >>> mdb = MongoDB()
+        >>> serverStatusResult = mdb.client.admin.command("serverStatus")
+        >>> pprint(serverStatusResult)
+        >>> collections = mdb.client['database'].list_collection_names()
+        >>> mdb.client[database][collections[0]].estimated_document_count()
 
-    Notes
-    -----
-    Pymongo methods for a collection object:
-    count_documents(self, filter, session=None, limit=None)
-    create_index(self, keys, unique=False)
-    create_indexes(self, indexes)
-    delete_one(self, filter)
-    distinct(self, key, filter=None)
-    drop(self)
-    drop_index(self, index_or_name)
-    drop_indexes(self)
-    estimated_document_count(self)
-    find(self, filter={}, projection=[], limit=None)
-    find_one(self, filter=None)
-    insert_many(self, documents, ordered=True)
-    insert_one(self, document)
-    list_indexes(self)
-    replace_one(self, filter, replacement, upsert=False)
-    update_many(self, filter, update, upsert=False)
-    update_many(self, filter, update, upsert=False)
-    update_one(self, filter, update, upsert=False)
+    Other pymongo MongoClient methods for a collection object:
 
-    Operators:
-    $eq      Matches values that are equal to a specified value.
-    $gt      Matches values that are greater than a specified value.
-    $gte     Matches values that are greater than or equal to a specified value.
-    $in      Matches any of the values specified in an array.
-    $lt      Matches values that are less than a specified value.
-    $lte     Matches values that are less than or equal to a specified value.
-    $ne      Matches all values that are not equal to a specified value.
-    $nin     Matches none of the values specified in an array.
-    $and     Joins query clauses with a logical AND
-    $not     Inverts the effect of a query expression
-    $nor     Joins query clauses with a logical NOR returns
-    $or      Joins query clauses with a logical OR returns
-    $exists  Matches documents that have the specified field.
-    $type    Selects documents if a field is of the specified type.
+    - count_documents(self, filter, session=None, limit=None)
+    - create_index(self, keys, unique=False)
+    - create_indexes(self, indexes)
+    - delete_one(self, filter)
+    - distinct(self, key, filter=None)
+    - drop(self)
+    - drop_index(self, index_or_name)
+    - drop_indexes(self)
+    - estimated_document_count(self)
+    - find(self, filter={}, projection=[], limit=None)
+    - find_one(self, filter=None)
+    - insert_many(self, documents, ordered=True)
+    - insert_one(self, document)
+    - list_indexes(self)
+    - replace_one(self, filter, replacement, upsert=False)
+    - update_many(self, filter, update, upsert=False)
+    - update_many(self, filter, update, upsert=False)
+    - update_one(self, filter, update, upsert=False)
+
+    MongoDB Operators:
+    ::
+
+    $eq     Matches values that are equal to a specified value.
+    $gt     Matches values that are greater than a specified value.
+    $gte    Matches values that are greater than or equal to a specified value.
+    $in     Matches any of the values specified in an array.
+    $lt     Matches values that are less than a specified value.
+    $lte    Matches values that are less than or equal to a specified value.
+    $ne     Matches all values that are not equal to a specified value.
+    $nin    Matches none of the values specified in an array.
+    $and    Joins query clauses with a logical AND
+    $not    Inverts the effect of a query expression
+    $nor    Joins query clauses with a logical NOR returns
+    $or     Joins query clauses with a logical OR returns
+    $exists Matches documents that have the specified field.
+    $type   Selects documents if a field is of the specified type.
 
     Unix Installation:
-    sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 
-      --recv 9DA31620334BD75D9DCB49F368818C72E52529D4
-    echo "deb [ arch=amd64,arm64 ] 
-      https://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/4.0 multiverse" | 
-      sudo tee /etc/apt/sources.list.d/mongodb-org-4.0.list
-    sudo apt-get update
-    sudo apt-get install mongodb-org
-    sudo systemctl start mongod
-    sudo systemctl restart mongod
-    sudo systemctl stop mongod
-    sudo systemctl enable mongod
-    sudo service mongod stop
-    sudo apt-get purge mongodb-org* 
 
-    /etc/mongod.conf - configuration file for MongoDB
-    dbPath -  where the database files stored (/var/lib/mongodb by default)
-    systemLog - logging options (/var/log/mongodb/mongod.log by default)
+    https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-ubuntu/
+
+    ::
+
+        sudo systemctl start mongod
+        sudo systemctl restart mongod
+        sudo systemctl stop mongod
+        sudo systemctl enable mongod
+        sudo service mongod stop
+        sudo apt-get purge mongodb-org* 
+
+    /etc/mongod.conf - configuration file for MongoDB:
+
+    - dbPath -  where the database files stored (/var/lib/mongodb)
+    - systemLog - logging options (/var/log/mongodb/mongod.log)
     """
-    def __init__(self, host='localhost', port=27017, echo=ECHO):
-        """Initialize a a MongoDB connection"""
-        self.client = pymongo.MongoClient(host=host, port=port)
-        if echo:
-            serverStatusResult = self.client.admin.command("serverStatus")
-            pprint(serverStatusResult)
-        
-    def show(self, database=None):
-        """Show database or table names"""
-        if database is None:
+
+    def __init__(self, host: str = 'localhost', port: int = 27017, 
+                 verbose = _VERBOSE):
+        self.client = MongoClient(host=host, port=port)
+        if verbose:
+            result = self.client.admin.command("serverStatus")
+            print(result)
+
+    def show(self, database: str = ''):
+        """List all database or collection (table) names
+
+        Args:
+            database: List collections in (blank to list all databases)
+        """
+        if not database:
             return self.client.list_database_names()
         return self.client[database].list_collection_names()
 
-    def drop(self, database, collection=None):
-        """Drop database or collection by name"""
-        if collection is None:
-            return self.client.drop_database(database)
-        return self.client[database][collection].drop()
+    def drop(self, database: str, collection: str = ''):
+        """Drop a database or collection (table) by name
 
-if False:
-    from settings import settings
+        Args:
+            database: Name of database to drop collection
+            collection: Name of collection to drop (blank to drop database)
+        """
+        if not collection:
+            self.client.drop_database(database)
+        self.client[database][collection].drop()
+
+
+if __name__ == "__main__":
+    #    from os.path import dirname, abspath
+    #    sys.path.insert(0, dirname(dirname(abspath(__file__))))
+    from conf import credentials, VERBOSE
+    VERBOSE = 0
+
+    def test_mdb():
+        mdb = MongoDB(verbose = VERBOSE)
+        mdb.show()
+        db = mdb.client['test']
+        if 'test' not in db.list_collection_names():
+            db.create_collection('test')
+        c = db['collection']
+        c.insert_one({'hello': 'world'})
+        found = c.find_one({'hello' : {'$exists' : True}})
+        print(found)
+
+    def test_rdb():
+        rdb = Redis(**credentials['redis'])
+        df = DataFrame(data=[[1, 1.5, 'a'], [2, '2.5', None]],
+                    columns=['a', 'b', 'c'],
+                    index=['d', 'e'])
+        rdb.dump('my_key', df)
+        print(rdb.load('my_key'))
+
+    def init_sql():
+        """Create initial raw and user databases"""
+        query = "mysql+pymysql://{user}:{password}@{host}:{port}"\
+            .format(**credentials['sql'])
+        engine = sqlalchemy.create_engine(query)
+        engine.execute("CREATE DATABASE db1")
+        engine.execute("CREATE DATABASE user1")
+
+    def test_sql():
+        sql = SQL(**credentials['sql'], verbose=VERBOSE)
+        print(sql.run('show tables'))
+        user = SQL(**credentials['user'], verbose=VERBOSE)
+        print(user.run('show tables'))
+
+        df = DataFrame(data=[[1, 1.5, 'a'], [2, '2.5', None]],
+                       columns=['a', 'b', 'c'],
+                       index=['d', 'e'])
+        user.run('drop table if exists test')
+        user.load_dataframe('test', df)
+        s = user.run('select * from test')
+        print(s)
+
+    test_sql()    
     
-if False:  # To create new databases
-    user = settings['sql']['user']
-    password = settings['sql']['password']
-    host = settings['sql']['host']
-    port = settings['sql']['port']
-    query = f"mysql+pymysql://{user}:{password}@{host}:{port}"
-    engine = sqlalchemy.create_engine(query)
-    engine.execute("CREATE DATABASE db1")
-    engine.execute("CREATE DATABASE user1")
-
-if False:  # to open available databases
-    mongodb = MongoDB(**settings['mongodb'])
-    sql = SQL(**settings['sql'], echo=True)
-    user = SQL(**settings['user'], echo=True)
-    
-if False:   # unit tests
-    df_ = DataFrame(data=[[1, 1.5, 'a'], [2, '2.5', None]],
-                    columns=['a', 'b', 'c'], index=['d','e'])
-    user.run('drop table if exists test')
-    user.load_dataframe('test', df_)
-    user.run('select * from test')
-

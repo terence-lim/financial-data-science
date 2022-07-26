@@ -1,24 +1,39 @@
-"""Class and methods to preprocess and analyze TAQ trade and quotes tick data
+"""Class and methods to process TAQ trade and quotes tick data
 
-- NYSE Daily TAQ, bid-ask quotes, trade conditions, tick test
+- NYSE Daily TAQ: Master, NBBO, Trades
+- marker microstructure: bid-ask spreads, trade conditions, tick test
 
-Author: Terence Lim
-License: MIT
+Copyright 2022, Terence Lim
+
+MIT License
 """
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Series
+from pandas import DataFrame, Series, Timestamp
 import indexed_gzip as igzip
 import gzip, io, pickle, time, re, os
 import matplotlib.pyplot as plt
-from .display import plot_time
-try:
-    from settings import ECHO
-except:
-    ECHO = False
+from typing import List, Any
+from finds.display import plot_time
 
-def chunk_to_df(chunk, columns=None):
-    """Convert a csv text chunk from TAQ to dataframe with correct dtypes"""
+_VERBOSE = 1
+
+def taq_from_csv(chunk: str, columns: List[str] = []) -> DataFrame:
+    """Convert csv from TAQ to dataframe with correct dtypes
+
+    Args:
+        chunk: A chunk of csv text 
+        columns: List of column names, else in first line of chunk
+
+    Returns:
+        DataFrame with correct dtypes and column names
+
+    Notes:
+
+    - column names (provided or parsed from first line) indicate
+      the corresponding known list of dtypes for nbbo, trade or mast 
+    """
+    
     _dtypes = {    # define dtypes for each TAQ file
         'nbbo': {np.uint64: ['Time','Sequence_Number','Participant_Timestamp',
                              'FINRA_ADF_Timestamp'],
@@ -50,8 +65,12 @@ def chunk_to_df(chunk, columns=None):
                              'TradedOnPSX','TradedOnBATSY','TradedOnBATS',
                              'TradedOnIEX','Effective_Date']}}
 
-    df = pd.read_csv(io.StringIO(chunk), sep='|', na_filter=False, dtype=str, 
-                     header=None if columns else 0, names=columns or None)
+    df = pd.read_csv(io.StringIO(chunk),
+                     sep='|',
+                     na_filter=False,
+                     dtype=str, 
+                     header=None if columns else 0,
+                     names=columns or None)
 
     # guess file type from column names, and use its dtypes dict
     if 'Best_Bid_Price' in df.columns:  # NBBO file
@@ -80,27 +99,24 @@ def chunk_to_df(chunk, columns=None):
 class TAQ(object):
     """Base class to manipulate a daily TAQ .csv.gz file
 
-    Parameters
-    ----------
-    filename: str
-        .csv.gz raw data file name
-    index_file: str, default None
-        give name of (csv.gz) index file to support indexed-gzip
-    symbols_file: str, default None
-        give name of (csv.gz) symbols index file to support getitem
+    Args:
+        taq_file: raw .csv.gz input data file name
+        index_file: name of new (csv.gz) file to write indexed-gzip index
+        symbols_file: name of new (csv.gz) file to write symbols index
 
-    Notes
-    -----
-    NYSE historical samples: ftp://ftp.nyxdata.com/Historical%20Data%20Samples/
+    Notes:
 
-    Examples
-    --------
-    Implements three different ways to access raw daily TAQ csv.gz files, e.g.:
-        trade(n) - next n lines
-        iter(trade) - iterable, by chunk with same stock symbol
-        trade['AAPL'] - getitem, with symbol (requires IndexedGzipFile package)
+    - NYSE historical samples: 
+      ftp://ftp.nyxdata.com/Historical%20Data%20Samples/
+    - Uses indexed_gzip package for random access into gzip file
+    - Implements 3 methods to access raw daily TAQ csv.gz files, e.g.:
+
+      - trade(n) - next n csv lines
+      - iter(trade) - iterable, by chunk with same stock symbol
+      - trade['AAPL'] - getitem, by symbol
     """
-    def __init__(self, taq_file, index_file=None, symbols_file=None):
+    def __init__(self, taq_file: str, index_file: str = '',
+                 symbols_file: str = ''):
         """Initalize interface to daily TAQ file"""
         self.taq_file = taq_file
         self.date = re.findall(r"[12][90]\d\d\d\d\d\d", taq_file)
@@ -114,17 +130,17 @@ class TAQ(object):
             self.igz_file.close()
             self.igz_file = None
 
-    def open(self, taq_file=None):
+    def open(self, taq_file: str = ''):
         """Open with context manager protocol for sequential line reads"""
 
         class File(object):
             """Context manager procotol to open for sequential read"""
-            def __init__(self, filename, *args, **kwargs):
+            def __init__(self, filename: str, *args, **kwargs):
                 self.gz_file = gzip.open(filename, "rt", encoding='utf-8',
                                          errors='ignore')
                 self.header = self.gz_file.readline()
 
-            def __call__(self, n):
+            def __call__(self, n: int) -> DataFrame:
                 """Read next n lines (-1 for entire file)"""
                 if (n < 0):
                     chunk = self.header + self.gz_file.read()
@@ -138,7 +154,7 @@ class TAQ(object):
                             break
                         chunk.append(line)
                     chunk = "".join(chunk)
-                return chunk_to_df(chunk)
+                return taq_from_csv(chunk)
             
             def __enter__(self):
                 return self
@@ -157,7 +173,10 @@ class TAQ(object):
         
     def __iter__(self):
         """Iterator to access next symbol's chunk of rows"""
-        f = gzip.open(self.taq_file, "rt", encoding='utf-8', errors='ignore')
+        f = gzip.open(self.taq_file,
+                      "rt",
+                      encoding='utf-8',
+                      errors='ignore')
         header = f.readline().rstrip('\n').replace(' ','_').split('|')
 
         def line_iterator(f):
@@ -179,40 +198,43 @@ class TAQ(object):
                 line = next(lines)
                 if line:
                     curr = line.rstrip('\n').split('|')[header.index('Symbol')]
-            df = chunk_to_df("".join(chunk), header)
+            df = taq_from_csv("".join(chunk), header)
             df.index.name = prev
             yield df
         f.close()
         yield None
         
-    def __call__(self, symbol):
+    def __call__(self, symbol: str) -> Series | None:
         """Return symbol location and size in daily taq gzip file"""
         if self.igz_file is None:
             self.pos = pd.read_csv(self.symbols_file, index_col=0)
             if self.index_file:
-                self.igz_file = igzip.IndexedGzipFile(self.taq_file,
-                                                      index_file=self.index_file)
+                self.igz_file = igzip\
+                    .IndexedGzipFile(self.taq_file,
+                                     index_file=self.index_file)
             else:
                 self.igz_file = igzip.IndexedGzipFile(self.taq_file)
             line = self.igz_file.readline().decode('latin-1')
             self.columns = line.rstrip('\n').replace(' ','_').split('|')
-        return (self.pos.loc[symbol]
-                if symbol in self.pos.index and self.pos.loc[symbol, 'size'] > 0
-                else None)
+        if symbol in self.pos.index and self.pos.loc[symbol, 'size'] > 0:
+            return self.pos.loc[symbol]
+        else:
+            return None
 
-    def __getitem__(self, symbol):
+    def __getitem__(self, symbol: str) -> DataFrame:
         """Get chunk of all rows for the input symbol as a data frame"""
         pos = self(symbol)
         if pos is None:
             return None
         self.igz_file.seek(pos['start'])
         lines = self.igz_file.read(pos['size']).decode('latin-1')
-        df = chunk_to_df(lines, columns=self.columns)
+        df = taq_from_csv(lines, columns=self.columns)
         df.index.name = symbol
         return df
 
-    def index_symbols(self, index_file=None, symbols_file=None):
-        """Generate indexedGzip and symbols index files"""
+    def index_symbols(self, index_file: str = '', symbols_file: str = ''):
+        """Generate indexed_gzip and symbols index files"""
+        
         def _create_index(filename, index_file):
             """generate and save an indexed-gzip index file (12 secs)"""
             tic = time.time()
@@ -261,38 +283,48 @@ class TAQ(object):
             self.symbols_file = symbols_file
         _create_index(self.taq_file, self.index_file)
         _create_symbols(self.taq_file, self.symbols_file)
-        return self
 
 #
 # tick data transformation methods
 #
-_open_t  = pd.to_datetime('1900-01-01T09:30')    # default open  9:30am
-_close_t = pd.to_datetime('1900-01-01T16:00')    # default close 4:00pm
-open_t = _open_t
-close_t = _close_t
+open_t  = pd.to_datetime('1900-01-01T09:30')    # default open  9:30am
+close_t = pd.to_datetime('1900-01-01T16:00')    # default close 4:00pm
 # np.datetime64('1900-01-01T09:30:01.000002') - np.timedelta64('30','ns')
 
-def clean_trade(df, open_t=_open_t, close_t=_close_t, cond="MOZBTLGWJK145789"):
+def clean_trade(df: DataFrame | None, open_t: Timestamp = open_t,
+                close_t: Timestamp = close_t,
+                cond: str = "MOZBTLGWJK145789") -> DataFrame | None:
     """Remove bad trades
-    Notes
-    -----
-    Sale Conditions to exclude by default:
-    M = Market Center Close Price
-    O = Market Center Opening Trade
-    Z = Sold (Out of Sequence)
-    L = Sold Last (Late Reporting)
-    B = Bunched Trade
-    G = Bunched Sold Trade
-    W = Average Price Trade
-    4 = Derivatively Priced
-    5 = Re-opening Prints
-    7 = Qualified Contingent Trade
-    8 = Placeholder for 611 Exempt
-    9 = Corrected Consolidated Close Price per the Listing Market
-    K = Rule 127 (NYSE only) or Rule 155 Trade (NYSE MKT only)
-    T = Extended Hours Trade
+
+    Args:
+        df: Dataframe containing one day's trades of a stock
+        open_t: Exclude records on or before this opening time
+        close_t: Exclude records after this closing time
+        cond: condition chars to exclude
+
+    Notes:
+
+    - Requires correction code = 0, price and volume > 0
+
+    - Sale Conditions to exclude by default:
+
+      - M = Market Center Close Price
+      - O = Market Center Opening Trade
+      - Z = Sold (Out of Sequence)
+      - L = Sold Last (Late Reporting)
+      - B = Bunched Trade
+      - G = Bunched Sold Trade
+      - W = Average Price Trade
+      - 4 = Derivatively Priced
+      - 5 = Re-opening Prints
+      - 7 = Qualified Contingent Trade
+      - 8 = Placeholder for 611 Exempt
+      - 9 = Corrected Consolidated Close Price per the Listing Market
+      - K = Rule 127 (NYSE only) or Rule 155 Trade (NYSE MKT only)
+      - T = Extended Hours Trade
     """
     def any_in(keys, values):
+        """Returns True if any key is in values"""
         return np.any([v in values for v in keys]) 
     
     if df is None:
@@ -308,9 +340,24 @@ def clean_trade(df, open_t=_open_t, close_t=_close_t, cond="MOZBTLGWJK145789"):
     df = df.loc[f, ['Trade_Price','Trade_Volume', 'Sale_Condition']]
     return df
 
-def clean_nbbo(df, keep=['Best_Bid_Price','Best_Bid_Size','Best_Offer_Price',
-                         'Best_Offer_Size']):
-    """remove bad quotes"""
+def clean_nbbo(df: DataFrame | None, keep: List[str] = [
+        'Best_Bid_Price','Best_Bid_Size', 'Best_Offer_Price',
+        'Best_Offer_Size']) -> DataFrame | None:
+    """Remove bad quotes
+
+    Args:
+        df: Dataframe containing one day's nbbo quotes of a stock
+        keep: List of columns to keep
+
+    Notes:
+
+    - requires prices and size > 0 and offer > bid price
+    - spread <= $5
+    - cancel correction != 'B'
+    - condition in ['A','B','H','O','R','W'])
+    - keep largest sequence number if same time stamp
+    - drop duplicated records
+    """
     if df is None:
         return None    
     #df['Mid_Price'] = (df['Best_Offer_Price'] + df['Best_Bid_Price']) / 2
@@ -334,10 +381,26 @@ def clean_nbbo(df, keep=['Best_Bid_Price','Best_Bid_Size','Best_Offer_Price',
     return df
 
 
-def align_trades(ct, cq, open_t=_open_t, inplace=False):
+def align_trades(ct: DataFrame, cq: DataFrame, open_t: Timestamp = open_t,
+                 inplace: bool = False) -> DataFrame | None:
     """Align each trade with prevailing and forward quotes
-    prevailing quote at -1ns, forward quote at +5m, drop quotes before open_t
-    References: Holden and Jacobsen (2014), "Liquidity Measurement"
+
+    Args:
+        ct: Input dataframe of trades
+        cq: Input dataframe of nbbo quotes
+        open_t: drop quotes prior to open time
+        inplace: whether to overwrite trades dataframe or return as new copy
+
+    Returns:
+        DataFrame of trades with additional columns, if not inplace. else None
+
+    Notes:
+
+    - prevailing quote at -1ns, forward quote at +5m, drop quotes before open_t
+    - See Holden and Jacobsen (2014), "Liquidity Measurement"
+    - Prevailing\_Mid: midquote prevailing before each trade
+    - Forward\_Mid: midquote prevailing 5 minutes after trade
+    - Tick\_Test: Whether trade price above, below or equals previous trade
     """
     if not inplace:
         ct = ct.copy()
@@ -352,13 +415,38 @@ def align_trades(ct, cq, open_t=_open_t, inplace=False):
     if not inplace:
         return ct
 
-def bin_quotes(cq, value=15, unit='m', open_t=_open_t, close_t=_close_t):
+def bin_quotes(cq: DataFrame, value: int = 15, unit: str = 'm',
+               open_t: Timestamp = open_t,
+               close_t: Timestamp = close_t) -> DataFrame:
     """Resample quotes into time interval bins
-    Notes
-    -----
-    resample(closed='left', label='right')
-    agg(Series.sum, min_count=1)
-    result[result.index > open_t], result[result.index <= close_t]
+
+    Args:
+        cq: Input dataframe of nbbo quote
+        value: number of time units per bin width
+        unit: time unit in {'h', 'm', 's', 'ms', 'us', 'ns'}
+        open_t: exclusive left bound of first bin
+        close_t: inclusive right bound of last bin
+
+    Returns:
+        DataFrame of resampled derived quote liquidity metrics
+
+    Notes:
+
+    - quoted: time-weighted quoted half-spread
+    - depth: time-weighted average of average bid and offer sizes
+    - offersize: time-weighted average offer size
+    - bidsize: time-weighted average bid size
+    - mid: last midquote
+    - firstmid: first midquote
+    - maxmid: max midquote
+    - minmid: min midquote
+    - retq: last midquote-to-last midquote return
+
+    Examples:
+
+    >>> resample(closed='left', label='right')
+    >>> agg(Series.sum, min_count=1)
+    >>> result[result.index > open_t], result[result.index <= close_t]
     """
     units = {'h':'H', 'm':'min', 's':'S', 'ms':'ms', 'us':'us', 'ns':'N'}
     if unit not in units:
@@ -371,46 +459,90 @@ def bin_quotes(cq, value=15, unit='m', open_t=_open_t, close_t=_close_t):
     intervals = pd.to_datetime(sorted(set(intervals).union(cq.index)))
 
     # compute forward duration of each (supplemented) cq row
-    q = cq.reindex(intervals, method='pad')  # forward fill quotes to intervals
-    q['weight'] = q.index.to_series().diff().fillna(np.timedelta64(0))\
-                                            .astype(int).shift(-1,fill_value=0)
+    q = cq.reindex(intervals,
+                   method='pad')  # forward fill quotes to intervals
+    q['weight'] = q.index.to_series()\
+                         .diff()\
+                         .fillna(np.timedelta64(0))\
+                         .astype(int)\
+                         .shift(-1, fill_value=0) / 1e9
 
     # sum up 'weight' denominator of each interval, for weighted resampling
     result = DataFrame(q['weight'].resample(**rule).sum())
 
-    # compute weighted mean, with kludge for sum requiring at least one non-null
-    weighted = lambda s: (s * q['weight'])\
-               .resample(**rule)\
-               .agg(Series.sum, min_count=1).div(result['weight'])
-    # finally, compute weighted resampling
-    result['quoted'] = weighted(q['Best_Offer_Price']-q['Best_Bid_Price'])/2
-    result['depth'] = weighted(q['Best_Offer_Size']+q['Best_Bid_Size'])/2
+    # to compute weighted mean, with sum requiring at least one non-null
+    weighted = lambda s: (s * q['weight']).resample(**rule)\
+                                          .agg(Series.sum, min_count=1)\
+                                          .div(result['weight'])
+    
+    # compute weighted resampling
+    result['quoted'] = weighted(q['Best_Offer_Price']
+                                - q['Best_Bid_Price']) / 2
+    result['depth'] = weighted(q['Best_Offer_Size']
+                               + q['Best_Bid_Size']) / 2
     result['offersize'] = weighted(q['Best_Offer_Size'])
     result['bidsize'] = weighted(q['Best_Bid_Size'])
-    result['mid'] = ((q['Best_Offer_Price'] + q['Best_Bid_Price']) / 2)\
-                    .resample(**rule).last()
+    
+    mid = ((q['Best_Offer_Price'] + q['Best_Bid_Price']) / 2).resample(**rule)
+    result['mid'] = mid.last().fillna(method='pad')
+    result['firstmid'] = mid.first()
+    result['maxmid'] = mid.max()
+    result['minmid'] = mid.min()
+    
     result['retq'] = (result['mid'] / result['mid'].shift(1)) - 1
-    result = result[result.index > open_t]
-    result = result[result.index <= close_t]
-    return result
+    return result[(result.index > open_t) & (result.index <= close_t)]
 
-def bin_trades(ct, value=5, unit='m', open_t=_open_t, close_t=_close_t):
+
+def bin_trades(ct: DataFrame, value: int = 5, unit: str = 'm',
+               open_t: Timestamp = open_t,
+               close_t: Timestamp = close_t) -> DataFrame:
     """Resample trades into time interval bins
-    Notes
-    -----
-    resample(closed='left', label='right')
-    agg(Series.sum, min_count=1)
-    result[result.index > open_t], result[result.index <= close_t]
+
+    Args:
+        ct: Input dataframe of trades
+        value: number of time units per bin width
+        unit: time unit in {'h', 'm', 's', 'ms', 'us', 'ns'}
+        open_t: exclusive left bound of first bin
+        close_t: inclusive right bound of last bin
+
+    Returns:
+        DataFrame of resampled derived trade liquidity metrics
+
+    Notes:
+
+    - counts: number of trades in bin
+    - last: last trade price in bin (ffill if none)
+    - first: first trade price in bin
+    - maxtrade: max trade price in bin
+    - mintrade: min trade price in bin
+    - ret: last-to-last trade price return
+    - vwap: volume weighted average trade price
+    - effective: volume-weighted effective relative half-spread 
+                 (trade price divided by prevailing midquote, minus 1)
+    - realized: volume-weighted effective relative half-spread 
+                (trade price divided by 5-minute forward midquote, minus 1)
+    - impact: volume-weighted realized relative half-spread 
+                 (5-minute forward midquote divided by prevailing, minus 1)
+
+    Examples:
+
+    >>> resample(closed='left', label='right')
+    >>> agg(Series.sum, min_count=1)
+    >>> result[result.index > open_t], result[result.index <= close_t]
     """
     units = {'h':'H', 'm':'min', 's':'S', 'ms':'ms', 'us':'us', 'ns':'N'}
     if unit not in units:
         raise Exception(str(unit) + ' must be in ' + str(units.keys()))
-    rule = dict(rule=str(value)+units[unit], closed='left', label='right')
-
+    rule = dict(rule=str(value) + units[unit],
+                closed='left',
+                label='right')
+    
     # extend ct.index timestamps to open_t and close_t if necessary
     timedelta = np.timedelta64(value, unit.lower())
-    p = [t for t in [open_t, close_t] if t < ct.index[0] or t > ct.index[-1]]
-    t = pd.concat((ct, DataFrame(index=p, columns=ct.columns))).sort_index()
+    p = [t for t in [open_t, close_t]
+         if t < ct.index[0] or t > ct.index[-1]]
+    t = pd.concat((ct, DataFrame(index=p,
+                                 columns=ct.columns))).sort_index()
     t.index.name = ct.index.name
 
     result = DataFrame(t['Trade_Volume']\
@@ -419,38 +551,61 @@ def bin_trades(ct, value=5, unit='m', open_t=_open_t, close_t=_close_t):
                        .rename(columns = {'Trade_Volume': 'volume'})
     result['counts'] = t['Trade_Price']\
                        .resample(**rule).count()
-    result['last'] = t['Trade_Price']\
-                     .resample(**rule)\
-                     .last()\
-                     .fillna(method='pad')
+    price = t['Trade_Price'].resample(**rule)
+    result['last'] = price.last().fillna(method='pad')
+    result['first'] = price.first()
+    result['maxtrade'] = price.max()
+    result['mintrade'] = price.min()
+    
+    # df.resample('1H',  how='ohlc', axis=0, fill_method='bfill')
+    # def ohlc(x):
+    #     ohlc={ "open":x["open"][0], "high":max(x["high"]),
+    #       "low":min(x["low"]),"close":x["close"][-1]}
+    #     return pd.Series(ohlc)
+    # df.resample('1D').apply(ohlc)
     result['ret'] = result['last'].div(result['last'].shift(1)) - 1 
     result['vwap'] = (t['Trade_Price'] * t['Trade_Volume'])\
                      .resample(**rule)\
                      .sum()\
-                     .div(result['volume'])
+                     .div(result['volume']\
+                          .where(result['volume'] > 0, np.nan))
                      #.agg(Series.sum, min_count=-1)\
     result['effective'] = ((t['Trade_Price'] - t['Prevailing_Mid']).abs()\
                            .mul(t['Trade_Volume'])\
                            .resample(**rule))\
                            .sum()\
-                           .div(result['volume'])
+                           .div(result['volume']\
+                                .where(result['volume'] > 0, np.nan))
                            #.agg(Series.sum, min_count=-1)\
+
     if 'Tick_Test' in t:
-        # Lee and Ready trade sign
-        leeready = np.sign(t['Trade_Price'].sub(t['Prevailing_Mid']).fillna(0))
+        # Lee and Ready test: compare to midquote, then tick test if no change
+        leeready = np.sign(t['Trade_Price']\
+                           .sub(t['Prevailing_Mid'])\
+                           .fillna(0))
         leeready = leeready.where(leeready.ne(0), t['Tick_Test'])
-        weighted = lambda spread: (leeready * spread * t['Trade_Volume'])\
-                   .resample(**rule)\
-                   .sum()\
-                   .div(result['volume'])
+
+        # compute trade weights (for averaging) from volume and sign
+        weighted = (lambda spread:
+                    (spread * leeready * t['Trade_Volume'])\
+                    .resample(**rule)\
+                    .sum()\
+                    .div(result['volume']\
+                         .where(result['volume'] > 0, np.nan)))
                    #.agg(Series.sum, min_count=1)\
-        result['realized'] = weighted(t['Trade_Price'] - t['Forward_Mid'])
-        result['impact'] = weighted(t['Forward_Mid'] - t['Prevailing_Mid'])
+        result['realized'] = weighted(t['Trade_Price']
+                                      - t['Forward_Mid'])
+        result['impact'] = weighted(t['Forward_Mid']
+                                    - t['Prevailing_Mid'])
+
     return result[(result.index > open_t) & (result.index <= close_t)]
 
-def plot_taq(left1, right1=None, left2=None, right2=None, num=None, title='',
-             open_t=None, close_t=None):
+def plot_taq(left1: DataFrame, right1: DataFrame | None = None,
+             left2: DataFrame | None = None, right2: DataFrame | None = None,
+             num: int | None = None, title: str = '',
+             open_t: Timestamp | None = None, close_t: Timestamp | None = None):
     """Convenience method for 1x2 primary/secondary-y subplots of tick data"""
+
     if left2 is None:
         fig, ax = plt.subplots(num=num, figsize=(10, 6), clear=True)
     else:
@@ -460,74 +615,70 @@ def plot_taq(left1, right1=None, left2=None, right2=None, num=None, title='',
     plot_time(left1, right1, ax=ax, title=title, xmin=open_t, xmax=close_t)
     plt.tight_layout(pad=3)
 
-def itertaq(trades, quotes, master, open_t=_open_t, close_t=None,
-            cusips=None, symbols=None, echo=ECHO, has_shares=True):
+def itertaq(trades: TAQ, quotes: TAQ, master: DataFrame,
+            open_t: Timestamp = open_t, close_t: Timestamp = 0,
+            cusips: List[str] = [], symbols: List[str] = [],
+            verbose = _VERBOSE, has_shares: bool = True):
     """Iterates over and filters daily taq trades and quotes by symbol
 
-    Parameters
-    ----------
-    trades : TAQ object
-        Instance of Trades input file object
-    quotes : TAQ object
-        Instance of NBBO input file object
-    master : DataFrame
-        Reference table from Master file, indexed by symbol
-    cusips : list, default is None (to return every)
-        List of cusips to select
-    symbols : list, default is None (to return every)
-        List of symbols (upper case, space separated security class) to select.
-    open_t : pandas.datetime, default is 9:30am
-        Earliest datetime of valid trades and quotes
-    close_t : pandas.datetime, default is None
-        Latest datetime to keep trades and quotes, inclusive
-    echo : bool, default True
-        Print echo messages for debugging
-    has_shares : bool, default True
-        If True, require 'Shares_Outstanding' > 0 in master table
+    Args:
+        trades: Instance of TAQ trades object
+        quotes: Instance of TAQ nbbo quotes object
+        master: Reference table from Master file, indexed by symbol
+        cusips: List of cusips to select
+        symbols: List of symbols (space separated security class) to select.
+        open_t: Earliest Timestamp of valid trades and quotes
+        close_t: Latest Timestamp to keep trades and quotes, inclusive
+        verbose: Whether to echo messages for debugging
+        has_shares: If True, require 'Shares_Outstanding' > 0 in master table
     """
-    if cusips is not None:
-        cusips = list(cusips)
-    if symbols is not None:
-        symbols = list(symbols)
+
+    def _print(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
+                    
+    cusips = list(cusips)  # require list type
+    symbols = list(symbols) # require list type
     trade = iter(trades)
     while True:
         t = next(trade)
         if t is None:
-            if echo: print('trade is none')
+            _print('trade is none')
             break
         symbol = t.index.name
         if symbol not in master.index:
-            if echo: print(f"{symbol} not in master")
+            _print(f"{symbol} not in master")
             continue
         name = master.loc[symbol, 'Security_Description']
         if symbols and symbol not in symbols:
-            if echo: print(f"{symbol} {name} not in symbols")
+            _print(f"{symbol} {name} not in symbols")
             continue
         if has_shares and not master.loc[symbol, 'Shares_Outstanding'] > 0:
-            if echo: print(f"{symbol} {name} has no shares")
+            _print(f"{symbol} {name} has no shares")
             continue
         cusip = master.loc[symbol, 'CUSIP']
         if cusips and cusip[:8] not in cusips and cusip not in cusips:
-            if echo: print(f"{symbol} {name} {cusip} not in cusips")
+            _print(f"{symbol} {name} {cusip} not in cusips")
             continue
         if t is None or not len(t):
-            if echo: print('trades is empty')            
+            _print('trades is empty')            
             continue
         q = quotes[symbol]
         if q is None or not len(q):
-            if echo: print('quotes is empty')            
+            _print('quotes is empty')            
             continue
         ct = clean_trade(t, open_t=open_t, close_t=close_t)
         cq = clean_nbbo(q)
         if not len(ct) or not len(cq):
-            if echo: print('ct or cq empty')             
+            _print('ct or cq empty')             
             continue
-        if echo: print(symbol, cusip, len(t),len(q),len(ct),len(cq))
+        _print(symbol, cusip, len(t), len(q), len(ct), len(cq))
         align_trades(ct, cq, open_t=open_t, inplace=True)
         yield ct, cq, master.loc[symbol]
 
-def opentaq(date, taqdir):
-    """Helper to init and return master dataframe, trade and quote objects"""
+    
+def opentaq(date, taqdir: str):
+    """Helper to initialize all master dataframe, trade and quote objects"""
     return (TAQ(os.path.join(taqdir,
                              f'EQY_US_ALL_REF_MASTER_{date}.gz')).read(),
             TAQ(os.path.join(taqdir, f'EQY_US_ALL_TRADE_{date}.gz'),
@@ -538,17 +689,15 @@ def opentaq(date, taqdir):
                 os.path.join(taqdir, f'EQY_US_ALL_NBBO_{date}.csv.gz')))
 
 if False:  # test access methods
-    from finds.taq import TAQ, opentaq, clean_nbbo, clean_trade, plot_taq
-    from finds.taq import open_t, close_t, bin_trades, bin_quotes, align_trades
     import os
     import numpy as np
-    from settings import settings
     import matplotlib.pyplot as plt
+    from conf import credentials, VERBOSE, paths
 
     # daily taq files from ftp://ftp.nyxdata.com/Historical%20Data%20Samples/
     dates = [20191007, 20191008, 20180305, 20180306, 20171101]
-    taqdir = os.path.join(settings['remote'], 'TAQ')
-
+    taqdir = paths['taq']
+    
     # generate input filenames for TAQ, igzip and symbols index files
     master_file = os.path.join(taqdir, 'EQY_US_ALL_REF_MASTER_{}.gz').format
     trade_file = os.path.join(taqdir, 'EQY_US_ALL_TRADE_{}.gz').format
@@ -597,11 +746,15 @@ if False:  # test access methods
     cq = clean_nbbo(q)    
     align_trades(ct, cq, inplace=True)
 
-    plot_taq(ct[['Trade_Price', 'Prevailing_Mid']], ct['Trade_Volume'],
+    plot_taq(ct[['Trade_Price', 'Prevailing_Mid']].groupby(level=0).last(),
+             ct['Trade_Volume'].groupby(level=0).last(),
              (cq['Best_Offer_Price'] - cq['Best_Bid_Price'])\
-             .rename('Quoted Spread'),
-             ((cq['Best_Bid_Size']+cq['Best_Offer_Size'])/2).rename('Depth'),
-             open_t=open_t, close_t=close_t + np.timedelta64('5','m'), num=1,
+             .rename('Quoted Spread').groupby(level=0).last(),
+             ((cq['Best_Bid_Size'] + cq['Best_Offer_Size']) / 2)\
+             .rename('Depth').groupby(level=0).last(),
+             open_t=open_t,
+             close_t=close_t + np.timedelta64('5','m'),
+             num=1,
              title=f"Tick Prices, Volume, Quotes, Spreads, and Depths")
     plt.show()    
 
@@ -610,9 +763,13 @@ if False:  # test access methods
     bt = bin_trades(ct, value, unit, close_t=close_t + timedelta)
     bq = bin_quotes(cq, value, unit, close_t=close_t + timedelta)
     bq = bq.join(bt, how = 'left')
-    plot_taq(bq[['last', 'vwap', 'mid']], bq['quoted'],
-             bt['volume'], bt['counts'], num=2,
-             open_t=open_t, close_t=close_t + np.timedelta64('5','m'),
+    plot_taq(bq[['last', 'vwap', 'mid']],
+             bq['quoted'],
+             bt['volume'],
+             bt['counts'],
+             num=2,
+             open_t=open_t,
+             close_t=close_t + np.timedelta64('5','m'),
              title=f"{value}{unit}-bin Prices, Quotes and Trades")
     print(f"Correlation of MidQuote and LastTrade {value}{unit}-bin returns")
     bq[['ret', 'retq']].corr()

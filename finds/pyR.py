@@ -1,9 +1,12 @@
-"""Convenience class methods to use rpy2 package and R environment
+"""Wrapper class over rpy2 package to interface with R environment
+
+Deconstruct and expose an rpy2 or numpy/pandas object interchangeably.
 
 - rpy2
 
-Author: Terence Lim
-License: MIT
+Copyright 2022, Terence Lim
+
+MIT License
 """
 import numpy as np
 from pandas import DataFrame, Series
@@ -13,9 +16,11 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import rpy2.robjects as ro
 from rpy2.robjects import FloatVector, ListVector, IntVector, StrVector, NULL
+from typing import List, Tuple, Any
 
-def StrListVector(strList):
-    """Convert input to a StrVector, or a ListVector recursively"""
+def StrListVector(strList: ListVector | StrVector
+                  | str | List) -> StrVector | ListVector:
+    """Convert nested list input to StrVector or ListVector"""
     try:
         assert(len(strList) > 0)   # NULL, None, '', non-str scalar  etc
     except:
@@ -31,86 +36,92 @@ def StrListVector(strList):
     else:  
         return StrVector(list(strList))   # is deepest list(-like) of str types
 
-def flatten(s):
+def _flatten(s):
     """Generator returns each terminal item (by DFS) from nested list"""
     try:
         for t in s:
-            if is_list_like(t):
-                yield from flatten(t)
+            if types.is_list_like(t):
+                yield from _flatten(t)
             else:
                 yield t
     except:
         yield s
 
-def combine(*args):
+        
+def _combine(*args):
     """Flatten each arg, and concat all into a flat list"""
-    return [item for sublist in args for item in list(flatten(sublist))] 
+    return [item for sublist in args for item in list(_flatten(sublist))] 
+
 
 class PyR:
-    """Populate a data object, to be exposed to both R (using rpy2) or Python
-    
-    Parameters
-    ----------
-    item : (rpy2) R Object, or Python numpy.array-compatible
-        input item can be of either Python or R object type
-    names : StrVector, ListVector, str or list of str, default None
-        explicitly provide labels in each dimension. Error checking is minimal:
-        should have same dimensions as given by shape of object (or self.dim)
+    """Store and expose as rpy2 or numpy/pandas objects 
 
-    Attributes
-    ----------
-    iloc : dict or numpy array
-        internally, objects are stored as either numpy array, or dict of objects
-        (when input was R ListVector or DataFrame, or Python dict).
-        Should use other safer property getters to view object in target types:
-        e,g, .frame (pandas), .ro (RObject), or .values (python dict or ndarray)
-    dim : tuple of int
-        dimensions of data objects
-    names, rownames, colnames : StrVector
+    Args:
+        item: input R object, or numpy array, or pandas DataFrame or Series
+        names: named labels of object items
 
-    Notes
-    -----
-    In R, matrices are column-major ordered (aka Fortran-like index order,
-    with the first index changing fastest) although the R constructor 
-    matrix() accepts a boolean argument byrow that, when true, will build 
-    the matrix as if row-major ordered (aka C-like, which is also Python numpy
-    default order, where the last axis index changes fastest)
+    Attributes:
+        iloc: dict or numpy array
 
-    A suggested convention in python applications is to append '_' to R function
-    names and '_r' to R objects, and capitalize initial letter of PyR instances.
+            - internally, objects are stored as either numpy array, 
+              or dict of objects (when input was R ListVector or DataFrame, 
+              or Python dict).
+            - TODO: should use other safer property getters to view object 
+              in target types: e,g, .frame (pandas), .ro (RObject), 
+              or .values (python dict or ndarray)
 
-    r['plot'] may need to explicitliy set xlab='', ylab=''
+        dim (tuple of int): dimensions of data objects
 
-    TODO: if hasattri('slots'), particulary 'ts' class, e.g. nile.slots.items()
+        names, rownames, colnames (StrVectors): named labels of object items
 
-    Examples
-    --------
-    from rpy2.robjects import r
-    from rpy2.robjects.packages import importr
-    amen_r = importr('amen')                      # use R library
-    c_ = r['c']                                   # link R routines
-    Nodevars = PyR(r['IR90s'].rx2['nodevars'])    # retrieve R data
-    Gdp = Nodevars[:, 'gdp']                      # getitem subset with slice
-    topgdp = Gdp.values > sorted(Gdp.py, reverse=True)[30] # python calculations
-    Dyadvars = PyR(r['IR90s'].rx2['dyadvars'])
-    Y = Dyadvars[topgdp, topgdp, 'exports']       # getitem with (bool) indices
-    Y.iloc = np.log(Y.iloc + 1)                   # update with python calcs
+    Notes:
+
+    - input item can be of either Python or R object type
+    - input labels in each dimension can be explicitly provided, and should have
+      same dim as object, as error checking is minimal
+    - In R, matrices are column-major ordered (aka Fortran-like index order,
+      with the first index changing fastest) although the R constructor 
+      matrix() accepts a boolean argument byrow that, when true, will build 
+      the matrix as if row-major ordered (aka C-like, which is also Python numpy
+      default order, where the last axis index changes fastest)
+    - A suggested convention is to append '_' to R function names and 
+      '_r' to R objects, and capitalize initial letter of PyR instances.
+    - r['plot'] may need to explicitliy set xlab='', ylab=''
+    - TODO: if hasattri('slots'), esp 'ts' class, e.g. nile.slots.items()
+
+    Examples:
+
+    >>> from rpy2.robjects import r
+    >>> from rpy2.robjects.packages import importr
+    >>> amen_r = importr('amen')                    # use R library
+    >>> c_ = r['c']                                 # link R routines
+    >>> Nodevars = PyR(r['IR90s'].rx2['nodevars'])  # retrieve R data
+    >>> Gdp = Nodevars[:, 'gdp']                    # getitem subset with slice
+    >>> topgdp = Gdp.values > sorted(Gdp.py, reverse=True)[30] # python calcs
+    >>> Dyadvars = PyR(r['IR90s'].rx2['dyadvars'])
+    >>> Y = Dyadvars[topgdp, topgdp, 'exports']  # getitem with boolean index 
+    >>> Y.iloc = np.log(Y.iloc + 1)          # update with python calculations
     """
-    def __init__(self, item, names=None, verbose=False):
-        """Make data instance from a python or R (rpy2) object input item"""
-        #self._r = item     # archive the original data object (but not used)
+
+    def __init__(self, item: Any,
+                 names: StrVector | ListVector | str | List[str] | None = None,
+                 verbose: int = 0):
+        """Make instance from an input python or R (rpy2) object"""
+        
         self.verbose = verbose
         self.dim = ()
 
-        if hasattr(item, 'names'):           # store names, colnames, rownames
-            self.names = item.names          #   as StrVectors
+        # extract names, colnnames, rownames, index, columns as StrVector attr
+        if hasattr(item, 'names'):   # R attributes
+            self.names = item.names
         if names is not None:
             self.names = StrListVector(names)
         if hasattr(item, 'colnames'):
             self.colnames = item.colnames
         if hasattr(item, 'rownames'):            
             self.rownames = item.rownames
-        if isinstance(item, (Series, DataFrame)):
+
+        if isinstance(item, (Series, DataFrame)):  # Pandas attributes
             self.rownames = StrVector(item.index)
         if isinstance(item, DataFrame):
             self.colnames = StrVector(item.columns)
@@ -124,8 +135,10 @@ class PyR:
             except:
                 names = [k for k,v in item.items()]
             self.iloc = {n: PyR(v) for n, (k,v) in zip(names, item.items())}
+            
             if verbose:
                 print(f"PyR: dict (len={len(self.iloc)}){type(item)}")
+                
         else:    # not dict-like, so convert to numpy array and apply shape dims
             self.iloc = np.array(item)
             if hasattr(item, 'dim'):
@@ -133,19 +146,26 @@ class PyR:
                 if len(self.dim) > 1:
                     self.iloc = self.iloc.reshape(tuple(item.dim), order='F')
             self.dim = self.iloc.shape
+
+            # try to infer rownames if not attribute
             if (not hasattr(self, 'rownames') and len(self.iloc.shape) > 1
                 and self.names and isinstance(self.names, ListVector)):
-                self.rownames = self.names[0]   # try to infer rownames
+                self.rownames = self.names[0]
+
+            # try to infer colnames if not attribute
             if (not hasattr(self, 'colnames') and len(self.iloc.shape) > 1
                 and self.names and isinstance(self.names, ListVector)):
                 self.colnames = self.names[1]   # try to infer colnames
+                
             if verbose:
                 print(f"PyR: ndarray {self.iloc.shape} {type(item)}")
+
         # TODO: WARNING self.names.shape (if hasattr and not null) via try
         # len(names)==len(dict) else len(names)=len(self.dim) or sum(self.dim)
 
     def __repr__(self):
         """str representation, preferabaly pretty print as pandas DataFrame"""
+        
         if not isinstance(self.iloc, dict):
             if len(self.iloc.shape) <= 2:
                 return str(self.frame)
@@ -154,6 +174,7 @@ class PyR:
     @staticmethod
     def savefig(filename, display=True, ax=None, figsize=(12,12)):
         """Save R graphics to file, or return R command. Optionally imshow"""
+        
         s = "dev.copy(png, '{}'); dev.off()".format(filename)
         if display is not None:
             ro.r(s)
@@ -166,6 +187,7 @@ class PyR:
     
     def assign(self, obj):
         """Directly update internal data object (must be same numpy shape)"""
+
         if isinstance(obj, dict):
             assert(isinstance(self.iloc, dict) and len(self.iloc)==len(obj))
             self.iloc = obj
@@ -176,7 +198,8 @@ class PyR:
     
     @property
     def ro(self):
-        """Expose a view as RObject, to be manipulated in R environment"""
+        """Expose a view as RObject, so that can pass to R environment"""
+
         # Convert to R vector of correct data type
         if isinstance(self.iloc, dict):
             out = ListVector([(None, PyR(v).ro) for v in self.iloc])  
@@ -201,7 +224,8 @@ class PyR:
 
     @property
     def frame(self):
-        """Try to expose a view as pandas DataFrame"""
+        """Expose a view as pandas DataFrame"""
+
         out = DataFrame(self.values)
         if hasattr(self, 'names') and isinstance(self.names, StrVector):
             if len(self.names) == len(out.columns):
@@ -221,7 +245,7 @@ class PyR:
                 if isinstance(self.iloc, dict) else self.iloc)
 
     def __getitem__(self, args):
-        """Returns copy of subset of data object from slice or index args"""
+        """Returns copy of subset of data object from given slice or index"""
         try:
             if isinstance(self.iloc, dict):  # return item of dict
                 if isinstance(args, int):
@@ -263,16 +287,19 @@ class PyR:
         
     @property
     def nrow(self):
-        """Length of first dimension, as R IntVector"""
+        """Length of first dimension, as R IntVector type"""
+        
         return IntVector([self.iloc.shape[0]])
     
     @property
     def ncol(self):
-        """Length of second dimension, as R IntVector"""
+        """Length of second dimension, as R IntVector type"""
+        
         return IntVector([self.iloc.shape[1]])
 
-    def index(self, s, axis=-1):
+    def index(self, s: str | List[str], axis: int = -1):
         """Helper method to lookup index/es of (list of) str label in names"""
+        
         if isinstance(s, str):
             return list(self.names[axis]).index(s)
         elif types.is_list_like(s):
@@ -288,8 +315,6 @@ if False:   # replicate Ch 1 Gaussian AME of Hoff (2018) "Amen" tutorial
     from numpy.ma import masked_invalid as valid
     import rpy2.robjects as ro
     from rpy2.robjects.packages import importr
-    from finds.utils import combine
-    from finds.pyR import PyR
     
     stats_ro = importr('stats')
     base_ro  = importr('base')
@@ -337,24 +362,24 @@ if False:   # replicate Ch 1 Gaussian AME of Hoff (2018) "Amen" tutorial
     print(np.corrcoef(Ahat.values, Bhat.values)[0,1])
     
     outer = Y.values - (muhat + np.add.outer(Ahat.values, Bhat.values))
-    print(ma.cov(valid(combine(outer)), valid(combine(outer.T))).data)
-    print(ma.corrcoef(valid(combine(outer)), valid(combine(outer.T)))[0,1])
+    print(ma.cov(valid(outer.flatten()), valid(outer.T.flatten())).data)
+    print(ma.corrcoef(valid(outer.flatten()), valid(outer.T.flatten()))[0,1])
 
     # Social Relations Model
-    fit_SRM_ro = ame_ro(Y.ro, plot=False, print=False)
+    fit_SRM_ro = ame_ro(Y.ro, plot=False, print=False, family='nrm')
     Fit_SRM = PyR(fit_SRM_ro)
     _ = summary_ro(fit_SRM_ro)
     plot_ro(fit_SRM_ro)
 
     # Compare empirical and model estimates
     print(muhat, np.nanmean(Fit_SRM['BETA'].values))  # overall mean
-    print(combine(np.cov(Ahat.values, Bhat.values))[:3])  # mean covariances
+    print(_combine(np.cov(Ahat.values, Bhat.values))[:3])  # mean covariances
     vcmean = Fit_SRM['VC'][:, :4].frame.mean()  # posterior variance parms
     print(vcmean[:3])
 
     # Residual Dyadic Correlation
     print(vcmean['cab'] / (np.sqrt(vcmean['va']) * np.sqrt(vcmean['vb'])))
-    print(ma.corrcoef(valid(combine(outer)), valid(combine(outer.T)))[0,1])    
+    print(ma.corrcoef(valid(_combine(outer)), valid(_combine(outer.T)))[0,1])
     print(np.mean(Fit_SRM['VC'][:, 3].values))
     
     # SRRM
@@ -394,7 +419,8 @@ if False:
     from rpy2.robjects.packages import importr
     from rpy2.robjects import Formula, Environment
     import rpy2.robjects as ro
-    from rpy2.robjects import FloatVector, ListVector, IntVector, StrVector, NULL
+    from rpy2.robjects import FloatVector, ListVector, IntVector, StrVector, \
+        NULL
     stats = importr('stats')
     base = importr('base')
     
