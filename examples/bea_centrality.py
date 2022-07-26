@@ -1,32 +1,38 @@
 """Graph Centrality and BEA Input-Output Use Tables
 
-- igraph, network centrality, BEA Input-Output Use Table
-- Choi and Foerster (2017), Bureau of Economic Analysis, and others
+- Centrality: eigenvector, hub, authority, pagerank,
+- BEA: Input-Output Use Table, Choi and Foerster (2017)
 
-Terence Lim
-License: MIT
+Copyright 2022, Terence Lim
+
+MIT License
 """
+import finds.display
+def show(df, latex=True, ndigits=4, **kwargs):
+    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
+figext = '.jpg'
+
 import os
 import time
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
-import igraph  # pip3 install cairocffi
-from igraph import Graph
+import networkx as nx
 from finds.database import Redis
 from finds.sectors import Sectoring, BEA
-from finds.graph import igraph_draw, igraph_info, igraph_centrality
-from settings import settings
+from finds.graph import graph_info, nodes_centrality, graph_draw
+from conf import credentials, VERBOSE, paths
 
-ECHO=False
-years = np.arange(1947, 2020) 
+LAST_YEAR = 2021
+years = np.arange(1947, LAST_YEAR) 
 vintages = [1997, 1963, 1947]   # when sectoring schemes were revised
-rdb = Redis(**settings['redis'])
-bea = BEA(rdb, **settings['bea'], echo=ECHO)
-logdir = None # os.path.join(settings['images'], 'bea')
+rdb = Redis(**credentials['redis'])
+bea = BEA(rdb, **credentials['bea'], verbose=VERBOSE)
+imgdir = os.path.join(paths['images'], 'bea')
 
 # Read IOUse tables from BEA website
+
 ioUses = dict()
 for vintage in vintages:
     for year in [y for y in years if y >= vintage]:
@@ -34,8 +40,8 @@ for vintage in vintages:
         ioUses[(vintage, year)] = df
     print(f"{len(ioUses)} tables through sectoring vintage year {vintage}")
 
-# Set directed edges with tail on user (table column) and head on maker (row)
-# Direction of edges point from user industry to maker, i.e. follows the money
+## Set directed edges with tail on user (table column) --> head on maker (row)
+## Direction of edges point from user industry to maker, i.e. follows the money
 tail = 'colcode'   # edges follow flow of payments, from column to row
 head = 'rowcode'   
 drop = ('F','T','U','V','Other')  # drop these codes
@@ -43,7 +49,14 @@ colors = ['lightgrey', 'darkgreen', 'lightgreen']
 yearc = {}  # collect annual table
 
 # Populate and plot graph of first and last table years
-for ifig, year in enumerate([1947, 2019]): #np.arange(1947, 2020)):
+
+ifig, year = 0, 1947
+vintage = 1947
+year0 = 1947
+#vintage = 1997
+#year0 = 2019
+year1 = 2020
+for ifig, year in enumerate([year0, year1]):
     # keep year, drop invalid rows
     ioUse = ioUses[(vintage, year)]
     data = ioUse[(~ioUse['rowcode'].str.startswith(drop) &
@@ -58,11 +71,11 @@ for ifig, year in enumerate([1947, 2019]): #np.arange(1947, 2020)):
     data = data[(data['colcode'] != data['rowcode'])]
     data['weights'] = data['datavalue'] / data['datavalue'].sum()
     edges = data.loc[data['weights'] > 0,
-                     [tail, head, 'weights', 'datavalue']].values
-    g = Graph.TupleList(edges, edge_attrs=['weight', 'value'], directed=True)
-    g.vs['bea'] = list(BEA.bea_industry[g.vs['name']])
-
-    Series(igraph_info(g)).to_frame().T
+                     [tail, head, 'weights']].values.tolist()
+    
+    G = nx.DiGraph()
+    G.add_weighted_edges_from(edges, weight='weight')
+    nx_labels = BEA._bea_industry[list(G.nodes)].to_dict()
 
     # update master table industry flow values
     master = master.join(data.groupby(['colcode'])['datavalue'].sum(),
@@ -71,76 +84,79 @@ for ifig, year in enumerate([1947, 2019]): #np.arange(1947, 2020)):
                          how='outer').rename(columns={'datavalue': 'maker'})
     master = master.fillna(0).astype(int)
     # inweight~supply~authority~eigenvector~pagerank, outweight~demand~hub
-    master = master.join(DataFrame(index=list(g.vs['name']),
-                                   data=igraph_centrality(g)), how='left')
-    master['bea'] = BEA.bea_industry[master.index].to_list()
-    yearc[year] = master[['outweight','inweight', 'pagerank', 'hub',
-                          'authority', 'bea']].set_index('bea')
+
+    centrality = DataFrame(nodes_centrality(G))
+    master = master.join(centrality, how='left')
+    master['bea'] = BEA._bea_industry[master.index].to_list()
+    yearc[year] = master[['pagerank', 'bea']].set_index('bea')
 
     # visualize graph
-    score = g.pagerank(weights='weight', damping=0.99)   
-    node_size = pd.Series(data=score, index=g.vs['name']).to_dict()
-    node_color = {k: colors[0] for k in g.vs["name"]}
+    score = centrality['pagerank']
+    node_size = score.to_dict()
+    node_color = {node: colors[0] for node in G.nodes()}
     if ifig == 0:
-        center_name = g.vs['name'][np.argmax(score)]
+        center_name = score.index[score.argmax()]
     else:
         node_color.update({k: colors[2] for k in top_color})
-    top_color = g.vs[list(np.argsort(score)[-5:])]["name"]
-    node_color.update({k: colors[1] for k in top_color})
-    
-    pos = igraph_draw(
-        g, num=ifig+1, center_name=center_name,
-        node_color=node_color, node_size=node_size, edge_color='r', k=3,
-        pos=(pos if ifig else None),font_size=10, font_weight='semibold',
-        labels={k:v for k,v in zip(g.vs['name'], g.vs['bea'])},
-        title=f"By Pagerank: {year} IO-Use ({vintage} vintage scheme)")
-    if logdir: plt.savefig(os.path.join(logdir, str(year) + '.jpg'))
-    print(Series(igraph_info(g)).rename(str(year)).to_frame().T.to_string())
+    top_color = list(score.index[score.argsort()[-5:]])
+    node_color.update(dict.fromkeys(top_color, colors[1]))
+    pos = graph_draw(G,
+                     num=ifig+1,
+                     figsize=(10, 10),
+                     center_name=center_name,
+                     node_color=node_color,
+                     node_size=node_size,
+                     edge_color='r',
+                     k=3,
+                     pos=(pos if ifig else None),
+                     font_size=10,
+                     font_weight='semibold',
+                     labels=master['bea'].to_dict(),
+                     title=f"By Pagerank: {year} IO-Use ({vintage} vintage)")
+    if imgdir:
+        plt.savefig(os.path.join(imgdir, str(year) + figext))
 plt.show()
 
-# Display node centrality
-c = yearc[1947].rank(ascending=False).astype(int).join(
-    yearc[2019].rank(ascending=False).astype(int), rsuffix='2019')
-c.columns = pd.MultiIndex.from_product([[1947,2019], yearc[1947].columns])
+## Display node centrality
+c = pd.concat([yearc[year0].rank(ascending=False).astype(int),
+               yearc[year1].rank(ascending=False).astype(int)],
+              axis=1)
+c.columns = pd.MultiIndex.from_product([[year0, year1], yearc[year0].columns])
 c
-print(c.to_latex())
 
-# Display correlation of centrality ranks
+## Display correlation of centrality ranks
 c.corr().round(3)
-print(c.corr().to_latex(float_format='%.3f'))
+
 
 # Display latest graph and node centrality
-vintage = year = 2019
+year = LAST_YEAR - 1
 ioUse = ioUses[(1997, year)]
 data = ioUse[(~ioUse['rowcode'].str.startswith(drop) &
               ~ioUse['colcode'].str.startswith(drop))].copy()
 
-# create master table of industries and measurements
-master = data[data['rowcode']==data['colcode']][['rowcode','datavalue']]\
-         .set_index('rowcode')\
-         .rename(columns={'datavalue': 'self'})
-
-# extract cross data; generate and load edges (as tuples) to graph
+## extract cross data; generate and load edges (as tuples) to graph
 data = data[(data['colcode'] != data['rowcode'])]
 data['weights'] = data['datavalue'] / data['datavalue'].sum()
-edges = data.loc[data['weights'] > 0,
-                 [tail, head, 'weights', 'datavalue']].values
-g = Graph.TupleList(edges, edge_attrs=['weight', 'value'], directed=True)
-g.vs['bea'] = list(BEA.bea_industry[g.vs['name']])
+edges = data.loc[data['weights'] > 0, [tail, head, 'weights']].values.tolist()
+G = nx.DiGraph()
+G.add_weighted_edges_from(edges, weight='weight')
 
-# update master table industry flow values and graph centrality measures
-master = master.join(data.groupby(['colcode'])['datavalue'].sum(),
-                     how='outer').rename(columns={'datavalue': 'user'})
-master = master.join(data.groupby(['rowcode'])['datavalue'].sum(),
-                     how='outer').rename(columns={'datavalue': 'maker'})
-master = master.fillna(0).astype(int)
-master = master.join(DataFrame(index=list(g.vs['name']),
-                               data=igraph_centrality(g)), how='left')
-master['bea'] = BEA.bea_industry[master.index].to_list()
+## update master table industry flow values and graph centrality measures
+master = pd.concat((data[data['rowcode']
+                         == data['colcode']][['rowcode','datavalue']]\
+                    .set_index('rowcode')\
+                    .rename(columns={'datavalue': 'self'}),
+                    data.groupby(['colcode'])['datavalue'].sum()\
+                    .rename('user'),
+                    data.groupby(['rowcode'])['datavalue'].sum()\
+                    .rename('maker')),
+                   join='outer',
+                   axis=1).fillna(0).astype(int)
+master = master.join(DataFrame(nodes_centrality(G)), how='left')
+master['bea'] = BEA._bea_industry[master.index].to_list()
+show(master.drop(columns=['self', 'clustering']),
+     ndigits=3,
+     caption=f"Centrality of BEA Input-Output Use Table {year}")
 
-print(master.set_index('bea')\
-      .drop(columns=['betweenness', 'closeness'])\
-      .to_latex(float_format='%.4f'))
-    
-Series(igraph_info(g)).rename(str(year)).to_frame().T
+Series(graph_info(G, fast=True))
 

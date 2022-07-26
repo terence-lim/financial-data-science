@@ -1,12 +1,21 @@
-"""Forecasting and Econometrics
+"""Econometrics and Forecasting
 
-- seasonality, spectral density, unit root, stationarity
-- autocorrelation functions, AR, MA, SARIMAX
-- scipy, statsmodels, seaborn, St Louis Fed FRED
+- Trends: seasonality
+- Autocorrelation Function: AR, MA, SARIMAX
+- Unit root: integration order
+- Forecasting: single-step, multi-step
+- Granger Casuality
+- Vector Auto-Regression: impulse response function
 
-Terence Lim
-License: MIT
+Copyright 2022, Terence Lim
+
+MIT License
 """
+import finds.display
+def show(df, latex=True, ndigits=4, **kwargs):
+    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
+figext = '.jpg'
+
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
@@ -14,139 +23,167 @@ import matplotlib.pyplot as plt
 import time
 import os
 import seaborn as sns 
+from statsmodels.tsa.ar_model import AutoReg, ar_select_order
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf, acf
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.stattools import grangercausalitytests
+from statsmodels.tsa.api import VAR
+import statsmodels.formula.api as smf
+from sklearn.metrics import mean_squared_error        
 from finds.alfred import Alfred
+from finds.busday import to_datetime
+from finds.recipes import integration_order
+from conf import paths, VERBOSE, credentials
 
-from settings import settings
-imgdir = os.path.join(settings['images'], 'ts')
-alf = Alfred(api_key=settings['fred']['api_key'],
-             savefile=settings['scratch'] + 'fred.md')
+imgdir = os.path.join(paths['images'], 'ts')
+alf = Alfred(api_key=credentials['fred']['api_key'])
+
+series_id, freq, start = 'CPIAUCNS', 'M', 0 #19620101  # not seasonally adjusted
+
+df = alf(series_id, log=1, freq=freq, start=start).dropna()
+df.index = to_datetime(df.index)
 
 # Seasonality
-import scipy.signal
-series_id = 'ND000334Q'  # real gdp
-df = alf(series_id, log=1, diff=1, freq='Q').dropna()
-x = df.values.flatten()  #y.iloc[:-240].copy()
-fig, axes = plt.subplots(1, 2, num=1, clear=True, figsize=(10,5))
-axes[0].plot(pd.DatetimeIndex(df.index.astype(str), freq='infer'),
-             x.cumsum(), marker=None)
-axes[0].set_title(" ".join(alf.header(
-    series_id, ['id', 'title', 'seasonal_adjustment']).to_list()), fontsize=10)
-    
-freq, power = scipy.signal.welch(x - x.mean(), nperseg=4*(len(x)//4))
-axes[1].semilogy(freq, power)
-argmax = np.argmax(power[:-1])
-axes[1].set_xlabel(f"Max spectral density at frequency={freq[argmax]:.2f}, "
-                   f"periodicity={1/freq[argmax]:.0f} quarters",fontsize=10)
-axes[1].axvline(freq[argmax], ls=':', c='r')
-plt.tight_layout(pad=3)
-plt.savefig(os.path.join(imgdir, 'welch.jpg'))
+
+## Seasonality Decomposition Plot
+result = seasonal_decompose(df, model = 'add')
+fig, ax = plt.subplots(nrows=4, ncols=1, clear=True, figsize=(10, 12))
+result.observed.plot(ax=ax[0], title=alf.header(result.observed.name),
+                     ylabel=result.observed.name, xlabel='', c='b')
+result.trend.plot(ax=ax[1], ylabel='Trend', xlabel='', c='r')
+result.seasonal.plot(ax=ax[2], ylabel='Seasonal', xlabel='', c='g')
+result.resid.plot(ax=ax[3], ls='', ms=3, marker='.', c='m',
+                  ylabel='Residual', xlabel='')
+plt.tight_layout()
+plt.savefig(os.path.join(imgdir, 'seasonal' + figext))
+plt.show()
+
+# Autocorrelation Function - Plot ACF and PACF
+
+values = df.diff().dropna().values.squeeze()
+fig, axes = plt.subplots(1, 2, clear=True, figsize=(10,5))
+plot_acf(values, lags=35, ax=axes[0])
+plot_pacf(values, lags=35, ax=axes[1], method='ywm')
+plt.tight_layout(pad=2)
+plt.savefig(os.path.join(imgdir, 'acf' + figext))
 plt.show()
 
 # Stationarity and Unit Root
-## helper test methods
-from statsmodels.tsa.stattools import adfuller
-def unit_root(x, pvalue=0.05, noprint=False):
-    """test if input series has unit root using augmented dickey fuller"""
-    dftest = adfuller(x, autolag='AIC')
-    if not noprint:
-        results = Series(dftest[0:4],
-                         index=['Test Statistic','p-value', 'Lags Used',
-                                'Obs Used'])
-        for k,v in dftest[4].items():
-            results[f"Critical Value ({k})"] = v
-        print(results.to_frame().T.to_string(index=False))
-    return dftest[1] > pvalue
 
-def integration_order(df, noprint=True, max_order=5, pvalue=0.05):
-    """returns order of integration by iteratively testing for unit root"""
-    for i in range(max_order):
-        if not noprint:
-            print(f"Augmented Dickey-Fuller unit root test of I({i}):")
-        if not unit_root(df, pvalue=pvalue, noprint=noprint):
-            return i
-        df = df.diff().dropna()
+## Integration Order: Log CPI (Seasonally Adjusted)
 
-## Integration Order: Real GDP (Seasonally Adjusted)
-s = 'GDPC1'
-df = alf(s, log=1, freq='Q')
-df.index = pd.DatetimeIndex(df.index.astype(str))
+series_id = 'CPIAUCSL' #19620101  # seasonally adjusted
+#series_id = 'GDPC1'
+df = alf(series_id, log=1, start=0).dropna()
+df.index = to_datetime(df.index)
 p = integration_order(df, noprint=False, pvalue=0.05)
-Series({s: p}, name='I(p)').to_frame()
+Series({series_id: p}, name='I(p)').to_frame()
 
 ## Histogram Plot and Kernel Density Estimate
-import seaborn as sns
-fig, axes = plt.subplots(1, 2, num=1, clear=True, figsize=(10,5))
-sns.distplot(df.dropna().rename(f"diff log {s}"), hist=True, kde=True,
-             rug=True, ax=axes[0], rug_kws={"color": "C0"},
-             kde_kws={"color": "C1"}, hist_kws={"color": "C2"})
-axes[0].set_title(f"Density Plot of log({s})")
-sns.distplot(df.diff().dropna().rename(f"diff log {s}"), hist=True, kde=True,
-             rug=True, ax=axes[1], rug_kws={"color": "C0"},
-             kde_kws={"color": "C1"}, hist_kws={"color": "C2"})
-axes[1].set_title(f"Density Plot of diff log({s})")
-plt.savefig(os.path.join(imgdir, 'order.jpg'))
+
+fig, axes = plt.subplots(1, 2, clear=True, figsize=(10,5))
+sns.histplot(df.dropna(),
+             bins=30,
+             lw=0,
+             kde=True,
+             #line_kws={"color": "r"},
+             ax=axes[0])
+axes[0].set_title(f"Density Plot of log({series_id})")
+sns.histplot(df.diff().dropna().rename(f"diff log {series_id}"),
+             bins=30,
+             lw=0,
+             kde=True,
+             #line_kws={"color": "r"},
+             ax=axes[1])
+axes[1].set_title(f"Density Plot of diff log({series_id})")
+plt.savefig(os.path.join(imgdir, 'order' + figext))
 plt.tight_layout(pad=3)
 plt.show()
 
-# Autocorrelation Function
-## Plot ACF and PACF
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-df = alf('GDPC1', start=19590101, end=20191231, log=1, diff=1, freq='Q')[1:]
-df.index = pd.DatetimeIndex(df.index.astype(str), freq='infer')
-fig, axes = plt.subplots(1, 2, clear=True, figsize=(10,5))
-#df.plot(ax=axes[0], title="$\Delta$ log(GDPC1)")
-plot_acf(df.values.squeeze(), lags=20, ax=axes[0])
-plot_pacf(df, lags=20, ax=axes[1])
-plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'acf.jpg'))
-plt.show()
-
-# Select AR lag order with BIC
-from statsmodels.tsa.ar_model import AutoReg, ar_select_order
-s = 'GDPC1'  # real gdp, seasonally adjusted
-df = alf(s, log=1, diff=1, start=19591201, freq='Q').loc[:20191231].dropna()
-df.index = pd.DatetimeIndex(df.index.astype(str), freq='infer')
-df_train = df[df.index <= '2017-12-31']
-df_test = df[df.index > '2017-12-31']
-lags = ar_select_order(df_train, maxlag=13, ic='bic',old_names=False).ar_lags
-print('(BIC) lags= ', len(lags), ':', lags)
 
 # AR and SARIMAX
 ## AR(p) is simplest time-model, can nest in SARIMAX(p,d,q,s) with
-## moving average MA(q), integration order I(d), seasonality S(s), exogenous X
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-adf = alf(s, log=1, freq='Q').loc[19591201:20171231]
-adf.index = pd.DatetimeIndex(adf.index.astype(str), freq='infer')
-arima = SARIMAX(adf, order=(2, 1, 0), trend='c').fit()
-fig = arima.plot_diagnostics(figsize=(10,6))
+## integration order I(d), moving average MA(q), seasonality S(s), exogenous X
+
+series_id, freq, start = 'CPIAUCNS', 'M', 0  # not seasonally adjust
+log_df = alf(series_id, log=1)
+log_df.index = to_datetime(log_df.index)
+log_df = log_df.loc[:split_date].dropna()
+
+pdq = (1, 1, 3)   #(12, 1, 0)
+seasonal_pdqs = (0, 0, 0, 12)
+arima = SARIMAX(log_df,
+                order=pdq,
+                seasonal_order=seasonal_pdqs,
+                trend='c').fit()
+fig = arima.plot_diagnostics(figsize=(10,6), lags=36)
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'ar.jpg'))
+plt.savefig(os.path.join(imgdir, 'ar' + figext))
 plt.show()
 arima.summary()
 
+
 # Forecasting
+
+series_id, start = 'CPIAUCSL', 0
+df = alf(series_id, log=1, diff=1, start=start).dropna()
+df.index = to_datetime(df.index)
+split_date = '2021-06-30'
+df_train = df[df.index <= split_date]
+df_test = df[df.index > split_date]
+
+## Select AR lag order
+"""ARMA select order is too slow and unstable in statsmodels
+# Select ARMA lag order
+from statsmodels.tsa.stattools import arma_order_select_ic
+series_id = 'CPIAUCSL'
+df = alf(series_id, log=1, diff=1).dropna()
+df.index = to_datetime(df.index)
+split_date = '2021-06-30'
+df_train = df[df.index <= split_date]
+df_test = df[df.index > split_date]
+res = arma_order_select_ic(df_train,
+                           max_ar=36,
+                           max_ma=12,
+                           ic='aic',
+                           trend='n')
+print('(p, q) = ', res.aic_min_order)
+"""
+
+lags = ar_select_order(df_train,
+                       maxlag=36,
+                       ic='bic',
+                       old_names=False).ar_lags
+print('(BIC) lags= ', len(lags), ':', lags)
+
+
+
 ## One-step ahead predictions    
 model = AutoReg(df_train, lags=lags, old_names=False).fit()  
 print(model.summary())
-    
-# Observations to predict are from the test split
-from sklearn.metrics import mean_squared_error        
+
+### Observations to predict are from the test split
 all_dates = AutoReg(df, lags=lags, old_names=False)
+
+### Use model params from train split, start predictions from last train row    
 df_pred = all_dates.predict(model.params,
                             start=df_train.index[-1]).shift(1).iloc[1:]
 mse = mean_squared_error(df_test, df_pred)
 var = np.mean(np.square(df_test - df_train.mean()))
-print(f"Short-term Forecasts:  rmse={np.sqrt(mse):.6f} r2={1-mse/var:.4f}")
-fig, ax = plt.subplots(clear=True, num=1, figsize=(4,6))
-df_pred.plot(ax=ax, c='C0')
-df_test.plot(ax=ax, c='C1')
+print(f"ST Forecast({len(df_pred)}): rmse={np.sqrt(mse)} r2={1-mse/var}")
+
+fig, ax = plt.subplots(clear=True, num=1, figsize=(5, 5))
+df_test.plot(ax=ax, c='C1', ls='', marker='*')
+df_pred.plot(ax=ax, c='C0', ls='', marker='o')
 ax.legend(['Predicted', 'Actual'])
-ax.set_title(s + " (one-step forecasts)")
+ax.set_title(series_id + " (one-step forecasts)")
+ax.set_xlabel('')
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'short.jpg'))
+plt.savefig(os.path.join(imgdir, 'short' + figext))
 plt.show()
 
-# Multi-step ahead predictions
+## Multi-step ahead predictions
 df_pred = all_dates.predict(model.params,
                             start=df_train.index[-1],
                             end=df_test.index[-1],
@@ -154,28 +191,45 @@ df_pred = all_dates.predict(model.params,
 mse = mean_squared_error(df_test, df_pred)
 var = np.mean(np.square(df_test - df_train.mean()))
 print(f"Long-term Forecasts:  rmse={np.sqrt(mse):.6f} r2={1-mse/var:.4f}")
-fig, ax = plt.subplots(clear=True, num=2, figsize=(4,6))
-df_pred.plot(ax=ax, c='C0')
-df_test.plot(ax=ax, c='C1')
+fig, ax = plt.subplots(clear=True, num=2, figsize=(5, 5))
+df_test.plot(ax=ax, c='C1', ls='', marker='*')
+df_pred.plot(ax=ax, c='C0', ls='', marker='o')
 ax.legend(['Predicted', 'Actual'])
-ax.set_title(s + " (multi-step forecasts)")
+ax.set_title(series_id + " (multi-step forecasts)")
+ax.set_xlabel('')
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'long.jpg'))
+plt.savefig(os.path.join(imgdir, 'long' + figext))
 plt.show()
 
-# One-step ahead expanding re-estimation window predictions
-df_pred = DataFrame(index=df_test.index)
-for date in df_pred.index:
-    expand = AutoReg(df[df.index < date], lags=lags, old_names=False).fit()
-    df_pred.loc[date, 'pred'] = float(expand.predict(start=-1, end=-1))
-mse = mean_squared_error(df_test, df_pred)
-var = np.mean(np.square(df_test - df_train.mean()))
-print(f"Expanding Forecasts:  rmse={np.sqrt(mse):.6f} r2={1-mse/var:.4f}")
-fig, ax = plt.subplots(clear=True, num=3, figsize=(4,6))
-df_pred.plot(ax=ax, c='C0')
-df_test.plot(ax=ax, c='C1')
-ax.legend(['Predicted', 'Actual'])
-ax.set_title(s + " (expanding re-estimation window forecasts)")
-plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'recursive.jpg'))
+
+# Granger Causality: INDPRO vs CPI
+
+start = 19620101
+for series_id, exog_id in [['CPIAUCSL', 'INDPRO'], ['INDPRO', 'CPIAUCSL']]:
+    df = pd.concat([alf(s, start=start, log=1)
+                    for s in [series_id, exog_id]], axis=1)
+    df.index = pd.DatetimeIndex(df.index.astype(str))
+    data = df.diff().dropna()
+
+    print(f"Null Hypothesis: {exog_id} granger-causes {series_id}")
+    res = grangercausalitytests(data, 3)
+    print()
+
+    dmf = (f'{series_id} ~ {series_id}.shift(1) '
+           f' + {exog_id}.shift(1) '
+           f' + {exog_id}.shift(2) '
+           f' + {exog_id}.shift(3) ')
+#           f' + {exog_id}.shift(4) ')
+    model = smf.ols(formula=dmf, data=data).fit()
+    robust = model.get_robustcov_results(cov_type='HAC', use_t=None, maxlags=0)
+    print(robust.summary())
+
+# Vector Autoregression: Impulse Response Function
+model = VAR(data)
+results = model.fit(3)
+print(results.summary())
+irf = results.irf(12)
+#irf.plot(orth=False)
+irf.plot_cum_effects(orth=False, figsize=(10, 6))
+plt.savefig(os.path.join(imgdir, 'impulse' + figext))
 plt.show()

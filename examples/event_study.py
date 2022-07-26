@@ -1,32 +1,43 @@
 """Event Study Abnormal Returns
 
-- key developments CAR, BHAR and post-event drift
+- S&P/Capital IQ Key Developments
+- event study: CAR, BHAR, post-announcement drift (Kolari et al 2010 and others)
+- multiple testing: Holm FWER, Benjmain-Hochberg FDR, Bonferroni p-values
 
-Terence Lim
-License: MIT
+Copyright 2022, Terence Lim
+
+MIT License
 """
+import finds.display
+def show(df, latex=True, ndigits=4, **kwargs):
+    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
+figext = '.jpg'
+
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
 import os
 import time
+from scipy.stats import norm
+from statsmodels.stats.multitest import multipletests
 from finds.database import SQL
 from finds.busday import BusDay
-from finds.structured import PSTAT, CRSP, Benchmarks
+from finds.structured import PSTAT, CRSP, Benchmarks, Stocks
 from finds.backtesting import EventStudy
-from settings import settings
-LAST_DATE = settings['crsp_date']
+from conf import CRSP_DATE, VERBOSE, credentials, paths
 
-ECHO = True
-sql = SQL(**settings['sql'], echo=ECHO)
-user = SQL(**settings['user'], echo=ECHO)
+LAST_DATE = 20201231
+VERBOSE = 0
+
+sql = SQL(**credentials['sql'], verbose=VERBOSE)
+user = SQL(**credentials['user'], verbose=VERBOSE)
 bd = BusDay(sql)
-keydev = PSTAT(sql, bd)
-crsp = CRSP(sql, bd, rdb=None)
-bench = Benchmarks(sql, bd)
-eventstudy = EventStudy(user, bench, LAST_DATE)
-outdir = os.path.join(settings['images'], 'events')
+keydev = PSTAT(sql, bd, verbose=VERBOSE)
+crsp = CRSP(sql, bd, rdb=None, verbose=VERBOSE)
+bench = Benchmarks(sql, bd, verbose=VERBOSE)
+eventstudy = EventStudy(user, bench=bench, stocks=crsp, max_date=LAST_DATE)
+imgdir = os.path.join(paths['images'], 'events')
 
 # event window parameters
 end = 20201201
@@ -34,11 +45,14 @@ beg = 19890101  # 20020101
 minobs = 250
 left, right, post = -1, 1, 21
 
-# str formatter to pretty print event and role description given their id's 
-eventformat = lambda e, r: "{event} ({eventid}) {role} [{roleid}]".format(
-    event=keydev.event_[e], eventid=e, role=keydev.role_[r], roleid=r)
-events = sorted(keydev.event_.keys())   # list of eventid's
-roles = sorted(keydev.role_.keys())     # list of roleid's
+# str formatter to pretty print event and role descriptions 
+eventformat = lambda e, r: "{event} ({eventid}) {role} [{roleid}]"\
+    .format(event=keydev._event[e],
+            eventid=e,
+            role=keydev._role[r],
+            roleid=r)
+events = sorted(keydev._event.keys())   # list of eventid's
+roles = sorted(keydev._role.keys())     # list of roleid's
 
 ## Helpers to merge events and crsp, and screen stock universe
 
@@ -46,240 +60,223 @@ roles = sorted(keydev.role_.keys())     # list of roleid's
 shrcd = crsp.build_lookup('permno', 'shrcd')
 exchcd = crsp.build_lookup('permno', 'exchcd')
 
-def event_pipeline(eventstudy, mincap=300000, **arg):
+def event_pipeline(eventstudy: EventStudy, stocks: Stocks, beg: int, end: int,
+                   eventid: int, roleid: int, left: int, right: int, post: int,
+                   mincap: float = 300000.) -> DataFrame:
     """helper to merge keydev events and crsp, and screen stock universe"""
+
+    # Retrieve announcement dates for this event
     df = keydev.get_linked(
         dataset='keydev',
         date_field='announcedate',
         fields=['keydevid',
                 'keydeveventtypeid',
                 'keydevtoobjectroletypeid'],
-        where=(f"announcedate >= {arg['beg']} and announcedate <= {arg['end']}"
-               f" and keydeveventtypeid = {arg['eventid']} "
-               f" and keydevtoobjectroletypeid = {arg['roleid']}"))\
-               .drop_duplicates(['permno','announcedate'])\
-               .set_index(['permno','announcedate'], drop=False)
-    
-    stk = arg['stocks'].get_many(
-        dataset='daily',
-        permnos=df['permno'],
-        date_field='date',
-        dates=arg['stocks'].bd.offset(df['announcedate'], left-1),
-        fields=['prc', 'shrout']).fillna(0)
-    
+        where=(f"announcedate >= {beg} "
+               f"  and announcedate <= {end}"
+               f"  and keydeveventtypeid = {eventid} "
+               f"  and keydevtoobjectroletypeid = {roleid}"))\
+               .drop_duplicates(['permno', 'announcedate'])\
+               .set_index(['permno', 'announcedate'], drop=False)
+
+    # Require in valid screen: 'cap', 'exchcd', 'shcrd'
+    stk = stocks.get_many(dataset='daily',
+                          permnos=df['permno'],
+                          date_field='date',
+                          dates=stocks.bd.offset(df['announcedate'], left-1),
+                          fields=['prc', 'shrout']).fillna(0)
     df['cap'] = (stk['prc'].abs() * stk['shrout']).values
-    df['exchcd'] = [exchcd(r.permno, r.date) for r in stk.itertuples()]
-    df['shrcd'] = [shrcd(r.permno, r.date) for r in stk.itertuples()]
-    r = (df['cap'].gt(mincap) &              # require cap > $300M
-         df['exchcd'].isin([1,2,3]) &        # primary exchange
-         df['shrcd'].isin([10,11])).values   # domestic common stocks
-    rows = eventstudy(crsp, df[r], left, right, post, 'announcedate')
+    df['exchcd'] = [exchcd(row.permno, row.date) for row in stk.itertuples()]
+    df['shrcd'] = [shrcd(row.permno, row.date) for row in stk.itertuples()]
+    select = (df['cap'].gt(mincap)                  # require cap > $300M
+              & df['exchcd'].isin([1, 2, 3])        # primary exchange
+              & df['shrcd'].isin([10, 11])).values  # domestic common stocks
+
+    # Call eventstudy to retrieve daily abnormal returns, with named label
+    rows = eventstudy(event=f"{eventid}_{roleid}",
+                      df=df[select],
+                      left=left,
+                      right=right,
+                      post=post,
+                      date_field='announcedate')
     return df.loc[rows.to_records(index=False).tolist()]  # restrict df to rows
 
 ## Compute abnormal returns of all events
-# %%capture
+restart = 0
+
 tic = time.time()
 for i, eventid in enumerate(events):
+    
+    if eventid <= restart: continue
+    
     for roleid in roles:
-        # retrieve all observations of this eventid, roleid
-        df = event_pipeline(eventstudy, stocks=crsp, beg=beg, end=end,
-                            eventid=eventid, roleid=roleid,
-                            left=left, right=right, post=post)
-        if len(df) < minobs:  # require min number of events
-            continue
-        
-        # retrieve announcement window returns
-        r = eventstudy(crsp, df, left, right, post, 'announcedate')
-        if r['date'].nunique() < minobs:  # require min number of dates
+        # retrieve all returns observations of this eventid, roleid
+        df = event_pipeline(eventstudy,
+                            stocks=crsp,
+                            beg=beg,
+                            end=end,
+                            eventid=eventid,
+                            roleid=roleid,
+                            left=left,
+                            right=right,
+                            post=post)
+        if df['announcedate'].nunique() < minobs:  # require min number of dates
             continue
 
         # compute both BHAR and CAR averages, plot and save
-        bhar = eventstudy.fit(car=False, name='bhar')
-        car = eventstudy.fit(car=True, name='car')
-        eventstudy.write(label=f"{eventid}_{roleid}")
-        s = pd.concat([bhar, car], axis=1).T
-        print(eventformat(eventid, roleid))
-        print(s.to_string(float_format='%.4f', index=False))
-        print()
-        fig, axes = plt.subplots(2, 1, clear=True, num=1, figsize=(10,12))
-        eventstudy.plot(title=eventformat(eventid, roleid),
-                        vline=right, ax=axes[0], name='bhar')
-        eventstudy.plot(title='', vline=right, ax=axes[1], name='car')
-        if outdir:
-            plt.savefig(os.path.join(outdir, f"{eventid}_{roleid}.jpg"))
+        bhar = eventstudy.fit(model='sbhar')
+        car = eventstudy.fit(model='scar')
+        #eventstudy.write()
+        eventstudy.write_summary()
+        print(eventstudy.event, eventid, roleid)
+        show(DataFrame.from_dict(car | bhar, orient='index'))
+    
+        fig, axes = plt.subplots(2, 1, clear=True, num=1, figsize=(10, 11))
+        eventstudy.plot(title=eventstudy.event,
+                        vline=[right],
+                        ax=axes[0],
+                        model='sbhar')
+        eventstudy.plot(title='',
+                        vline=[right],
+                        ax=axes[1],
+                        model='scar')
+        if imgdir:
+            plt.savefig(os.path.join(imgdir, f"{eventid}_{roleid}.jpg"))
     print('Elapsed:', time.time()-tic, 'secs')
 
 
+# Multiple Testing
+alpha = 0.05
+
 ## Summarize BHAR's of all events, by 3-day event window abnormal returns
+df = eventstudy.read_summary(model='sbhar')\
+               .set_index('event')\
+               .sort_values('window', ascending=False)
 
-df = eventstudy.read(name='bhar')\
-               .set_index('permno').sort_values('window', ascending=False)
-dx = DataFrame(df.index.str.split('_').to_list()).astype(int)
-df.index = pd.MultiIndex.from_frame(dx).set_names(['eventid','roleid'])
+## convert (eventid, roleid) to multiindex
+multiIndex = DataFrame(df.index.str.split('_').to_list()).astype(int)
+df.index = pd.MultiIndex.from_frame(multiIndex, names=['eventid', 'roleid'])
+df['event'] = keydev._event[df.index.get_level_values(0)].values
+df['role'] = keydev._role[df.index.get_level_values(1)].values
 
-df['event'] = keydev.event_[df.index.get_level_values(0)].values
-df['role'] = keydev.role_[df.index.get_level_values(1)].values
+show(df[df['days'] > 500].drop(columns='model').sort_values('post_t'),
+     latex=False,
+     caption="Post-Announcement Drift")
 
-mindays = (df['days']>1000).values
-print(df[mindays].iloc[:10].drop(columns='name')\
-      .to_string(formatters={'effective':'{:.0f}'.format}, float_format='%.4f',
-                 index=False))
-print(df[mindays].iloc[::-1].iloc[:10].drop(columns='name')\
-      .to_string(formatters={'effective':'{:.0f}'.format}, float_format='%.4f',
-                 index=False))
-print(df[mindays].iloc[:10].drop(columns=['name'])\
-      .to_latex(index=False, formatters={'effective':'{:.0f}'.format}))
-print(df[mindays].iloc[::-1].iloc[:10].drop(columns=['name'])\
-      .to_latex(index=False, formatters={'effective':'{:.0f}'.format}))
-print(df.sort_values('post_t').to_string(float_format='%.4f'))
-df.drop(columns='name')
-
-## Show single plots for each of three events
-eventid, roleid = 80, 1
-eventid, roleid = 26, 1
-df = event_pipeline(eventstudy, stocks=crsp, eventid=eventid, roleid=roleid,
-                    beg=beg, end=end, left=left, right=right, post=post)
-bhar = eventstudy.fit(car=False)
-fig, ax = plt.subplots(clear=True, num=1, figsize=(10,6))
-eventstudy.plot(title=eventformat(eventid, roleid), vline=right, ax=ax)
-
-
-## show single plot by market cap and half-period
-midcap = 20000000
-for i, (eventid, roleid) in enumerate([[50,1], [83,1]]):
-    #eventid, roleid = 50, 1
-    #eventid, roleid = 83, 1
-    df = event_pipeline(eventstudy, stocks=crsp, eventid=eventid, roleid=roleid,
-                        beg=beg, end=end, left=left, right=right, post=post)
-    halfperiod = np.median(df['announcedate'])
-    sample = {'[FirstHalf]': df['announcedate'].ge(halfperiod).values,
-              '[SecondHalf]': df['announcedate'].lt(halfperiod).values,
-              '[Large]': df['cap'].ge(midcap).values,
-              '[Small]': df['cap'].lt(midcap).values,
-              '': None}
-    for ifig, (label, rows) in enumerate(sample.items()):
-        fig, ax = plt.subplots(clear=True, num=1+ifig, figsize=(5,6))
-        bhar = eventstudy.fit(rows=rows, car=False)
-        eventstudy.plot(title=eventformat(eventid, roleid) + ' ' + label,
-                        drift=True, ax=ax, c=f"C{i*5+ifig}")
-        plt.savefig(os.path.join(outdir, label + f"{eventid}_{roleid}.jpg"))
-        
-for i, (eventid, roleid) in enumerate([[80,1], [26,1]]):
-    #eventid, roleid = 50, 1
-    #eventid, roleid = 83, 1
-    df = event_pipeline(eventstudy, stocks=crsp, eventid=eventid, roleid=roleid,
-                        beg=beg, end=end, left=left, right=right, post=post)
-    halfperiod = np.median(df['announcedate'])
-    sample = {'[FirstHalf]': df['announcedate'].ge(halfperiod).values,
-              '[SecondHalf]': df['announcedate'].lt(halfperiod).values,
-              '[Large]': df['cap'].ge(midcap).values,
-              '[Small]': df['cap'].lt(midcap).values,
-              '': None}
-    for ifig, (label, rows) in enumerate(sample.items()):
-        fig, ax = plt.subplots(clear=True, num=1+ifig, figsize=(5,6))
-        bhar = eventstudy.fit(rows=rows, car=False)
-        eventstudy.plot(title=eventformat(eventid, roleid) + ' ' + label,
-                        drift=False, ax=ax, c=f"C{i*5+ifig}")
-        plt.savefig(os.path.join(outdir, label + f"{eventid}_{roleid}.jpg"))
-        
-#plt.show()
-
-## Show Max Order Statistic and Bonferroni Adjustment
-import statsmodels.api as sm
-import scipy
-from pandas.api import types
-class MaxStat:
-    """Max Order Statistic probability distributions"""
-    def __init__(self, dist=scipy.stats.norm, n=None, **params):
-        self.dist_ = dist
-        self.params_ = params
-        self.n = n
-
-    def cdf(self, z, n=None):
-        """cdf for max order statistic"""
-        return [self.cdf(y, n) for y in z] if types.is_list_like(z)\
-            else self.dist_.cdf(z, **self.params_)**(n or self.n)
-
-    def pdf(self, z, n=None):
-        """cdf for max order statistic"""
-        n = n or self.n
-        return [self.pdf(y, n) for y in z] if types.is_list_like(z)\
-            else self.dist_.pdf(z, **self.params_) * n * self.cdf(z, n=n-1)
-
-    def ppf(self, z, n=None):
-        """inverse cdf for max order statistic"""
-        return [self.ppf(y, n) for y in z] if types.is_list_like(z)\
-            else self.dist_.ppf(z, **self.params_)**(n or self.n)
-        
-    def pvalue(self, z, n=None):
-        """z-value for max order statistic"""
-        return [self.pvalue(y, n) for y in z] if types.is_list_like(z)\
-            else 1 - (self.dist_.cdf(z, **self.params_)**(n or self.n))
-        
-    def zvalue(self, p, n=None):
-        """z-value for max order statistic"""
-        return [self.zvalue(y, n) for y in z] if types.is_list_like(p)\
-            else self.dist_.ppf((1-p)**(1/(n or self.n)), **self.params_)
-
-    def bonferroni(self, p, n=None):
-        """corrected z-value with with Bonferroni adjustment"""
-        return [self.bonferroni(y, n) for y in z] if types.is_list_like(p)\
-            else self.dist_.ppf((1-(p/n)), **self.params_)
-    
-# Display order statistics of folded normal        
-y = eventstudy.read(name='bhar')['post_t'].values
-Z = max(y)
-n = len(y)
-print(f"Events tested={n}, Max z-value={Z:.4f}:")
-maxstat = MaxStat(scipy.stats.foldnorm, c=0)
-    
-p = Series({n: maxstat.pvalue(Z, n=n) for n in
-            sorted([n] + [1, 2, 30, 60, 120, 250, 1000, 1600])}, name='pvalue')
-print(f"\nMax order statistic p-value(z={Z:.2f}) by sample size:")
-print(DataFrame(p).T.to_string(float_format='%.4f'))
-
-P=0.05
-print(f"\nRejection Region(p-value={P:.2f}) by sample size:")
-zb = Series({n: maxstat.bonferroni(P, n=n)
-             for n in [1, 2, 20, 100, 1000, 100000, 1000000]},name='max-order')
-zc = Series({n: maxstat.zvalue(P, n=n)
-             for n in [1, 2, 20, 100, 1000, 100000, 1000000]},name='bonferroni')
-print(pd.concat([zc, zb], axis=1).round(3).to_latex())
-
-# Plot CDF of Max Order Statistic
-X = np.linspace(0, 6, 600)
-df = DataFrame(index=X)
-df = pd.concat([Series(data=[maxstat.cdf(x, n) for x in X], index=X, name=n)
-                for n in [1, 2, 20, 100, 1000, 100000, 1000000]], axis=1)
-fig, ax = plt.subplots(clear=True, num=1, figsize=(10,6))
-df.plot(ax=ax, title='CDF of Max-Order Statistic by Sample Size',
-        xlabel='z-value', ylabel='Cumulative Distribution Function')
-ax.axvline(1.96, c='grey', alpha=0.5)
-ax.annotate("1.96", xy=(1.96, 1))
-plt.savefig(os.path.join(outdir, 'cdf.jpg'))
+## Show actual two-sided p-values vs expected (with continuity correction)
+pvals = list(norm.cdf(-df['post_t'].abs()) * 2)
+argmin = np.argmin(pvals)
+header = df.iloc[argmin][['event', 'role', 'days', 'effective', 'post_t']]\
+           .to_dict()
+fig, ax = plt.subplots(1, 1, clear=True, figsize=(10, 9))
+ax.plot(sorted(pvals))
+ax.plot([0, len(pvals)-1], [0.5/len(pvals), (len(pvals)-0.5)/len(pvals)], 'r--')
+ax.set_title('Distribution of p-values')
+ax.legend(['actual', 'expected'])
+plt.tight_layout()
+plt.savefig(os.path.join(imgdir, 'pvals' + figext))
 plt.show()
 
-## Show distribution of post-event t-values
-import scipy
-import seaborn as sns
-y = eventstudy.read(name='bhar')['post_t']
-fig, axes = plt.subplots(1, 2, num=1, clear=True, figsize=(10,6))
-    
-ax = sns.distplot(y, kde=False, hist=True, ax=axes[0], color='C0')
-bx = ax.twinx()
-x = np.linspace(*plt.xlim(), 100)
-bx.plot(x, scipy.stats.norm.pdf(x), color="C1")
-ax.set_title('Post-event drift and Normal Density', fontsize=10)
-ax.set_xlabel('Post-event drift t-value')
 
-ax = sns.distplot(abs(y), kde=False, hist=True, ax=axes[1], color='C1')
-bx = ax.twinx()
-x = np.linspace(*plt.xlim(), 100)
-bx.plot(x, scipy.stats.foldnorm.pdf(x, 0), color="C1")
-ax.set_title('Abs(post-event drift) and Folded Normal Density', fontsize=10)
-ax.set_xlabel('Abs(post-event drift) t-value')
-plt.savefig(os.path.join(outdir, 'hist.jpg'))
+## Bonferroni, Holm and Benjamin-Hochberg methods
+results = {}
+for method in ['bonferroni', 'holm', 'fdr_bh']:
+    tests =  multipletests(pvals, alpha=alpha, method=method)
+    results[method] = header | {f'pval(alpha={alpha})': pvals[argmin],
+                                'adj-pval': tests[1][argmin],
+                                'adj-alpha': tests[3]}
+show(DataFrame.from_dict(results, orient='index'),
+     latex=False,
+     caption="Multiple Testing methods")
+"""
+TODO:
+(a) Compare FWER, Bonferroni and correlated FWER for different n.
+scipy integrate Bonferroni with correlated samples. 
+Show match:
+On the Order Statistics from Equally Correlated Normal Random Variables.
+Apply data-dependent FWER Holm method: "too-conservative" and Type II Error, 
+Data-dependent Benjmain-Hochberg FDR method
+"""
 
-DataFrame(y.describe()).T
-    
-    
+             
+## Show single plots for each events
+events_list = []  # [[80, 1], [26, 1]]
+for eventid, roleid in events_list:
+    df = event_pipeline(eventstudy,
+                        stocks=crsp,
+                        eventid=eventid,
+                        roleid=roleid,
+                        beg=beg,
+                        end=end,
+                        left=left,
+                        right=right,
+                        post=post)
+    scar = eventstudy.fit(model='scar')
+    fig, ax = plt.subplots(clear=True, num=1, figsize=(10, 5))
+    eventstudy.plot(model='scar',
+                    title=eventformat(eventid, roleid),
+                    vline=[right],
+                    ax=ax)
+    plt.show()
+
+## show by market cap and half-period: top drift
+midcap = 20000000
+events_list = [[50, 1], [150, 1]]
+for i, (eventid, roleid) in enumerate(events_list):
+    #eventid, roleid = 50, 1
+    #eventid, roleid = 83, 1
+    df = event_pipeline(eventstudy,
+                        stocks=crsp,
+                        eventid=eventid,
+                        roleid=roleid,
+                        beg=beg,
+                        end=end,
+                        left=left,
+                        right=right,
+                        post=post)
+    halfperiod = np.median(df['announcedate'])
+    sample = {'FirstHalf': df['announcedate'].ge(halfperiod).values,
+              'SecondHalf': df['announcedate'].lt(halfperiod).values,
+              'Large': df['cap'].ge(midcap).values,
+              'Small': df['cap'].lt(midcap).values,
+              '': []}
+    for ifig, (label, rows) in enumerate(sample.items()):
+        fig, ax = plt.subplots(clear=True, num=1+ifig, figsize=(10, 5))
+        bhar = eventstudy.fit(model='sbhar', rows=rows)
+        eventstudy.plot(model='sbhar',
+                        title=eventformat(eventid, roleid) + f"[{label}]",
+                        drift=True,
+                        ax=ax,
+                        c=f"C{i*5+ifig}")
+        plt.savefig(os.path.join(imgdir, label + f"{eventid}_{roleid}.jpg"))
+
+## show by market cap and half-period: top announcement window
+events_list = [[80,1], [26,1]]
+for i, (eventid, roleid) in enumerate(events_list):
+    #eventid, roleid = 50, 1
+    #eventid, roleid = 83, 1
+    df = event_pipeline(eventstudy,
+                        stocks=crsp,
+                        eventid=eventid,
+                        roleid=roleid,
+                        beg=beg,
+                        end=end,
+                        left=left,
+                        right=right,
+                        post=post)
+    halfperiod = np.median(df['announcedate'])
+    sample = {'FirstHalf': df['announcedate'].ge(halfperiod).values,
+              'SecondHalf': df['announcedate'].lt(halfperiod).values,
+              'Large': df['cap'].ge(midcap).values,
+              'Small': df['cap'].lt(midcap).values,
+              '': []}
+    for ifig, (label, rows) in enumerate(sample.items()):
+        fig, ax = plt.subplots(clear=True, num=1+ifig, figsize=(10, 5))
+        bhar = eventstudy.fit(model='sbhar', rows=rows)
+        eventstudy.plot(model='sbhar',
+                        title=eventformat(eventid, roleid) + f"[{label}]",
+                        drift=False,
+                        ax=ax,
+                        c=f"C{i*5+ifig}")
+        plt.savefig(os.path.join(imgdir, label + f"{eventid}_{roleid}.jpg"))
+plt.show()

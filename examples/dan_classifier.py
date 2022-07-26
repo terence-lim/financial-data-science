@@ -1,12 +1,17 @@
 """Deep Averaging Networks for text classification
 
-- pytorch, spacy, deep averaging networks
-- GloVe word embeddings, frozen and fine-tuned weights
-- S&P Key Developments
+- Feedforward Neural Networks: torch, deep averaging networks
+- Word vectors: spacy, GloVe, relativize, frozen, fine-tuning
 
-Terence Lim
-License: MIT
+Copyright 2022, Terence Lim
+
+MIT License
 """
+import finds.display
+def show(df, latex=True, ndigits=4, **kwargs):
+    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
+figext = '.jpg'
+
 # jupyter-notebook --NotebookApp.iopub_data_rate_limit=1.0e12
 import numpy as np
 import os
@@ -25,62 +30,71 @@ import random
 from finds.database import MongoDB
 from finds.unstructured import Unstructured
 from finds.structured import PSTAT
-from finds.learning import TextualData
-from settings import settings
-from settings import pickle_dump, pickle_load
-mongodb = MongoDB(**settings['mongodb'])
+from conf import credentials, VERBOSE, paths
+
+mongodb = MongoDB(**credentials['mongodb'])
 keydev = Unstructured(mongodb, 'KeyDev')
-imgdir = os.path.join(settings['images'], 'classify')
-memdir = settings['memmap']
-event_ = PSTAT.event_
-role_ = PSTAT.role_
+imgdir = os.path.join(paths['images'], 'classify')
+events_ = PSTAT._event
+roles_ = PSTAT._role
+memdir = paths['scratch']
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
 
 ## Retrieve headline+situation text
 events = [28, 16, 83, 41, 81, 23, 87, 45, 80, 97,  231, 46, 31, 77, 29,
           232, 101, 42, 47, 86, 93, 3, 22, 102, 82]
 
-if False:
+initial = False
+
+if initial:
     lines = []
     event_all = []
     tokenizer = RegexpTokenizer(r"\b[^\d\W][^\d\W][^\d\W]+\b")
     for event in events:
         docs = keydev['events']\
                .find({'keydeveventtypeid': {'$eq': event}}, {'_id': 0})
-        doc = [tokenizer.tokenize((d['headline'] + " " + d['situation']).lower())
+        doc = [tokenizer.tokenize((d['headline'] + " " + d['situation'])\
+                                  .lower())
                for d in docs]
         lines.extend(doc)
         event_all.extend([event] * len(doc))
-    with gzip.open(os.path.join(imgdir, 'lines.json.gz'), 'wt') as f:
+    with gzip.open(os.path.join(memdir, 'lines.json.gz'), 'wt') as f:
         json.dump(lines, f)
-    with gzip.open(os.path.join(imgdir,'event_all.json.gz'), 'wt') as f:
+    with gzip.open(os.path.join(memdir,'event_all.json.gz'), 'wt') as f:
         json.dump(event_all, f)
     print(lines[1000000])
 
-if False:
-    with gzip.open(os.path.join(imgdir, 'lines.json.gz'), 'rt') as f:
+else:
+    with gzip.open(os.path.join(memdir, 'lines.json.gz'), 'rt') as f:
         lines = json.load(f)
-with gzip.open(os.path.join(imgdir,'event_all.json.gz'), 'rt') as f:
-    event_all = json.load(f)
+    with gzip.open(os.path.join(memdir,'event_all.json.gz'), 'rt') as f:
+        event_all = json.load(f)
 
 ## Encode class labels
 from sklearn.preprocessing import LabelEncoder
-event_encoder = LabelEncoder().fit(event_all)    # .inverse_transform()
+events_encoder = LabelEncoder().fit(event_all)    # .inverse_transform()
 num_classes = len(np.unique(event_all))
-y_all = event_encoder.transform(event_all)
+y_all = events_encoder.transform(event_all)
 
-Series(event_all).value_counts().rename(index=event_).rename('count').to_frame()
+Series(event_all).value_counts()\
+                 .rename(index=events_)\
+                 .rename('count')\
+                 .to_frame()
 
 ## Split into stratified train and test indices
 from sklearn.model_selection import train_test_split
-train_idx, test_idx = train_test_split(np.arange(len(y_all)), random_state=42,
-                                       stratify=y_all, test_size=0.2)
+train_idx, test_idx = train_test_split(np.arange(len(y_all)),
+                                       random_state=42,
+                                       stratify=y_all,
+                                       test_size=0.2)
 
 ## Load spacy vocab
 import spacy
 lang = 'en_core_web_lg'
 nlp = spacy.load(lang, disable=['parser', 'tagger', 'ner', 'lemmatizer'])
-for w in ['yen', 'jpy', 'eur', 'dkk', 'cny', 'sfr']:
+for w in ['inr', 'yen', 'jpy', 'eur', 'dkk', 'cny', 'sfr']:
     nlp.vocab[w].is_stop = True    # Mark customized stop words
     
 n_vocab, vocab_dim = nlp.vocab.vectors.shape
@@ -90,19 +104,30 @@ print('Language:', lang, '   vocab:', n_vocab, '   dim:', vocab_dim)
 def form_input(line, nlp):
     """Return spacy average vector from valid words"""
     tokens = [tok.vector for tok in nlp(" ".join(line))
-              if not(tok.is_stop or tok.is_punct or tok.is_oov or tok.is_space)]
-    return (np.array(tokens).mean(axis=0) if len(tokens) else
-            np.zeros(nlp.vocab.vectors.shape[1]))
+              if not(tok.is_stop
+                     or tok.is_punct
+                     or tok.is_oov
+                     or tok.is_space)]
+    if len(tokens):
+        return np.array(tokens).mean(axis=0)
+    else:
+        return np.zeros(nlp.vocab.vectors.shape[1])
 
 args = {'dtype': 'float32'}
-memdir = '/home/terence/Downloads/stocks2020/memmap/'
-if False:
-    args.update({'shape': (len(lines), vocab_dim), 'mode': 'r+'})
-    X = np.memmap(os.path.join(memdir, "X.{}_{}".format(*args['shape'])),**args)
+
+if initial:
+    args.update({'shape': (len(lines), vocab_dim), 'mode': 'w+'})
+    X = np.memmap(os.path.join(memdir,
+                               "X.{}_{}".format(*args['shape'])),
+                  **args)
     for i, line in tqdm(enumerate(lines)):
         X[i] = form_input(line, nlp).astype(args['dtype'])
-args.update({'shape': (1224251, vocab_dim), 'mode': 'r'})
-X = np.memmap(os.path.join(memdir, "X.{}_{}".format(*args['shape'])), **args)
+else:
+    args.update({'shape': (1224251, vocab_dim), 'mode': 'r'})
+    X = np.memmap(os.path.join(memdir,
+                               "X.{}_{}".format(*args['shape'])),
+                  **args)
+
 
 ## Pytorch Feed Forward Network
 class FFNN(nn.Module):
@@ -144,10 +169,13 @@ num_epochs = step_sz * num_lr + 1
 for layers in [max_layers]:
 
     # Instantiate model, optimizer, scheduler, loss_function
-    model = FFNN(vocab_dim=vocab_dim, num_classes=num_classes,
-                 hidden=[hidden]*layers).to(device)
+    model = FFNN(vocab_dim=vocab_dim,
+                 num_classes=num_classes,
+                 hidden=[hidden]*layers)\
+                 .to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, gamma=0.1,
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
+                                                gamma=0.1,
                                                 step_size=step_sz)
     loss_function = nn.NLLLoss()
     accuracy[layers] = {}
@@ -162,15 +190,17 @@ for layers in [max_layers]:
         total_loss = 0.0
         model.train()
         for i, batch in enumerate(batches):    # loop over minibatches
-            x = torch.FloatTensor(X[batch]).to(device)
-            y = torch.tensor([y_all[idx] for idx in batch]).to(device)
+            x = torch.FloatTensor(np.array(X[batch]))\
+                     .to(device)
+            y = torch.tensor(np.array([y_all[idx] for idx in batch]))\
+                     .to(device)
             model.zero_grad()                    # reset model gradient
             log_probs = model(x)                 # run model
             loss = loss_function(log_probs, y)   # compute loss
             total_loss += float(loss)
             loss.backward()      # loss step
             optimizer.step()     # optimizer step
-            print(i, batches, i/len(batches), total_loss, end='\r')
+            print(i, len(batches), i/len(batches), total_loss, end='\r')
         scheduler.step()      # scheduler step
         model.eval()
         print(f"Loss on epoch {epoch}: {total_loss:.1f}")
@@ -184,7 +214,7 @@ for layers in [max_layers]:
                 test_gold, test_pred = [], []
                 for batch in tqdm(batches):
                     test_pred.extend(model.predict(
-                        torch.FloatTensor(X[batch]).to(device)))
+                        torch.FloatTensor(np.array(X[batch])).to(device)))
                     test_gold.extend(gold[batch])
                 test_correct = (np.asarray(test_pred) ==
                                 np.asarray(test_gold)).sum()
@@ -194,7 +224,7 @@ for layers in [max_layers]:
                 train_gold, train_pred = [], []
                 for batch in tqdm(batches):
                     train_pred.extend(model.predict(
-                        torch.FloatTensor(X[batch]).to(device)))
+                        torch.FloatTensor(np.array(X[batch])).to(device)))
                     train_gold.extend(gold[batch])
                 train_correct = (np.asarray(train_pred) ==
                                  np.asarray(train_gold)).sum()
@@ -221,6 +251,12 @@ pd.concat([
             'Recall': metrics.recall_score(train_gold, train_pred,
                                            average='weighted')},
            name='Train Set').to_frame().T], axis=0)
+"""
+           Accuracy  Precision    Recall
+Test Set   0.910648   0.906198  0.910648
+Train Set  0.914899   0.913187  0.914899
+
+"""
 
 fig, ax = plt.subplots(num=1, clear=True, figsize=(10,6))
 DataFrame.from_dict({err: {k: v[err] for k,v in accuracy[max_layers].items()}
@@ -230,12 +266,12 @@ ax.set_xlabel('Steps')
 ax.set_ylabel('Accuracy')
 ax.legend(['Train Set', 'Test Set'], loc='upper left')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, f"frozen_accuracy.jpg"))
+plt.savefig(os.path.join(imgdir, f"frozen_accuracy" + figext))
 plt.show()
     
 ## Confusion Matrix
 from sklearn.metrics import confusion_matrix
-labels = [event_[e] for e in event_encoder.classes_]
+labels = [events_[e] for e in events_encoder.classes_]
 cf_train = DataFrame(confusion_matrix(train_gold, train_pred),
               index=pd.MultiIndex.from_product([['Actual'], labels]),
               columns=pd.MultiIndex.from_product([['Predicted'], labels]))
@@ -246,24 +282,26 @@ import seaborn as sns
 for num, (title, cf) in enumerate({'Training':cf_train,'Test':cf_test}.items()):
     fig, ax = plt.subplots(num=1+num, clear=True, figsize=(10,6))
     sns.heatmap(cf, ax=ax, annot= False, fmt='d', cmap='viridis', robust=True,
-                yticklabels=[f"{lab}  {e}"
-                             for lab, e in zip(labels, event_encoder.classes_)],
-                xticklabels=event_encoder.classes_)
+                yticklabels=[f"{lab}  {e}" for lab, e in
+                             zip(labels, events_encoder.classes_)],
+                xticklabels=events_encoder.classes_)
     ax.set_title(f'{title} Set Confusion Matrix')
     ax.set_xlabel('Predicted')
     ax.set_ylabel('Actual')
     ax.yaxis.set_tick_params(labelsize=8, rotation=0)
     ax.xaxis.set_tick_params(labelsize=8, rotation=0)
     plt.subplots_adjust(left=0.35, bottom=0.25)
-    plt.savefig(os.path.join(imgdir, f"frozen_{title}.jpg"))
+    plt.savefig(os.path.join(imgdir, f"frozen_{title}" + figext))
     plt.tight_layout()
 plt.show()
 
 
-## DAN with GloVe embeddings and fine-tune weights
-textdata = TextualData()  # class of convenience methods for text pre-processing
 
-if False:
+## DAN with GloVe embeddings and fine-tune weights
+from finds.unstructured import TextualData
+textdata = TextualData()  # class for text pre-processing
+
+if initial:
     vocab = textdata.counter(lines)          # count words for vocab
     textdata(vocab.most_common(20000), 0)    # vocab is most common 20000
     textdata.dump('textdata.json', imgdir)
@@ -279,7 +317,6 @@ else:
     textdata.load('textdata.json', imgdir)
 print('vocab size', textdata.n)
                 
-                
 ## Relativize glove embeddings
 """Load GloVe embeddings weights, and drop rows not in vocab
 wget http://nlp.stanford.edu/data/wordvecs/glove.6B.zip
@@ -291,12 +328,14 @@ Archive:  glove.6B.zip
   inflating: glove.6B.50d.txt    
 """
 vocab_dim = 300
-glovefile = f"/home/terence/Downloads/sshfs/glove/glove.6B.{vocab_dim}d.txt"
-if False:
-    glove = textdata.relativize(glovefile)
-    pickle_dump(glove, f"glove{vocab_dim}rel.pkl", imgdir)
+glove_prefix = os.path.join(paths['scratch'], f"glove.6B.{vocab_dim}d")
+if initial:
+    glove = textdata.relativize(glove_prefix + ".txt")
+    with open(glove_prefix + ".rel.pkl", "wb") as f:
+        pickle.dump(glove, f)
 else:
-    glove = pickle_load(f"glove{vocab_dim}rel.pkl", imgdir)
+    with open(glove_prefix + ".rel.pkl", "rb") as f:
+        glove = pickle.load(f)
 print('glove dimensions', glove.shape)
 
 ## train_test split stratified by y_all
@@ -320,6 +359,7 @@ class DAN(nn.Module):
         self.network = nn.Sequential(*L)
         self.classifier = nn.LogSoftmax(dim=-1)  # output is (N, C) logits
 
+
     def tune(self, requires_grad=False):
         self.embedding.weight.requires_grad = requires_grad
 
@@ -342,9 +382,12 @@ class DAN(nn.Module):
 
 layers = 2
 hidden = vocab_dim   #100, 300
-model = DAN(vocab_dim, num_classes, hidden=[hidden]*layers,
+model = DAN(vocab_dim,
+            num_classes,
+            hidden=[hidden]*layers,
             embedding=torch.FloatTensor(glove)).to(device)
 print(model)
+
 
 ## Training loop
 accuracy = dict()
@@ -403,7 +446,7 @@ for tune in [False, True]:
 
 ## Confusion matrix
 from sklearn.metrics import confusion_matrix
-labels = [event_[e] for e in event_encoder.classes_]
+labels = [events_[e] for e in events_encoder.classes_]
 cf_train = DataFrame(confusion_matrix(train_gold, train_pred),
               index=pd.MultiIndex.from_product([['Actual'], labels]),
               columns=pd.MultiIndex.from_product([['Predicted'], labels]))
@@ -411,38 +454,41 @@ cf_test = DataFrame(confusion_matrix(test_gold, test_pred),
                     index=pd.MultiIndex.from_product([['Actual'], labels]),
                     columns=pd.MultiIndex.from_product([['Predicted'], labels]))
 
+#
+# First half of sample fixed weights, second half start allow tuning
+#
 import seaborn as sns
 for num, (title, cf) in enumerate({'Training':cf_train,'Test':cf_test}.items()):
     fig, ax = plt.subplots(num=1+num, clear=True, figsize=(10,6))
     sns.heatmap(cf, ax=ax, annot= False, fmt='d', cmap='viridis', robust=True,
-                yticklabels=[f"{label}  {e}"
-                             for label,e in zip(labels,event_encoder.classes_)],
-                xticklabels=event_encoder.classes_)
+                yticklabels=[f"{label}  {e}" for label, e in
+                             zip(labels, events_encoder.classes_)],
+                xticklabels=events_encoder.classes_)
     ax.set_title(f'DAN Tuned GloVe {title} Set Confusion Matrix')
     ax.set_xlabel('Predicted')
     ax.set_ylabel('Actual')
     ax.yaxis.set_tick_params(labelsize=8, rotation=0)
     ax.xaxis.set_tick_params(labelsize=8, rotation=0)
     plt.subplots_adjust(left=0.35, bottom=0.25)
-    plt.savefig(os.path.join(imgdir, f"tuned_{title}.jpg"))
+    plt.savefig(os.path.join(imgdir, f"tuned_{title}" + figext))
     plt.tight_layout()
 plt.show()
 
-print_skip = 1
-fig, ax = plt.subplots(num=1, clear=True, figsize=(10,6))
-DataFrame.from_dict({err: {(t*len(accuracy[t]) + k) * print_skip: v[err]
-                           for t in [False, True]
-                           for k,v in enumerate(accuracy[t].values())}
-                     for err in ['train', 'test']}).plot(ax=ax)
-ax.axvline((len(accuracy[False]) - 0.5) * print_skip, c='grey', alpha=0.5)
+fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 6))
+DataFrame.from_dict({sample: {(tuning * len(accuracy[tuning]) + epoch):
+                             acc[sample]
+                             for tuning in [False, True]
+                             for epoch, acc in enumerate(
+                                     accuracy[tuning].values())}
+                     for sample in ['train', 'test']}).plot(ax=ax)
+ax.axvline((len(accuracy[False])), c='grey', alpha=0.5)
 ax.set_title(f'Accuracy of DAN with fine-tuned GloVe weights')
 ax.set_xlabel('Steps')
 ax.set_ylabel('Accuracy')
-ax.legend(['Train Set', 'Test Set','Fine-tune Weights'], loc='upper left')
+ax.legend(['Train Set', 'Test Set','Start Fine-Tuning'], loc='upper left')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, f"tuned_accuracy.jpg"))
+plt.savefig(os.path.join(imgdir, f"tuned_accuracy" + figext))
 plt.show()
-
 
 # Exploring Spacy
 """
@@ -459,34 +505,35 @@ token.lower_: str
 token.lex_id : row of word vector
 token.has_vector : has word vector representation
 """
-doc = nlp('king queen man woman a23kj4j')
-line = [tok.lex_id for tok in doc
-        if not(tok.is_stop or tok.is_punct or tok.is_oov or tok.is_space)]
+if False:
+    doc = nlp('king queen man woman a23kj4j')
+    line = [tok.lex_id for tok in doc
+            if not(tok.is_stop or tok.is_punct or tok.is_oov or tok.is_space)]
 
-vec = (nlp.vocab['king'].vector
-       - nlp.vocab['man'].vector
-       + nlp.vocab['woman'].vector)
-print(vec.shape)
-sim = nlp.vocab.vectors.most_similar(vec[None,:], n=10)
-[nlp.vocab.strings[hashkey] for hashkey in sim[0][0]]
+    vec = (nlp.vocab['king'].vector
+           - nlp.vocab['man'].vector
+           + nlp.vocab['woman'].vector)
+    print(vec.shape)
+    sim = nlp.vocab.vectors.most_similar(vec[None,:], n=10)
+    [nlp.vocab.strings[hashkey] for hashkey in sim[0][0]]
 
-# Load pretrained embeddings
-emb = nn.Embedding.from_pretrained(torch.FloatTensor(nlp.vocab.vectors.data))
+    # Load pretrained embeddings
+    emb = nn.Embedding\
+            .from_pretrained(torch.FloatTensor(nlp.vocab.vectors.data))
 
-# test for Spacy.nlp and torch.embeddings
-test_vocab = ['king', 'man', 'woman', 'queen', 'e9s82j']
-for w in test_vocab:
-    vocab_id = nlp.vocab.strings[w]
-    spacy_vec = nlp.vocab[w].vector
-    row = nlp.vocab.vectors.key2row.get(vocab_id, None) # dict 
-    if row is None:
-        print('{} is oov'.format(w))
-        continue
-    vocab_row = torch.tensor(row, dtype=torch.long)
-    embed_vec = emb(vocab_row)
-    print(np.allclose(spacy_vec, embed_vec.detach().numpy()))
+    # test for Spacy.nlp and torch.embeddings
+    test_vocab = ['king', 'man', 'woman', 'queen', 'e9s82j']
+    for w in test_vocab:
+        vocab_id = nlp.vocab.strings[w]
+        spacy_vec = nlp.vocab[w].vector
+        row = nlp.vocab.vectors.key2row.get(vocab_id, None) # dict 
+        if row is None:
+            print('{} is oov'.format(w))
+            continue
+        vocab_row = torch.tensor(row, dtype=torch.long)
+        embed_vec = emb(vocab_row)
+        print(np.allclose(spacy_vec, embed_vec.detach().numpy()))
 
-for key, row in nlp.vocab.vectors.key2row.items():
-    if row == 0: 
-        print(nlp.vocab.strings[key])
-
+    for key, row in nlp.vocab.vectors.key2row.items():
+        if row == 0: 
+            print(nlp.vocab.strings[key])

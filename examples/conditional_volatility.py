@@ -1,167 +1,266 @@
-"""Conditional Volatility Models
+"""Conditional Volatility
 
-- VaR, halflife, GARCH, EWMA, Scholes-Williams Beta
-- VIX, Bitcoin, St Louis Fed FRED
+- Value at Risk, Expected Shortfall
+- GARCH, EWMA
+- VIX, Bitcoin
 
-Terence Lim
-License: MIT
+Copyright 2022, Terence Lim
+
+MIT License
 """
+import finds.display
+def show(df, latex=True, ndigits=4, **kwargs):
+    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
+figext = '.jpg'
+
 import os
 import numpy as np
-import scipy
+from scipy.stats import chi2, norm, t, jarque_bera, kurtosis, skew
 import pandas as pd
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
 import seaborn as sns 
 from finds.alfred import Alfred
+from finds.recipes import kupiecLR, pof, halflife, \
+    value_at_risk_historical, expected_shortfall_historical, \
+    value_at_risk_normal, expected_shortfall_normal
+from conf import VERBOSE, credentials, paths
+imgdir = os.path.join(paths['images'], 'ts')
+alf = Alfred(api_key=credentials['fred']['api_key'])
 
-from settings import settings
-imgdir = os.path.join(settings['images'], 'ts')
-alf = Alfred(api_key=settings['fred']['api_key'])
+# Histogram, Historical VaR and ES of SP500, REITS, Bitcoin, Dollar
+labels = ['SP500', 'WILLREITIND', 'CBBTCUSD', 'DTWEXAFEGS']
+alpha = 0.95   # VaR parameter
+out = {}
+fig, axes = plt.subplots(2, 2, num=1, clear=True, figsize=(10, 5))
+for label, ax in zip(labels, list(axes.ravel())):
+    rets = alf(label, log=1, diff=1).dropna()
+    sigma = rets.std()
+    var = value_at_risk_historical(rets, alpha=0.95)
+    es = expected_shortfall_historical(rets, alpha=0.95)
+    var_normal = value_at_risk_normal(rets, alpha)
+    es_normal = expected_shortfall_normal(rets, alpha)
+    
+    n, bins, _ = ax.hist(rets[rets < var], color='red', bins=30)
+    stepsize = (bins[-1] - bins[0])/(len(bins)-1)
+    bins = np.arange(var, max(rets) + stepsize, stepsize)
+    ax.hist(rets[rets >= var], color='green', bins=bins)
 
-# proportion of failures likelihood test
-def kupiecLR(s, n, var):
-    """Kupiec LR test (S violations in N trials) of VaR"""
-    p = 1 - var        # e.g. var95 is 0.95
-    t = n - s          # number of non-violations
-    num = np.log(1 - p)*(n - s) + np.log(p)*s
-    den = np.log(1 - (s/n))*(n - s) + np.log(s/n)*s
-    lr = -2 * (num - den)
-    return {'lr': lr, 'pvalue': 1 - scipy.stats.chi2.cdf(lr, df=1)}
-
-def pof(X, pred, var=0.95):
-    """Kupiec proportion of failures VaR test"""
-    Z = X / pred
-    z = scipy.stats.norm.ppf(1 - var)
-    r = {'n': len(Z), 's': np.sum(Z < z)}
-    r.update(kupiecLR(r['s'], r['n'], var))
-    return r
-
-# convert alpha to halflife
-from pandas.api import types
-def halflife(alpha):
-    """Returns halflife from alpha = -ln(2)/ln(lambda), where lambda=1-alpha"""
-    if types.is_list_like(alpha):
-        return [halflife(a) for a in alpha]
-    return -np.log(2)/np.log(1-alpha) if 0<alpha<1 else [np.inf,0][int(alpha>0)]
-                                      
-# Retrive Bitcoin from FRED and plot EWMA and Daily Returns
-z = scipy.stats.norm.ppf(0.05)
-alpha = [0.03, 0.06]
-series_id = 'CBBTCUSD'
-X = alf(series_id, log=1, diff=1)[126:]
-X.index = pd.DatetimeIndex(X.index.astype(str), freq='infer')
-Y = np.square(X)
-ewma = [np.sqrt((Y.ewm(alpha=a).mean()).rename(series_id)) for a in alpha]
-fig, ax = plt.subplots(num=1, clear=True, figsize=(10,6))
-ax.plot(X.shift(-1), ls='-', lw=.5, c='grey')
-ax.plot(z * ewma[0], lw=1, ls='-.', c='b')
-ax.plot(z * ewma[1], lw=1, ls='--', c='r')
-ax.set_title(alf.header(series_id))
-ax.set_ylabel('Daily Returns and EWMA Volatility')
-ax.legend([series_id] + [f"$\lambda$ = {1-a:.2f}" for a in alpha])
-ax.plot(-z * ewma[0], lw=1, ls='-.', c='b')
-ax.plot(-z * ewma[1], lw=1, ls='--', c='r')
-plt.savefig(os.path.join(imgdir, 'ewma.jpg'))
+    ax.axvline(var, color='blue', ls='--')
+    ax.axvline(es, color='blue', ls=':')
+    ax.axvline(var_normal, color='cyan', ls='--')
+    ax.axvline(es_normal, color='cyan', ls=':')
+    ax.legend([f'VaR actual = {var:.4f}',
+               f'ES actual = {es:.4f}',
+               f'VaR (normal={var_normal:.4f})',
+               f'ES (normal={es_normal:.4f})',
+               'tail < VaR',
+               label + f' (std={sigma:.4f})'], fontsize='x-small')
+    ax.set_title(f"{label} {alf.header(label)[:60]}",
+                 {'fontsize' : 'small'})
+    ax.set_ylabel(f'{min(rets.index)}-{max(rets.index)}',
+                  fontsize='small')
+    ax.set_xlabel(f'VaR and ES (alpha={alpha*100:.0f})',
+                  fontsize='small')
+    out[label] = {'std dev': np.std(rets, ddof=1),
+                  'skewness': skew(rets),
+                  'excess kurtosis': kurtosis(rets)-3,
+                  'jarque-bera pvalue': jarque_bera(rets)[1]}
+plt.tight_layout()
+plt.savefig(os.path.join(imgdir, 'es' + figext))
 plt.show()
 
-# Retrieve SP500 and VIX data, compute EWMA
-sp500 = alf('SP500', log=1, diff=1).dropna()
-vix = alf('VIXCLS')
-ewma = np.sqrt((np.square(sp500).ewm(alpha=0.05).mean()).rename('EWMA(0.94)'))
-mkt = pd.concat([sp500, ewma, (vix/100)/np.sqrt(252)], axis=1, join='inner')
-mkt.index = pd.DatetimeIndex(mkt.index.astype(str), freq='infer')
-mkt
+# Non-normal: Jacque-Bera, excess kurtosis, mixtures
+show(DataFrame(out).T)
+
 
 # GARCH(1,1) using rugarch
 import rpy2.robjects as ro
 from rpy2.robjects.packages import importr
 from finds.pyR import PyR
-rugarch_ro = importr('rugarch')  # to use library rugarch
-c_ = ro.r['c']
-list_ = ro.r['list']
-spec = ro.r['ugarchspec'](mean_model=list_(armaOrder=c_(2, 0),
-                                           include_mean=False))
-model = ro.r['ugarchfit'](spec, data=PyR(mkt['SP500'].values).ro) 
-ro.r['show'](model)
-for which in [4, 5, 10, 11]:
-    ro.r['plot'](model, which=which)
-    PyR.savefig(os.path.join(imgdir, f'ugarch{which}.png'))
+def rugarch(rets: Series, savefig: str = '') -> np.array:
+    rugarch_ro = importr('rugarch')  # to use library rugarch
+    c_ = ro.r['c']
+    list_ = ro.r['list']
+    spec = ro.r['ugarchspec'](mean_model=list_(armaOrder=c_(0, 0),
+                                               include_mean=False))
+    model = ro.r['ugarchfit'](spec, data=PyR(rets.values).ro) 
+    ro.r['show'](model)
+
+    if savefig:
+        for which in [4, 5, 10, 11]:
+            ro.r['plot'](model, which=which)
+            PyR.savefig(os.path.join(imgdir, f'{savefig}{which}.png'))
+    return PyR(ro.r['sigma'](model)).values  # fitted volatility values
 
 
-# Plot all, but for illustration only: the 3 "forecasts" are not comparable
-# VIX is implied from 3-month options, GARCH full in-sample, EWMA is rolling avg
-mkt['GARCH(1,1)'] = PyR(ro.r['sigma'](model)).values  # fitted volatility values
-var = 0.95   # VaR95
-z = scipy.stats.norm.ppf(1 - var)
-fig, ax = plt.subplots(num=1, clear=True, figsize=(10,7))
-ax.plot(mkt['SP500'], ls='-', lw=.5, c='grey')
-ax.plot(z * mkt.iloc[:,1], lw=1, ls='-.', c='blue')
-ax.plot(z * mkt.iloc[:,2], lw=1, ls='--', c='green')
-ax.plot(z * mkt.iloc[:,3], lw=1, ls=':', c='red')
-ax.set_title('SP500')
-ax.set_ylabel('Daily Returns and VaR')
-ax.legend(mkt.columns)
-plt.savefig(os.path.join(imgdir, 'var.jpg'))
+# In-sample EWMA conditional volatilty model
+def best_ewma(Y):
+    best_stat = np.inf  # conditional nll of Gaussian
+    for l in np.arange(0.4, 1, 0.01):
+        pred = Y.ewm(alpha=1-l).mean()
+        stat = jarque_bera(X.shift(-1).div(np.sqrt(pred)).dropna())[0]
+        #stat = abs(kurtosis(X.shift(-1).div(np.sqrt(pred)).dropna() - 3))
+        #stat = np.log(pred).sum() + np.square(X.shift(-1)).div(pred).sum() / 2
+        #stat = (((X.shift(-1)**2).sub(pred))**2).mean()
+        #stat = X.shift(-1).abs().sub(np.sqrt(pred)).abs().mean()
+        #print(stat, l)
+        if stat < best_stat:
+            lam = l
+            best_stat = stat
+    print(lam, best_stat) # np.log(2 * np.pi) * len(pred) / 2)
+    return lam
+
+# Retrive Bitcoin from FRED and plot EWMA and Daily Returns
+series_id = 'CBBTCUSD'
+X = alf(series_id, log=1, diff=1).dropna()
+X.index = pd.DatetimeIndex(X.index.astype(str), freq='infer')
+Y = np.square(X)
+
+lam = best_ewma(Y)
+asset = np.sqrt((Y.ewm(alpha=1 - lam).mean()).rename('EWMA')).to_frame()
+asset['EWMA(0.94)'] = np.sqrt((Y.ewm(alpha=1 - 0.94).mean()))
+asset['GARCH'] = rugarch(X)
+
+# Conditional Volatility Models EWMA(94), GARCH(1, 1): Bitcoin
+fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 5))
+ax.plot(X.shift(-1), ls='', marker='.', markersize=2)
+ax.plot(norm.ppf(1 - alpha) * asset['EWMA'], lw=1, ls='-', c='r')
+ax.plot(norm.ppf(1 - alpha) * asset['GARCH'], lw=1, ls='--', c='m')
+ax.set_title(alf.header(series_id)
+             + f" ({max(Y.index).strftime('%Y-%m-%d')}:"
+             + f"{min(Y.index).strftime('%Y-%m-%d')})")
+ax.set_ylabel('Daily Returns and Conditional Volatility')
+ax.legend([series_id] + [f"EWMA($\lambda$={lam:.2f})"] + ['GARCH(1,1)'])
+ax.plot(-norm.ppf(1 - alpha) * asset['EWMA'], lw=1, ls='-', c='r')
+ax.plot(-norm.ppf(1 - alpha) * asset['GARCH'], lw=1, ls='--', c='m')
+plt.tight_layout()
+plt.savefig(os.path.join(imgdir, 'ewma' + figext))
 plt.show()
 
+y = X.shift(-1)
+results = {}
+for label, x in zip([series_id, 'EWMA(0.94)', f'EWMA*({lam:.2f})','GARCH(1,1)'],
+                    [1.0, asset['EWMA(0.94)'], asset['EWMA'], asset['GARCH']]):
+    if isinstance(x, (int, float)):
+        pof_ = pof((y / np.std(y))[126:], x)  # skip first six months
+    else: 
+        pof_ = pof(y[126:], x[126:])  # skip first six months
+    results[label] = {'std dev': np.std(y.div(x).dropna()),
+                      'skewness': skew(y.div(x).dropna()),
+                      'excess kurtosis': kurtosis(y.div(x).dropna()) - 3,
+                      f'pof({int(100*alpha)})': pof_['s']/pof_['n'],
+                      'pof p-value': pof_['pvalue']}
+show(DataFrame.from_dict(results, orient='index'), caption=series_id)
 
-# get all daily series of financial price categories from FRED
+
+
+# Conditional Volatility Models SP500: EWMA, GARCH(1, 1), VIX
+series_id = 'SP500'
+X = alf(series_id, log=1, diff=1).dropna()
+Y = np.square(X)
+asset = X.to_frame()
+vix = alf('VIXCLS')
+asset = asset.join(vix/(100 * np.sqrt(252)))
+
+lam = best_ewma(Y)
+asset['EWMA'] = np.sqrt(Y.ewm(alpha=1 - lam).mean())
+asset['EWMA(0.94)'] = np.sqrt((Y.ewm(alpha=1 - 0.94).mean()))
+asset['GARCH'] = rugarch(X)
+
+asset.index = pd.DatetimeIndex(asset.index.astype(str), freq='infer')
+X = asset[series_id]
+
+asset
+
+# Plot VaR of SP500: VIX, GARCH
+fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 5))
+ax.plot(asset['SP500'], ls='', marker='.', markersize=2)
+for c, col in zip(['r', 'g'],['VIXCLS', 'GARCH']):
+    ax.plot(norm.ppf(1-alpha) * asset.loc[:, col], lw=1, ls='-', c=c)
+ax.set_title('SP500 Daily Returns, VIX, and GARCH VaR')
+ax.legend(['SP500', 'VIXCLS', 'GARCH'])
+plt.tight_layout()
+plt.savefig(os.path.join(imgdir, 'var' + figext))
+plt.show()
+
+y = X.shift(-1)
+results = {}
+for label, x in zip([series_id, 'EWMA(0.94)', f'EWMA*({lam:.2f})',
+                     'GARCH(1,1)', 'VIXCLS'],
+                    [1.0, asset['EWMA(0.94)'], asset['EWMA'],
+                     asset['GARCH'], asset['VIXCLS']]):
+    if isinstance(x, (int, float)):
+        pof_ = pof((y / np.std(y))[126:], x)  # skip first six months
+    else: 
+        pof_ = pof(y[126:], x[126:])  # skip first six months
+    results[label] = {'std dev': np.std(y.div(x).dropna()),
+                      'skewness': skew(y.div(x).dropna()),
+                      'excess kurtosis': kurtosis(y.div(x).dropna()) - 3,
+                      f'pof({int(100*alpha)})': pof_['s']/pof_['n'],
+                      'pof p-value': pof_['pvalue']}
+show(DataFrame.from_dict(results, orient='index'), caption=series_id)
+
+
+r = asset['SP500'][1:].values / asset.iloc[:-1, -1].values
+print('excess kurtosis', kurtosis(r)-3,
+      'jarque-bera pvalue', jarque_bera(r)[1])
+
+
+
+
+# pof tests for EWMA(0.94 and 0.97) for long stocks series 
+
+## get all daily series of financial price categories from FRED
 categories = {}
 for category in [32255, 33913, 94]:
     c = alf.get_category(category)
     print(category, c['id'], c['name'])
     series = Series({s['id']: s['title'] for s in c['series']
-                     if s['frequency'].startswith('Daily') and
-                     'DISCONT' not in s['title']})
+                     if s['frequency'].startswith('Daily')
+                     and 'DISCONT' not in s['title']
+                     and 'Price' not in s['title']})
     categories.update({c['name']: series})
 c = pd.concat(list(categories.values())).to_frame()
-pd.set_option("max_colwidth", 80)
-pd.set_option("max_rows", 100)
+pd.set_option("display.max_colwidth", 70)
+pd.set_option("display.max_rows", 100)
 c
 
+wilshires = ['WILL5000IND', 'WILLLRGCAP', 'WILLLRGCAPGR', 'WILLLRGCAPVAL',
+             'WILLMIDCAP', 'WILLMIDCAPGR', 'WILLMIDCAPVAL', 
+             'WILLSMLCAP', 'WILLSMLCAPGR', 'WILLSMLCAPVAL']
+r = pd.concat([alf(series_id,
+                   log=1,
+                   diff=1,
+                   freq='D') for series_id in wilshires],
+              join='inner', axis=1).dropna()
 
-# Fit ewma and backtest VaR
-alphas = 1 - np.linspace(1, 0.91, 10)
+alphas = np.array([0.15, 0.12, 0.09, 0.06, 0.03, 0.02, 0.01])
 results = {'pof': DataFrame(), 'n': DataFrame(), 'end': DataFrame(),
            's': DataFrame(), 'pvalue': DataFrame()}  # to collect results
-for category, series in categories.items():
-    for series_id in series.index:
-        X = alf(series_id, log=1, diff=1, freq='D').dropna()
-        if X is None:
-            print(f'*** oops {series_id} ***')
-            assert(X)
-        Y = np.square(X)
-        results[series_id] = {}
-        for i, alpha in enumerate(alphas):
-            ewma = np.sqrt((Y.ewm(alpha=alpha) if alpha>0 else Y.expanding())\
-                           .mean()).rename(i)
-            r = pof(X[126:], ewma[126:], var=0.95)
-            results['pof'].loc[series_id, alpha] = r['s']/r['n']
-            results['pvalue'].loc[series_id, alpha] = r['pvalue']
-            results['n'].loc[series_id, alpha] = r['n']
-            results['s'].loc[series_id, alpha] = r['s']
-            results['end'].loc[series_id, alpha] = alf.header(
-                series_id, 'observation_end')
+for series_id in r.columns:
+    X = r[series_id]
+    Y = np.square(X)
+    results[series_id] = {}
+    for i, alpha in enumerate(alphas):
+        ewma = np.sqrt((Y.ewm(alpha=alpha)).mean()).rename(i)
+        x = pof(X[126:], ewma[125:-1], var=0.95)
+        results['pof'].loc[series_id, alpha] = x['s']/x['n']
+        results['pvalue'].loc[series_id, alpha] = x['pvalue']
+        results['n'].loc[series_id, alpha] = x['n']
+        results['s'].loc[series_id, alpha] = x['s']
+        results['end'].loc[series_id, alpha] = alf.header(series_id,
+                                                          'observation_end')
             #print(results['pof'].loc[series_id, [alpha]])
-print(Series({k: len(v) for k, v in categories.items()}, name='series'))
-pd.concat([Series(index=alphas, data=1-alphas, name='lambda').round(2),
-           Series(index=alphas, data=halflife(alphas),name='halflife').round(1),
-           results['pof'].median(axis=0).rename('pof').round(6)], axis=1)
 
-# Plot distribution of Proportion of Failures
-fig, ax = plt.subplots(num=1, clear=True, figsize=(10,6))
-results['pof'].boxplot(ax=ax, grid=False)
-ax.set_xticklabels([f"{1-c:.3}" for c in results['pof'].columns])
-ax.set_xlabel('$\lambda$ smoothing parameter')
-ax.set_title('VaR Proportion of Failures Box-Plot')
-ax.set_ylabel('Proportion of Failures')
-ax.axhline(1 - var, linestyle=':', color='g')
-for x, c in enumerate(results['pof'].columns):
-    for arg in [results['pof'][c].argmin(), results['pof'][c].argmax()]:
-        
-        y = results['pof'][c].iloc[[arg]]
-        ax.annotate(y.index[0], xy=(x + 1, y[0]-.003), fontsize=8, c='m',
-                    rotation=45)
-plt.savefig(os.path.join(imgdir, 'pof.jpg'))
-plt.show()
+print(Series({k: len(v) for k, v in categories.items()}, name='series'))
+stat = 'pof'
+pd.concat([Series(index=alphas,
+                  data=1 - alphas,
+                  name='lambda').round(2),
+           Series(index=alphas,
+                  data=halflife(alphas),
+                  name='halflife').round(1),
+           results[stat].median(axis=0).rename(stat).round(6)], axis=1)
+
+round(results['pof'], 4)  # resist pvalues, show pof
