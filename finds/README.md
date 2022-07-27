@@ -1,6 +1,6 @@
-# Financial Data Science python library
+# Financial Data Science python modules
 
-These modules support retrieving and manipulating structured and
+These support retrieving and manipulating structured and
 unstructured financial data sets, and fitting and testing quant finance and
 machine learning models.
 
