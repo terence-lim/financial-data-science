@@ -7,14 +7,10 @@ Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
 
 # jupyter-notebook --NotebookApp.iopub_data_rate_limit=1.0e12
+
 import numpy as np
-import os
 import time
 import re
 import csv, gzip, json
@@ -30,11 +26,16 @@ import random
 from finds.database import MongoDB
 from finds.unstructured import Unstructured
 from finds.structured import PSTAT
+from finds.display import show
 from conf import credentials, VERBOSE, paths
+
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
 
 mongodb = MongoDB(**credentials['mongodb'])
 keydev = Unstructured(mongodb, 'KeyDev')
-imgdir = os.path.join(paths['images'], 'classify')
+imgdir = paths['images'] / 'classify'
 events_ = PSTAT._event
 roles_ = PSTAT._role
 memdir = paths['scratch']
@@ -60,16 +61,16 @@ if initial:
                for d in docs]
         lines.extend(doc)
         event_all.extend([event] * len(doc))
-    with gzip.open(os.path.join(memdir, 'lines.json.gz'), 'wt') as f:
+    with gzip.open(memdir / 'lines.json.gz', 'wt') as f:
         json.dump(lines, f)
-    with gzip.open(os.path.join(memdir,'event_all.json.gz'), 'wt') as f:
+    with gzip.open(memdir / 'event_all.json.gz', 'wt') as f:
         json.dump(event_all, f)
     print(lines[1000000])
 
 else:
-    with gzip.open(os.path.join(memdir, 'lines.json.gz'), 'rt') as f:
+    with gzip.open(memdir / 'lines.json.gz', 'rt') as f:
         lines = json.load(f)
-    with gzip.open(os.path.join(memdir,'event_all.json.gz'), 'rt') as f:
+    with gzip.open(memdir / 'event_all.json.gz', 'rt') as f:
         event_all = json.load(f)
 
 ## Encode class labels
@@ -117,16 +118,13 @@ args = {'dtype': 'float32'}
 
 if initial:
     args.update({'shape': (len(lines), vocab_dim), 'mode': 'w+'})
-    X = np.memmap(os.path.join(memdir,
-                               "X.{}_{}".format(*args['shape'])),
+    X = np.memmap(memdir / "X.{}_{}".format(*args['shape']),
                   **args)
     for i, line in tqdm(enumerate(lines)):
         X[i] = form_input(line, nlp).astype(args['dtype'])
 else:
     args.update({'shape': (1224251, vocab_dim), 'mode': 'r'})
-    X = np.memmap(os.path.join(memdir,
-                               "X.{}_{}".format(*args['shape'])),
-                  **args)
+    X = np.memmap(memdir / "X.{}_{}".format(*args['shape']), **args)
 
 
 ## Pytorch Feed Forward Network
@@ -204,7 +202,7 @@ for layers in [max_layers]:
         scheduler.step()      # scheduler step
         model.eval()
         print(f"Loss on epoch {epoch}: {total_loss:.1f}")
-        #model.save(os.path.join(imgdir, f"dan{layers}.pt"))
+        #model.save(imgdir / f"dan{layers}.pt")
 
         with torch.no_grad():
             if epoch % eval_skip == 0:
@@ -266,8 +264,8 @@ ax.set_xlabel('Steps')
 ax.set_ylabel('Accuracy')
 ax.legend(['Train Set', 'Test Set'], loc='upper left')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, f"frozen_accuracy" + figext))
-plt.show()
+plt.savefig(imgdir / f"frozen_accurac.jpg")
+
     
 ## Confusion Matrix
 from sklearn.metrics import confusion_matrix
@@ -291,9 +289,9 @@ for num, (title, cf) in enumerate({'Training':cf_train,'Test':cf_test}.items()):
     ax.yaxis.set_tick_params(labelsize=8, rotation=0)
     ax.xaxis.set_tick_params(labelsize=8, rotation=0)
     plt.subplots_adjust(left=0.35, bottom=0.25)
-    plt.savefig(os.path.join(imgdir, f"frozen_{title}" + figext))
+    plt.savefig(imgdir, f"frozen_{title}.jpg")
     plt.tight_layout()
-plt.show()
+
 
 
 
@@ -307,11 +305,11 @@ if initial:
     textdata.dump('textdata.json', imgdir)
 
     x_all = textdata[lines]                  # convert str docs to word indexes
-    with gzip.open(os.path.join(imgdir, 'x_all.csv.gz'), 'wt', newline="") as f:
+    with gzip.open(imgdir / 'x_all.csv.gz', 'wt', newline="") as f:
         csv.writer(f).writerows(x_all)
 else:
     x_new = []
-    with gzip.open(os.path.join(imgdir, 'x_all.csv.gz'), 'rt') as f:
+    with gzip.open(imgdir / 'x_all.csv.gz', 'rt') as f:
         for row in csv.reader(f):
             x_new.append(row)
     textdata.load('textdata.json', imgdir)
@@ -328,7 +326,7 @@ Archive:  glove.6B.zip
   inflating: glove.6B.50d.txt    
 """
 vocab_dim = 300
-glove_prefix = os.path.join(paths['scratch'], f"glove.6B.{vocab_dim}d")
+glove_prefix = paths['scratch'] / f"glove.6B.{vocab_dim}d"
 if initial:
     glove = textdata.relativize(glove_prefix + ".txt")
     with open(glove_prefix + ".rel.pkl", "wb") as f:
@@ -420,7 +418,7 @@ for tune in [False, True]:
             optimizer.step()          # optimizer step
         scheduler.step()          # scheduler step for learning rate
         model.eval()
-        model.save(os.path.join(imgdir, f"danGloVe.pt"))
+        model.save(imgdir / f"danGloVe.pt")
         print(f"Loss on epoch {epoch} (tune={tune}): {total_loss:.1f}")
 
         with torch.no_grad():
@@ -470,9 +468,8 @@ for num, (title, cf) in enumerate({'Training':cf_train,'Test':cf_test}.items()):
     ax.yaxis.set_tick_params(labelsize=8, rotation=0)
     ax.xaxis.set_tick_params(labelsize=8, rotation=0)
     plt.subplots_adjust(left=0.35, bottom=0.25)
-    plt.savefig(os.path.join(imgdir, f"tuned_{title}" + figext))
+    plt.savefig(imgdir / f"tuned_{title}.jpg")
     plt.tight_layout()
-plt.show()
 
 fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 6))
 DataFrame.from_dict({sample: {(tuning * len(accuracy[tuning]) + epoch):
@@ -487,8 +484,7 @@ ax.set_xlabel('Steps')
 ax.set_ylabel('Accuracy')
 ax.legend(['Train Set', 'Test Set','Start Fine-Tuning'], loc='upper left')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, f"tuned_accuracy" + figext))
-plt.show()
+plt.savefig(imgdir / f"tuned_accuracy.jpg")
 
 # Exploring Spacy
 """

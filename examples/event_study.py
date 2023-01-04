@@ -1,34 +1,29 @@
-"""Event Study Abnormal Returns
+"""Event Studies of Key Developments News
 
-- S&P/Capital IQ Key Developments
-- event study: CAR, BHAR, post-announcement drift (Kolari et al 2010 and others)
-- multiple testing: Holm FWER, Benjmain-Hochberg FDR, Bonferroni p-values
+- event study: CAR, BHAR, post-announcement drift (Kolari 2010 and others)
+- multiple testing: Holm FWER, Benjamin-Hochberg FDR, Bonferroni p-values
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
-import os
-import time
 from scipy.stats import norm
 from statsmodels.stats.multitest import multipletests
 from finds.database import SQL
 from finds.busday import BusDay
 from finds.structured import PSTAT, CRSP, Benchmarks, Stocks
 from finds.backtesting import EventStudy
+from finds.display import show
 from conf import CRSP_DATE, VERBOSE, credentials, paths
 
-LAST_DATE = 20201231
-VERBOSE = 0
+LAST_DATE = CRSP_DATE
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
 
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 user = SQL(**credentials['user'], verbose=VERBOSE)
@@ -174,8 +169,7 @@ ax.plot([0, len(pvals)-1], [0.5/len(pvals), (len(pvals)-0.5)/len(pvals)], 'r--')
 ax.set_title('Distribution of p-values')
 ax.legend(['actual', 'expected'])
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'pvals' + figext))
-plt.show()
+plt.savefig(imgdir / 'pvals.jpg')
 
 
 ## Bonferroni, Holm and Benjamin-Hochberg methods
@@ -217,7 +211,6 @@ for eventid, roleid in events_list:
                     title=eventformat(eventid, roleid),
                     vline=[right],
                     ax=ax)
-    plt.show()
 
 ## show by market cap and half-period: top drift
 midcap = 20000000
@@ -248,7 +241,7 @@ for i, (eventid, roleid) in enumerate(events_list):
                         drift=True,
                         ax=ax,
                         c=f"C{i*5+ifig}")
-        plt.savefig(os.path.join(imgdir, label + f"{eventid}_{roleid}.jpg"))
+        plt.savefig(imgdir / (label + f"{eventid}_{roleid}.jpg"))
 
 ## show by market cap and half-period: top announcement window
 events_list = [[80,1], [26,1]]
@@ -278,5 +271,4 @@ for i, (eventid, roleid) in enumerate(events_list):
                         drift=False,
                         ax=ax,
                         c=f"C{i*5+ifig}")
-        plt.savefig(os.path.join(imgdir, label + f"{eventid}_{roleid}.jpg"))
-plt.show()
+        plt.savefig(imgdir / (label + f"{eventid}_{roleid}.jpg"))

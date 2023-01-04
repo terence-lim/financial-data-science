@@ -7,19 +7,7 @@ Copyright 2022, Terence Lim
 
 MIT License
 """
-#
-# TODO: check timing of spreads, say:
-# 0.  April Yr2 - Mar Yr3 Returns
-# 1.  April Yr1 - Mar Yr2 Sentiment [lagged filings]
-# 2.  April Yr2 - Mar Yr3 Sentiment [same year filings]
-#
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
 import re
-import os
 import requests
 import time
 import numpy as np
@@ -37,8 +25,13 @@ from finds.busday import BusDay
 from finds.unstructured import Unstructured
 from finds.recipes import weighted_average, fractiles
 from finds.edgar import Edgar
-
+from finds.display import show
 from conf import VERBOSE, credentials, paths
+
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
 VERBOSE = 0
 
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
@@ -51,7 +44,7 @@ signals = Signals(user)
 mongodb = MongoDB(**credentials['mongodb'], verbose=VERBOSE)
 wordlists = Unstructured(mongodb, 'WordLists')
 
-imgdir = os.path.join(paths['images'], 'edgar')
+imgdir = paths['images'] / 'edgar'
 item, form = 'mda10K', '10-K'
 
 def _print(*args, **kwargs):
@@ -138,11 +131,11 @@ data = pd.concat([data[data['year']==year]\
 # save sentiment dataframe in scratch folder
 if False:
     import pickle
-    with open(os.path.join(paths['scratch'], 'sentiment.data'), 'wb') as f:
+    with open(paths['scratch'] / 'sentiment.data', 'wb') as f:
         pickle.dump(data, f)
 if False:
     import pickle
-    with open(os.path.join(paths['scratch'], 'sentiment.data'), 'rb') as f:
+    with open(paths['scratch'] / 'sentiment.data', 'rb') as f:
         data = pickle.load(f)
 
 
@@ -170,8 +163,7 @@ ax.set_ylabel('# stocks')
 ax.set_title("Universe and matched 10-K MDA's")
 ax.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'coverage' + figext))
-plt.show()
+plt.savefig(imgdir / 'coverage.jpg')
 
 # Stacked Bar Plot of filings date, by month and day-of-week
 y = DataFrame.from_records([{'date': int(d),
@@ -188,8 +180,7 @@ z.plot(kind='bar',
 ax.set_ylabel('Fraction')
 ax.set_title("10-K Filings by Month and Day-of-Week")
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'calendar' + figext))
-plt.show()
+plt.savefig(imgdir / 'calendar.jpg')
 
 # Plot of sentiment, change, cosine distribution in univ by year
 """
@@ -234,8 +225,7 @@ for i, sent in enumerate(['mdasent', 'mdachg', 'mdacos']):
               fontsize='small',
               loc='lower right')
     plt.tight_layout()
-    plt.savefig(os.path.join(imgdir, f'{sent}' + figext))
-plt.show()
+    plt.savefig(imgdir / f'{sent}.jpg')
 
 
 
@@ -311,5 +301,4 @@ for ifig, key in enumerate(['mdasent', 'mdachg', 'mdacos']):
     ax.legend(fontsize='small',
               loc='lower right')
     plt.tight_layout()
-    plt.savefig(os.path.join(imgdir, f'{key}RET' + figext))
-plt.show()
+    plt.savefig(imgdir / f'{key}RET.jpg')

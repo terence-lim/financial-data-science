@@ -4,18 +4,12 @@
 - Autocorrelation Function: AR, MA, SARIMAX
 - Unit root: integration order
 - Forecasting: single-step, multi-step
-- Granger Casuality
-- Vector Auto-Regression: impulse response function
+- Granger casuality, impulse response function
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
@@ -34,9 +28,14 @@ from sklearn.metrics import mean_squared_error
 from finds.alfred import Alfred
 from finds.busday import to_datetime
 from finds.recipes import integration_order
+from finds.display import show
 from conf import paths, VERBOSE, credentials
 
-imgdir = os.path.join(paths['images'], 'ts')
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
+imgdir = paths['images'] / 'ts'
 alf = Alfred(api_key=credentials['fred']['api_key'])
 
 series_id, freq, start = 'CPIAUCNS', 'M', 0 #19620101  # not seasonally adjusted
@@ -56,8 +55,7 @@ result.seasonal.plot(ax=ax[2], ylabel='Seasonal', xlabel='', c='g')
 result.resid.plot(ax=ax[3], ls='', ms=3, marker='.', c='m',
                   ylabel='Residual', xlabel='')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'seasonal' + figext))
-plt.show()
+plt.savefig(imgdir / 'seasonal.jpg')
 
 # Autocorrelation Function - Plot ACF and PACF
 
@@ -66,8 +64,7 @@ fig, axes = plt.subplots(1, 2, clear=True, figsize=(10,5))
 plot_acf(values, lags=35, ax=axes[0])
 plot_pacf(values, lags=35, ax=axes[1], method='ywm')
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'acf' + figext))
-plt.show()
+plt.savefig(imgdir / 'acf.jpg')
 
 # Stationarity and Unit Root
 
@@ -97,9 +94,8 @@ sns.histplot(df.diff().dropna().rename(f"diff log {series_id}"),
              #line_kws={"color": "r"},
              ax=axes[1])
 axes[1].set_title(f"Density Plot of diff log({series_id})")
-plt.savefig(os.path.join(imgdir, 'order' + figext))
+plt.savefig(imgdir / 'order.jpg')
 plt.tight_layout(pad=3)
-plt.show()
 
 
 # AR and SARIMAX
@@ -119,8 +115,7 @@ arima = SARIMAX(log_df,
                 trend='c').fit()
 fig = arima.plot_diagnostics(figsize=(10,6), lags=36)
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'ar' + figext))
-plt.show()
+plt.savefig(imgdir / 'ar.jpg')
 arima.summary()
 
 
@@ -180,8 +175,7 @@ ax.legend(['Predicted', 'Actual'])
 ax.set_title(series_id + " (one-step forecasts)")
 ax.set_xlabel('')
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'short' + figext))
-plt.show()
+plt.savefig(imgdir / 'short.jpg')
 
 ## Multi-step ahead predictions
 df_pred = all_dates.predict(model.params,
@@ -198,8 +192,7 @@ ax.legend(['Predicted', 'Actual'])
 ax.set_title(series_id + " (multi-step forecasts)")
 ax.set_xlabel('')
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'long' + figext))
-plt.show()
+plt.savefig(imgdir / 'long.jpg')
 
 
 # Granger Causality: INDPRO vs CPI
@@ -231,5 +224,6 @@ print(results.summary())
 irf = results.irf(12)
 #irf.plot(orth=False)
 irf.plot_cum_effects(orth=False, figsize=(10, 6))
-plt.savefig(os.path.join(imgdir, 'impulse' + figext))
-plt.show()
+plt.savefig(imgdir / 'impulse.jpg')
+
+

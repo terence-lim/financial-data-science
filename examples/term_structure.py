@@ -1,35 +1,29 @@
 """Term Structure of Interest Rates
 
-- yield curve, duration, forward rates, spot rates, yield-to-maturity
-- bootstrap, splines
-- reconstructed yield curve (Liu and Wu, 2020), St Louis Fed FRED
+- yield curve, duration, bootstrap
 
 Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
 from typing import List, Dict, Any
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
-import time
 from datetime import datetime
-import os
 import re
 from finds.alfred import Alfred
-from finds.busday import to_monthend
-from finds.recipes import to_present_value, to_discounted_cash_flow, \
-    to_weighted_maturity, to_par_duration, to_forward_rates, to_bootstrap_rates
-
+from finds.busday import BusDay
+from finds.display import show
+from finds.recipes import Interest
 from conf import VERBOSE, credentials, paths
 
-imgdir = os.path.join(paths['images'], 'ts')
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
+imgdir = paths['images'] / 'ts'
 alf = Alfred(api_key=credentials['fred']['api_key'])
 
 # Term Structure of Interest Rates
@@ -42,7 +36,7 @@ t = Series({s['id']: s['title'] for s in c['series']
                 and 'Inflation' not in s['title']
                 and 'DISCONT' not in s['title'])}).rename('title')
 show(t.to_frame(), formatters=[lambda x: x.split(',')[0]],
-     caption="Constant Maturity Treasuries in FRED")
+     caption="Constant Maturity Treasuries in FRED", **SHOW)
     
 ## retrieve CMT yields, and infer maturity from label
 data = [alf(s, freq='M') for s in t.index]
@@ -50,48 +44,30 @@ data = pd.concat([alf(s, freq='M') for s in t.index], axis=1, join='inner')
 data.columns = [int(re.sub('\D', '', col)) * (1 if col.endswith('M') else 12)
                 for col in data.columns]  # infer maturity in months from label
 data = data.sort_index(axis=1)            # sort columns by ascending maturity
-data
-
-
-## Verified with Jorion Chapter 5 Solution
-ytm = list(np.arange(0.0525, 0.1025, 0.0025))
-spot = np.array([])
-for y in ytm:
-    spot = np.append(spot, to_bootstrap_rates(y, nominal=spot, m=2))
-jorion_sol5 = [.0797,.0827,.0859,.0892,.0925,.0961,.0997,.1036,.1077,.112]
-assert np.allclose(jorion_sol5, spot[-len(jorion_sol5):], atol=0.0001)
-print(spot)
+show(data, **SHOW)
 
 
 ## Plot history of yields and durations
 yields = pd.concat([data[yr * 12].rename(yr) / 100
                     for yr in [2, 5, 7, 10, 20, 30]], axis=1)
 yields.index = pd.to_datetime(yields.index, format='%Y%m%d')
-durations = pd.concat([yields[yr].apply(to_par_duration, n=yr, m=2)
+durations = pd.concat([yields[yr].apply(Interest.par_duration, n=yr, m=2)
                        for yr in yields], axis=1)
 fig, axes = plt.subplots(3, 2, clear=True, num=1, figsize=(9, 11))
 for i in range(6):
     ax = axes[i // 2, i % 2]
-    title = (i==0)*"Market YTM of Treasuries and Par Bond Duration"
+    title = (i==0)*f"Treasuries YTM and Par Bond Duration {data.index[-1]}"
     yields.iloc[:, i].rename('yield')\
-                     .plot(ax=ax,
-                           c=f"C{i*2}",
-                           fontsize=8,
-                           legend=True,
-                           ylabel='yield',
-                           title=title)
+                     .plot(ax=ax, c=f"C{i*2}", fontsize=8, legend=True,
+                           ylabel='yield', title=title)
     bx = ax.twinx()
     durations.iloc[:, i]\
              .rename('duration')\
-             .plot(ax=bx,
-                   c=f"C{i*2+1}",
-                   fontsize=8,
-                   ylabel='duration',
+             .plot(ax=bx, c=f"C{i*2+1}", fontsize=8, ylabel='duration',
                    legend=True)
     ax.set_xlabel(f"{yields.columns[i]}-Year")
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'term' + figext))
-plt.show()
+plt.savefig(imgdir / 'term.jpg')
 
 
 # Interpolate yield curve spline as of a historical date
@@ -109,16 +85,17 @@ ytm = [yield_curve(t) / 100 for t in range(6, 361, 6)]
 m = 2
 nominal = np.array([])   # to store annualized rates from bootstrap
 for y in ytm:
-    nominal = np.append(nominal, to_bootstrap_rates(y, nominal=nominal, m=m))
+    nominal = np.append(nominal,
+                        Interest.bootstrap_rates(y, nominal=nominal, m=m))
 spot_rates = (((1 + np.array(nominal/2))**2) - 1) * 100  # annualize effective
 
 ## Sanity-check spot rate results 
 for n in range(1, 1 + len(ytm)):  # discounted cash flows all close to par=1?
-    assert abs(to_discounted_cash_flow(flows=ytm[n-1] / m,
-                                       spot=nominal[:n] / m)
-               + to_present_value(1, n=n, spot=nominal[n-1] / m) - 1) < 0.001
+    assert abs(Interest.discounted_cash_flow(flows=ytm[n-1] / m,
+                                             spot=nominal[:n] / m)
+               + Interest.present_value(1, n=n, spot=nominal[n-1] / m)-1) < 0.001
     
-f = np.array(to_forward_rates(spot=nominal / m))  # as single-period rate
+f = np.array(Interest.forward_rates(spot=nominal / m))  # as single-period rate
 for n in range(1, 1+len(ytm)):  # compounded forwards all close to nominal
     assert abs(np.prod(1 + f[:n])
                - (1 + nominal[n-1] / m)**n) < 0.001
@@ -133,11 +110,11 @@ def fetch_liuwu(file_id='1_u9cRxmOSiwp_tFvlaORuhS-zwl935s0'):
     df = x.parse()
     dates = np.where(df.iloc[:, 0].astype(str).str[0].str.isdigit())[0]
     return DataFrame(np.exp(df.iloc[dates,1:361].astype(float).values/100) - 1,
-                     index=to_monthend(df.iloc[dates, 0].values),
+                     index=BusDay.to_monthend(df.iloc[dates, 0].values),
                      columns=np.arange(1, 361))
 df = fetch_liuwu()
 reconstructed_rates = df.loc[curve_date, :] * 100             # as of curve_date
-f = np.array(to_forward_rates(spot=reconstructed_rates / 1200)) 
+f = np.array(Interest.forward_rates(spot=reconstructed_rates / 1200)) 
 reconstructed_forward = (((1 + np.array(f))**12) - 1) * 100   # annualize
 
 
@@ -156,8 +133,7 @@ ax.set_ylabel('maturity (years)')
 ax.set_zlabel('annual rate (%)')
 fig.colorbar(f, shrink=0.5, aspect=5)
 plt.tight_layout(pad=0)
-plt.savefig(os.path.join(imgdir, 'reconstructed' + figext))
-plt.show()
+plt.savefig(imgdir / 'reconstructed.jpg')
 
 
 # Plot yield curves as of recent date
@@ -165,7 +141,7 @@ semi_annual = np.arange(6, 361, 6)     # enumerate semi-annual months
 fig, ax = plt.subplots(num=1, clear=True, figsize=(12,7))
 ax.plot(maturities,
         yields, 'o',
-        label='CMT nominal yields (assumed selling at par)')
+        label='CMT nominal yields (assuming par bond)')
 ax.plot(semi_annual,
         yield_curve(semi_annual),
         label="cubic-splined yields from CMT")
@@ -184,6 +160,6 @@ ax.set_xlabel('maturity (months)')
 ax.set_ylabel('interest rate (annual %)')
 ax.legend()
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'curve'  + figext))
-plt.show()
+plt.savefig(imgdir / 'curve.jpg')
+
 

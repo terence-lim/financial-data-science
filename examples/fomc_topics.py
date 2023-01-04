@@ -7,11 +7,6 @@ Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
 import numpy as np
 import pandas as pd
 from pandas import Series, DataFrame
@@ -28,10 +23,13 @@ from finds.database import MongoDB
 from finds.alfred import Alfred
 from conf import credentials, paths, VERBOSE
 
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
 mongodb = MongoDB(**credentials['mongodb'])
 fomc = Unstructured(mongodb, 'FOMC')
-
-imgdir = os.path.join(paths['images'], 'fomc')
+sdimgdir = paths['images'] / 'fomc'
     
 ## retrieve recessions dates for plotting
 alf = Alfred(api_key=credentials['fred']['api_key'])
@@ -43,8 +41,8 @@ dates = fomc['minutes'].distinct('date')       # check dates stored in MongoDB
 ## retrieve from FOMC website
 catalog = FOMCReader.fetch()    # check for new dates in FOMC site, and retrieve
 print(f"FOMC: {len(catalog)} dates {min(catalog.keys())}-{max(catalog.keys())}")
-docs = {d: fetch_fomc(url) for d, url in catalog.items() if d not in dates}
-print('NEW:', ", ".join([f"{k}: {len(v)} chars " for k,v in docs.items()]))
+docs = {d: FOMCReader.fetch(url) for d, url in catalog.items() if d not in dates}
+print('NEW:', ", ".join([f"{k}: {len(v)} chars" for k,v in docs.items()]))
 
 # Filter raw text
 """Filter raw text
@@ -55,7 +53,7 @@ print('NEW:', ", ".join([f"{k}: {len(v)} chars " for k,v in docs.items()]))
   - staff presentations on ad-hoc policy topics
   - discussion ad-hoc issues such as "balance sheet normalization" in recent years
 
-- keep starting approximately with (hence skip earlier organizational items):
+- keep starting approximately with (i.e. skip earlier organizational items):
 
   - "Developments in Financial Markets" or
   - "Discussion of Guideliness for Policy Normalizatio" or
@@ -82,10 +80,6 @@ def edit(text: str) -> str:
         return f.read().decode("utf-8")        # keep edited text
 
 if docs:
-    import pickle
-    #with open(os.path.join(paths['scratch'], 'fomc.pkl'), 'wb') as f:
-    #    pickle.dump(docs, f)
-
     ## loop to edit out head and tail of document
     results = list()   
     for date, initial_message in docs.items():  # manually trim text
@@ -96,7 +90,7 @@ if docs:
     ## save the new edited docs
     import gzip
     import json
-    with gzip.open(os.path.join(paths['scratch'], 'fomc.json.gz'), 'wt') as f:
+    with gzip.open(paths['scratch'] / 'fomc.json.gz', 'wt') as f:
         json.dump(results, f)
     for doc in results: # store docs for new dates
         fomc.insert('minutes', doc, keys=['date'])
@@ -113,8 +107,8 @@ StopWords += ['january', 'february', 'march', 'april', 'may', 'june',
               'july', 'august', 'september', 'october', 'november',
               'december', 'first', 'second', 'third', 'fourth', 'twelve',
               'participants', 'members', 'meeting']
-ngram_range = (1, 2)
-max_df, min_df, max_features = 0.8, 2, 5000 # some reasonable constraints
+ngram_range = (1,1) # (1, 2)
+max_df, min_df, max_features = 0.5, 6, 5000 # some reasonable constraints
 tfidf_vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
     strip_accents='unicode',
     lowercase=True,
@@ -193,21 +187,22 @@ for ifig, (name, (base, vectorizer)) in enumerate(algos.items()):
     for topic in range(topics.shape[1]):
         arg = DataFrame({'t': np.argmax(topics, axis=1),
                          'dt': docs.index})
-        g = (arg!=arg.shift()).cumsum().groupby('t').agg(['first','last'])-1
+        g = (arg!=arg.shift()).cumsum().groupby('t').agg(['first', 'last']) - 1
         g['topic'] = arg.loc[g.iloc[:,1], 't'].values
     dates[name] = {topic: [(arg['dt'].iloc[row[0]],
                             arg['dt'].iloc[row[1]])
                            for row in g.itertuples(index=False, name=None)
                            if row[2] == topic]
                    for topic in range(topics.shape[1])}
-    plt.savefig(os.path.join(imgdir, name + '_topics' + figext))
+    plt.savefig(imgdir / (name + '_topics.jpg'))
 
 
 ## display top features
+figsize = (10, 10) # (5, 5)
 for ifig, (name, score) in enumerate(scores.items()):
     wc = WordCloud(height=300, width=500, colormap='cool') 
     top_n = 20
-    fig, axes = plt.subplots(2, 2, num=ifig+5, figsize=(5, 5), clear=True)
+    fig, axes = plt.subplots(2, 2, num=ifig+5, figsize=figsize, clear=True)
     for topic, components in enumerate(score):
         words = {feature_names[i].replace(' ','_') : components[i]
                  for i in components.argsort()[:-top_n - 1:-1]}
@@ -225,5 +220,5 @@ for ifig, (name, score) in enumerate(scores.items()):
                       fontsize=8,
                       loc='left')
         plt.tight_layout()
-    plt.savefig(os.path.join(imgdir, name + '_words' + figext))
+    plt.savefig(imgdir / (name + '_words.jpg'))
 plt.show()

@@ -1,19 +1,12 @@
 """Risk Premiums from Fama-Macbeth Cross-sectional Regression
 
-- Fama-Macbeth cross-sectional regression: risk premiums
-- CRSP, Compustat, 
-- Ken French Data Library: Fama-French test assets
+- CAPM tests
+- Polynomial regression, feature transformations
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-import os
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
@@ -27,10 +20,14 @@ from finds.structured import CRSP, Signals, Benchmarks
 from finds.busday import BusDay
 from finds.backtesting import RiskPremium
 from finds.recipes import winsorize, least_squares
+from finds.display import show
 from conf import credentials, VERBOSE, paths, CRSP_DATE
 
-LAST_DATE = 20201231
-VERBOSE = 1
+LAST_DATE = CRSP_DATE
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 user = SQL(**credentials['user'], verbose=VERBOSE)
 rdb = Redis(**credentials['redis'])
@@ -157,7 +154,7 @@ benchnames = {'beta': 'Mkt-RF(mo)',
               'value': 'HML(mo)'}
 out = riskpremium.fit(benchnames.values())  # to compare portfolio-sorts
 riskpremium.plot(benchnames)
-plt.savefig(os.path.join(imgdir, 'fm' + figext))
+plt.savefig(imgdir / 'fm.jpg')
 
 # Summarize time-series means
 for caption, df in zip(["Fama-MacBeth Risk Factors",

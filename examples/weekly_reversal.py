@@ -1,34 +1,29 @@
-"""Survivorship-bias and low-price stocks strategy
+"""Backtest weekly stock price reversal trading strategy
 
-- Weekly reversal contrarian strategy (Lo and Mackinlay 1990, and others)
-- Structural change with unknown breakpoint
-- Implementation slippage
+- Contrarian strategy (Lo and Mackinlay 1990, and others), statistical arbitrage
+- implementation shortfall, structural change with unknown breakpoint
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-import os
-import glob
-import time
-import sys
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series, to_datetime
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from finds.database import SQL, Redis
-from finds.busday import BusDay, WeeklyDay, to_date
+from finds.busday import BusDay, WeeklyDay
 from finds.structured import CRSP, Benchmarks
 from finds.recipes import fractiles, lm
+from finds.display import row_formatted, show
 from conf import credentials, VERBOSE, paths
 
-VERBOSE = 1
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
 
+endweek = 20220330
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 rdb = Redis(**credentials['redis'])
 bd = BusDay(sql, verbose=VERBOSE)
@@ -37,11 +32,9 @@ bench = Benchmarks(sql, bd)
 imgdir = paths['images']
 
 # Construct weekly reversal
-begweek = 19730629     # increased stocks coverage in CRSP around this date
-middate = 19850628     # increased stocks traded in CRSP around this date
-endweek = 20211231     # is a Friday, so can include last week in 2020
-wd = WeeklyDay(sql, 'Fri')   # Generate Friday-end weekly cal
-
+begweek = 19740102   # increased stocks coverage in CRSP in Jan 1973
+middate = 19851231   # increased stocks traded in CRSP around this date
+wd = WeeklyDay(sql, bd(endweek).strftime('%A'))   # Generate weekly cal
 rebaldates = wd.date_range(begweek, endweek)
 retdates = wd.date_tuples(rebaldates)
 
@@ -50,10 +43,10 @@ june_universe = 0  # to track when reached a June end to update universe
 year = 0           # to track new year to retrieve prices in batch
 results = []
 lagged_exposures = Series(dtype=float)   # for "turnover" of stock weights
-tic = time.time()
-for rebaldate, pastdates, nextdates in zip(rebaldates[1:-1],
-                                           retdates[:-1],
-                                           retdates[1:]):
+
+for rebaldate, pastdates, nextdates in tqdm(zip(rebaldates[1:-1],
+                                                retdates[:-1],
+                                                retdates[1:])):
     # screen by June universe
     d = bd.june_universe(rebaldate)
     if d != june_universe:  # need next June's universe
@@ -69,7 +62,7 @@ for rebaldate, pastdates, nextdates in zip(rebaldates[1:-1],
                              date_field='date',
                              beg=year,
                              end=bd.offset(bd.endyr(year), 10),
-                             use_cache=True)
+                             cache_mode="rw")
 
     # get past week's returns, require price at start of week
     past_week = prc[prc.index.get_level_values('date') == rebaldate]['prc']\
@@ -121,8 +114,6 @@ for rebaldate, pastdates, nextdates in zip(rebaldates[1:-1],
                               'vol': next_week.std(ddof=0),
                               'delay': exposures.dot(-drift)},
                              index=[rebaldate]))
-    print(rebaldate, *pastdates, *nextdates, len(exposures),
-          int(time.time()-tic))
 
 # Combine accumulated weekly computations
 df = pd.concat(results, axis=0)
@@ -134,21 +125,21 @@ df.index = pd.DatetimeIndex(df.index.astype(str))
 df['ret'].cumsum().plot(ax=ax, ls='--', color='r', rot=0)
 ax.legend(['cumulative returns'], loc='upper left')
 ax.set_ylabel('cumulative returns')
+
 bx = ax.twinx()
-df['ic'].plot(ax=bx, ls=':', lw=1, rot=0)
-df['vol'].plot(ax=bx, ls=':', lw=1, rot=0)
-bx.axhline(df['ic'].mean(), linestyle='-', color='C0', lw=2)
+df['ic'].rolling(250).mean().plot(ax=bx, ls=':', lw=1, rot=0, color='b')
+df['vol'].rolling(250).mean().plot(ax=bx, ls=':', lw=1, rot=0, color='g')
+#bx.axhline(df['ic'].mean(), linestyle='-', color='C0', lw=2)
 bx.axhline(0, linestyle='-', color='black', lw=1)
 bx.legend(['information coefficient', 'cross-sectional vol'], loc='lower right')
 ax.set_title('Profitability of Weekly Mean Reversion')
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'weekrev' + figext))
-plt.show()
+plt.savefig(imgdir / 'weekrev.jpg')
 
 show(pd.concat([df[['ic' ,'vol', 'ret']].mean(axis=0).rename('mean'),
                 df[['ic' ,'vol', 'ret']].std(axis=0).rename('std')],
                axis=1),
-     caption=f'Alpha, IC and Vol of Weekly Mean Reversion Strategy')
+     caption=f'Alpha, IC and Vol of Weekly Mean Reversion Strategy', **SHOW)
 
 # Structural Break Test with Unknown Date
 import rpy2.robjects as ro
@@ -156,7 +147,7 @@ from rpy2.robjects.packages import importr
 from finds.pyR import PyR
 importr('strucchange')   # R package to use
 
-v# Set up data and formulas for R
+# Set up data and formulas for R
 Y = df['ret']
 #dates = to_datetime(df.index.astype(str))
 formula = ro.Formula('y ~ 1')
@@ -190,12 +181,12 @@ ax.set_xlabel('Date of Breakpoints')
 ax.set_title('Structural Change with Unknown Breakpoint: '
              'Weekly Mean Reversion Spread Returns')
 plt.tight_layout(pad=3)
-plt.savefig(os.path.join(imgdir, 'break' + figext))
-plt.show()
+plt.savefig(imgdir / 'break.jpg')
+
 
 # Compute gross annualized sharpe ratio and delay slippage
 market = bench.get_series(permnos=['Mkt-RF'], field='ret').reset_index()
-breakpoint = to_date(output['breakpoints'])
+breakpoint = BusDay.to_date(output['breakpoints'])
 out = dict()
 for period, select in enumerate([dates > 0,
                                  dates > breakpoint,
@@ -225,11 +216,11 @@ for period, select in enumerate([dates > 0,
         'Cross-sectional Vol': res['vol'].mean(),
         'Delay cost': res['delay'].mean(),
         'Turnover Fraction': res['turnover'].mean(),
-        'Abs Weight': res['absweight'].mean(),
+        #'Abs Weight': res['absweight'].mean(),
         'Num Stocks': int(res['n'].mean()),
     }
 
 # Display as formatted DataFrame
 formats = dict.fromkeys(['start date' ,'end date', 'Num Stocks'], '{:.0f}')
 show(row_formatted(DataFrame(out), formats=formats, default='{:.4f}'),
-     caption="Subperiod Performance of Weekly Mean Reversion Strategy")
+     caption="Subperiod Performance of Weekly Mean Reversion Strategy", **SHOW)

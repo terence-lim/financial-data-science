@@ -1,20 +1,15 @@
 """Link Prediction
 
+- Random graphs
 - Link prediction: resource_allocation, jaccard coefficient, 
   adamic_adar, preferential_attachment
 - Accuracy: precision, recall, ROC curve, AUC, confusion matrix, 
-- Text-based Network Industry Classification (Hoberg and Phillips, 2016)
+- Imbalanced sample
 
 Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-import os
 import zipfile
 import io
 import time
@@ -32,22 +27,27 @@ from finds.busday import BusDay
 from finds.structured import PSTAT, CRSP
 from finds.sectors import Sectoring
 from finds.graph import graph_draw, graph_info, link_prediction
+from finds.display import show
 from conf import credentials, paths, VERBOSE
 
-VERBOSE = 0
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 bd = BusDay(sql, verbose=VERBOSE)
 rdb = Redis(**credentials['redis'])
 pstat = PSTAT(sql, bd, verbose=VERBOSE)
 crsp = CRSP(sql, bd, rdb, verbose=VERBOSE)
-imgdir = os.path.join(paths['images'], 'tnic')  # None
+imgdir = paths['images'] / 'tnic'
 
-# Retrieve TNIC scheme from Hoberg and Phillips website
-## https://hobergphillips.tuck.dartmouth.edu/industryclass.htm
+## Retrieve TNIC schemes from Hoberg and Phillips website
+
+# https://hobergphillips.tuck.dartmouth.edu/industryclass.htm
 root = 'https://hobergphillips.tuck.dartmouth.edu/idata/'
 tnic_data = {}
 for scheme in ['tnic2', 'tnic3']:
-    source = os.path.join(root, scheme + '_data.zip')
+    source = root + scheme + '_data.zip'
     if source.startswith('http'):
         response = requests_get(source)
         source = io.BytesIO(response.content)
@@ -56,7 +56,7 @@ for scheme in ['tnic2', 'tnic3']:
 for k,v in tnic_data.items():
     print(k, v.shape)
 
-## extract one year of both tnic schemes, merge in permno, and require in univ
+# extract one year of both tnic schemes, merge in permno, and require in univ
 year = 2019
 capsize = 10  # large cap (large than NYSE median)
 univ = crsp.get_universe(bd.endyr(year))
@@ -74,13 +74,14 @@ for scheme in ['tnic2', 'tnic3']:
 nodes['tnic2'] = nodes['tnic2'][nodes['tnic2'].index.isin(nodes['tnic3'].index)]
 nodes['tnic3'] = nodes['tnic3'][nodes['tnic3'].index.isin(nodes['tnic2'].index)]
 
+
+# create graphs of tnic2 (full graph) and tnic3 (subgraph) schemes
 for scheme in ['tnic2', 'tnic3']:
     e = tnic[scheme][tnic[scheme]['gvkey1'].isin(nodes[scheme].index) &
                      tnic[scheme]['gvkey2'].isin(nodes[scheme].index)]
     edges[scheme] = list(e[['gvkey1', 'gvkey2', 'score']]\
                          .itertuples(index=False, name=None))
 
-## create graphs of both tnic2 and tnic3 schemes
 results = {'info':{}}
 G = {}
 for (scheme, node), (_, edge) in zip(nodes.items(), edges.items()):
@@ -106,20 +107,25 @@ for (scheme, node), (_, edge) in zip(nodes.items(), edges.items()):
     degree.groupby('bin').sum().plot(kind='bar', ax=ax, fontsize=6)
     ax.set_title(f'Degree Distribution of {scheme.upper()} links {year}')
     plt.tight_layout(pad=3)
-    plt.savefig(os.path.join(imgdir, f'degree_{scheme}_{year}' + figext))
+    plt.savefig(imgdir / f'degree_{scheme}_{year}.jpg')
 
     G[scheme] = g
 
 show(DataFrame(results['info']),     # Display graph properties
-     latex=False,
-     caption=f"Graph info of TNIC schemes {year}") 
+     caption=f"Graph info of TNIC schemes {year}", **SHOW) 
 
 
-# Generate link predictions
+## Predict links
+"""
+- jaccard_coefficient
+- resource_allocation
+- adamic_adar
+- preferential_attachment
+"""
 
 links = link_prediction(G['tnic3'])
 
-## Sanity check that tnic3 and prediction edges strictly in tnic2
+# Sanity check that tnic3 and prediction edges strictly in tnic2
 def isin(e1, e2):
     """helper to count number of edges e1 are in e2"""
     num = sum([e[:2] in e2 for e in e1])
@@ -140,11 +146,15 @@ show(DataFrame.from_records(records,
                                      'source edges in target',
                                      'total source edges',
                                      'fraction']),
-     latex=False,
-     index=False,
-     caption="Counts of edges")
+     index=False, caption="Counts of edges", **SHOW)
 
 
+## Evaluate accuracy of link prediction algorithms
+"""
+- roc
+- auc 
+- confusion matrix
+"""
 def make_sample(prediction, edges):
     """helper to transform prediction to labels and scores for roc and auc"""
     scores = [e[-1] for e in prediction]
@@ -153,7 +163,6 @@ def make_sample(prediction, edges):
     return gold, scores, label  # actual, predicted score, predicted label
 
 
-## Evaluate roc, auc and confusion matrix of the link prediction methods
 for ifig, (method, pred) in enumerate(links.items()):
     y, scores, label = make_sample(pred, G['tnic2'].edges)
     fpr, tpr, thresholds = metrics.roc_curve(y, scores)
@@ -163,8 +172,7 @@ for ifig, (method, pred) in enumerate(links.items()):
              tpr,
              color="darkorange",
              lw=2,
-             label="ROC curve (area = %0.2f)" % roc_auc,
-    )
+             label="ROC curve (area = %0.2f)" % roc_auc)
     plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
@@ -173,16 +181,14 @@ for ifig, (method, pred) in enumerate(links.items()):
     plt.title(f"Receiver operating characteristic: {method}")
     plt.legend(loc="lower right")
     plt.tight_layout()
-    plt.savefig(os.path.join(imgdir, f'{method}_auc' + figext))
+    plt.savefig(imgdir + f'{method}_auc.jpg')
 
     thresh = scores[sum(y)]  # set threshold to equal class size
-    cm = metrics.confusion_matrix(y,
-                                  [score > thresh for score in scores],
+    cm = metrics.confusion_matrix(y, [score > thresh for score in scores],
                                   normalize='pred')
     disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm)
     disp.plot()
     plt.title(f"Confusion Matrix: {method}")
     plt.tight_layout()
-    plt.savefig(os.path.join(imgdir, f'{method}_confusion' + figext))
-plt.show()
+    plt.savefig(imgdir / f'{method}_confusion.jpg')
 

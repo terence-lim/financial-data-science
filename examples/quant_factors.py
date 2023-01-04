@@ -1,26 +1,18 @@
-"""Factor Investing
+"""Performance Evaluation of Factor Investing
 
-- return predicting signals (Green, Hand and Zhang, 2013, and others)
-- CRSP, Compustat, IBES
+- return predicting signals (Green et al 2013, and others)
+- performance evaluation, backtests
 
-
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-#
-# TODO: check as_rolling
-#
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
 
 from pandas import DataFrame, Series
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import os, time
+from tqdm import tqdm
 from datetime import datetime
 from finds.database import SQL, Redis
 from finds.structured import Stocks, PSTAT, CRSP, IBES, Benchmarks, \
@@ -33,6 +25,9 @@ from conf import credentials, CRSP_DATE, VERBOSE, paths
 from typing import List, Tuple, Any, Dict
 
 LAST_DATE = CRSP_DATE
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
 
 imgdir = paths['images']
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
@@ -47,7 +42,7 @@ signals = Signals(user)
 ibes = IBES(sql, bd, verbose=VERBOSE)
 
 backtest = BackTest(user, bench, 'RF', LAST_DATE)
-outdir = os.path.join(paths['images'], 'factors')
+outdir = paths['images'] / 'factors'
 
 # signals to flip signs when forming spread portfolios
 leverage = {'mom1m':-1, 'mom36m':-1, 'pricedelay':-1, 'absacc':-1, 'acc':-1,
@@ -75,7 +70,7 @@ def as_rolling(df, other, width=0, dropna=True):
         df = df[df.count(axis=1) > 0]
     return df
 
-## Helpers to sort into spread portfolios, and run backtests
+## Helpers to construct spread portfolio weights, and run backtests
 def portfolio_sorts(stocks: Stocks,
                     label: str,
                     signals: Signals,
@@ -186,11 +181,11 @@ def backtest_pipeline(backtest: BackTest,
     print(pd.Series(backtest.annualized,
                     name=label + suffix).to_frame().T.round(3).to_string())
     if outdir:  # output graph and summary statistics
-        plt.savefig(os.path.join(outdir, label + '.jpg'))
+        plt.savefig(outdir / (label + '.jpg'))
         
         # performance metrics from backtest to output
         sub = ['alpha', 'excess', 'inforatio', 'sharpe', 'welch-t', 'welch-p']
-        with open(os.path.join(outdir, 'index.html'), 'at') as f:
+        with open(outdir / 'index.html', 'at') as f:
             f.write(f"<p><hr><h2>{label + suffix}</h2>\n<pre>\n")
             f.write("{}-{} {}\n".format(min(backtest.excess.index),
                                         max(backtest.excess.index),
@@ -207,14 +202,15 @@ testable = {'new', 'monthly', 'weekly', 'daily', 'pstann', 'pstqtr',
             'ibesf1', 'ibesltg', 'rdq_daily', 'ibesf1_pstqtr',
             'ibesq1_pstqtr', 'summarize'}  # subset of steps to rerun
 regenerate = True  # False to only run backtest (and not regenerate Signals)
-plottable = False  # Whether to pause and show after generating plots
-def plt_show(plottable=plottable):
-    if plottable:
+showable = False  # Whether to pause and show after generating plots
+
+def plt_show(showable=showable):
+    if showable:
         plt.show()
 
 
 if 'new' in testable:
-    with open(os.path.join(outdir, 'index.html'), 'wt') as f:
+    with open(outdir / 'index.html', 'wt') as f:
         f.write('<h1>Quant Factors</h1><br>')
         f.write(' <br>')
         f.write('<p>\n')
@@ -352,8 +348,8 @@ def regress(x: np.array, y: np.array) -> Tuple[float, float, float]:
 ## Weekly returns-based price response signals
 if 'weekly' in testable:    
     beg, end = 19260101, LAST_DATE
-    columns  = ['beta','idiovol','pricedelay']
-    wd = WeeklyDay(sql, 'Fri', beg, end)  # custom weekly trading day calendar
+    columns  = ['beta', 'idiovol', 'pricedelay']
+    wd = WeeklyDay(sql, 'Wed', beg, end)  # custom weekly trading day calendar
         
     width    = 3*52+1           # up to 3 years of weekly returns
     minvalid = 52               # at least 52 weeks required to compute beta
@@ -422,14 +418,13 @@ if 'daily' in testable:
     columns = ['ill', 'maxret', 'retvol', 'baspread', 'std_dolvol',
                'zerotrade', 'std_turn', 'turn']
     if regenerate:
-        tic = time.time()
         out = []
         dolvol = []
         turn = DataFrame()    # to average turn signal over rolling 3-months
         dt = bd.date_range(bd.begmo(beg,-3), end, 'endmo') # monthly rebalances
         chunksize = 12        # each chunk is 12 months (1 year)
         chunks = [dt[i:(i+chunksize)] for i in range(0, len(dt), chunksize)]
-        for chunk in chunks:
+        for chunk in tqdm(chunks):
             q = (f"SELECT permno, date, ret, askhi, bidlo, prc, vol, shrout "
                  f" FROM {crsp['daily'].key}"
                  f" WHERE date>={bd.begmo(chunk[0])}"
@@ -441,7 +436,6 @@ if 'daily' in testable:
             f['turn1'] = f['vol'] / f['shrout']
             f.loc[f['dolvol']>0, 'ldv'] = np.log(f.loc[f['dolvol']>0, 'dolvol'])
             f['ill'] = 1000000 * f['ret'].abs() / f['dolvol']
-            print(q, len(f), int(time.time() - tic))
 
             for rebaldate in chunk:            # for each rebaldate in the chunk
                 grouped = f[f['date'].ge(bd.begmo(rebaldate))
@@ -580,35 +574,34 @@ if 'pstann' in testable:
         fund['egr'] = (fund['ceq'] / lag['ceq'])
         fund['gma'] = ((fund['revt'] - fund['cogs']) / lag['at'])
         fund['grcapx'] = (fund['capx'] / lag2['capx'])
-        fund['grltnoa'] =  (
-            ((fund['rect']
-              + fund['invt']
-              + fund['ppent']
-              + fund['aco']
-              + fund['intan']
-              + fund['ao']
-              - fund['ap']
-              - fund['lco']
-              - fund['lo'])
-             / (lag['rect']
-                + lag['invt']
-                + lag['ppent']
-                + lag['aco']
-                + lag['intan']
-                + lag['ao']
-                - lag['ap']
-                - lag['lco']
-                - lag['lo']))
-            - ((fund['rect']
-                + fund['invt']
-                + fund['aco']
-                - fund['ap']
-                - fund['lco'])
-               - (lag['rect']
-                  + lag['invt']
-                  + lag['aco']
-                  - lag['ap']
-                  - lag['lco']))) / fund['avg_at']
+        fund['grltnoa'] =  (((fund['rect']
+                              + fund['invt']
+                              + fund['ppent']
+                              + fund['aco']
+                              + fund['intan']
+                              + fund['ao']
+                              - fund['ap']
+                              - fund['lco']
+                              - fund['lo'])
+                             / (lag['rect']
+                                + lag['invt']
+                                + lag['ppent']
+                                + lag['aco']
+                                + lag['intan']
+                                + lag['ao']
+                                - lag['ap']
+                                - lag['lco']
+                                - lag['lo']))
+                            - ((fund['rect']
+                                + fund['invt']
+                                + fund['aco']
+                                - fund['ap']
+                                - fund['lco'])
+                               - (lag['rect']
+                                  + lag['invt']
+                                  + lag['aco']
+                                  - lag['ap']
+                                  - lag['lco']))) / fund['avg_at']
         fund['hire'] = ((fund['emp'] / lag['emp']) - 1).fillna(0)
         fund['invest'] = (((fund['ppegt'] - lag['ppegt'])
                            + (fund['invt'] - lag['invt'])) / lag['at'])
@@ -651,8 +644,7 @@ if 'pstann' in testable:
                                       - ((fund['lct'] - lag['lct'])
                                          - (fund['dlc'] - lag['dlc'])
                                          - (fund['txp'] - lag['txp'])
-                                         - fund['dp'])))
-                       / fund['mve_f'])
+                                         - fund['dp']))) / fund['mve_f'])
         g = fund['oancf'].notnull()
         fund.loc[g, 'cfp'] = fund.loc[g, 'oancf'] / fund.loc[g, 'mve_f']
         fund.loc[g, '_acc'] = fund.loc[g, 'ib'] - fund.loc[g, 'oancf']
@@ -1102,7 +1094,7 @@ if 'summarize' in testable:
             'Long2002+': int(post['annualized']['longs']),
             'Short2002+': int(post['annualized']['shorts'])}, index=[s]))
     df = pd.concat(r, axis=0).round(4).sort_values('Welch-t')
-    with open(os.path.join(outdir, 'summary.tex'), 'wt') as f:
+    with open(outdir / 'summary.tex', 'wt') as f:
         f.write(show(df.loc[:, :'Vol2002'],
                      latex=True,
                      caption="Factor Performance Summary Part I"))

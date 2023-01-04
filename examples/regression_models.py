@@ -1,18 +1,12 @@
 """Supervised learning regression models
 
 - subset selection, partial least squares, ridge, gradient boost, random forest
-- cross validation, feature importances, dimension reduction
 - sklearn, statsmodels
 
 Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '' + figext
-
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
@@ -21,25 +15,27 @@ from pandas.api.types import is_list_like, is_numeric_dtype
 import statsmodels.api as sm
 from sklearn.metrics import mean_squared_error    
 import time
-import os
 from finds.alfred import Alfred, fred_qd, fred_md
-from finds.display import plot_date
+from finds.display import plot_date, show
 from conf import credentials, VERBOSE, paths
 
-VERBOSE = 1
-imgdir = os.path.join(paths['images'], 'regression')
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
+imgdir = paths['images'] / 'regression'
 alf = Alfred(api_key=credentials['fred']['api_key'], verbose=-1)
 
-# Get FRED-MD INDPRO data
+### Get FRED-MD INDPRO data
 df, t = fred_md(202205)
 transforms = t['transform']
 
-## Splice in common updates: source of PE ratio, Commercial Paper
+### Splice in common updates: source of PE ratio, Commercial Paper
 for col in ['S&P PE ratio', 'CP3M']:
     df[col] = alf.splice_series(col)
 df['COMPAPFF'] = df['COMPAPFF'].fillna(method='ffill')  # forward fill 20200430
 
-## Apply transformations
+### Apply transformations
 transformed = []
 freq = 'M' 
 beg = 19640701  # 19620701
@@ -50,7 +46,7 @@ data = pd.concat(transformed, axis=1).iloc[2:]
 c = list(data.columns)
 data = data.loc[(data.index >= beg) & (data.index <= end)]
 
-## Drop columns with missing data
+### Drop columns with missing data
 missing = []
 for series_id in df.columns:
     g = data[series_id].notna()
@@ -60,10 +56,9 @@ missing = DataFrame.from_records(missing, columns=['date', 'series_id'])
 print('original:', data.shape, 'dropna:', data.dropna(axis=1).shape)
 data = data.dropna(axis=1)   # drop columns where missing values
 print(missing['series_id'].value_counts())
-
 data
 
-## Split time series train (througn 2017) and test set (17+ quarters)
+### Split time series train (througn 2017) and test set (17+ quarters)
 target_id = 'INDPRO'
 def ts_split(X, Y, end=20171231):
     """helper to split train/test time series"""
@@ -103,13 +98,13 @@ def forward_select(Y, X, selected, ic='aic'):
                         'rsquared_adj': r.rsquared_adj})
     return DataFrame(results).sort_values(by=ic).iloc[0].to_dict()
 
-## split train/test and forward select
+### split train/test and forward select
 X_train, X_test, Y_train, Y_test = ts_split(X, Y)
 tic = time.time()
 selected = []
 models = {}
 
-## find best bic, and show selection criteria scores
+### find best bic, and show selection criteria scores
 ic = 'bic'   # select by information criterion
 for i in range(1, 32):
     select = forward_select(Y_train,
@@ -122,7 +117,7 @@ selected = DataFrame.from_dict(models, orient='index')
 best = selected[[ic]].iloc[selected[ic].argmin()]
 subset = selected.loc[:best.name].round(3)
 subset.index = [alf.header(s.split('_')[0]) for s in subset['select']]
-show(subset, caption='Forward Selection Subset', max_colwidth=60)
+show(subset, caption='Forward Selection Subset', max_colwidth=60, **SHOW)
 
 
 DataFrame.from_dict({n: {'series_id': s.split('_')[0],
@@ -131,7 +126,7 @@ DataFrame.from_dict({n: {'series_id': s.split('_')[0],
                      for n, s in selected.loc[:best.name, 'select'].items()},
                     orient='index').set_index('series_id')
 
-# Plot BIC vs number selected
+### Plot BIC vs number selected
 fig, ax = plt.subplots(num=1, clear=True, figsize=(5, 3))
 selected['bic'].plot(ax=ax, c='C0')
 selected['aic'].plot(ax=ax, c='C1')
@@ -144,10 +139,9 @@ selected['rsquared_adj'].plot(ax=bx, c='C3')
 bx.legend(['rsquared', 'rsquared_adj'], loc='upper right')
 bx.set_xlabel('# Predictors')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'forward' + figext))
-plt.show()
+plt.savefig(imgdir / 'forward.jpg')
 
-# evaluate train and test mse
+### evaluate train and test mse
 X_subset = X_train[subset['select']]
 model = sm.OLS(Y_train, X_subset).fit()
 name = f"Forward Subset Regression (k={len(subset)})"
@@ -164,8 +158,7 @@ plot_date(pd.concat([Y_test, Y_pred], axis=1),
           fontsize=8,
           figsize=(5, 3))
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'forward_test' + figext))
-plt.show()
+plt.savefig(imgdir / 'forward_test.jpg')
 
 DataFrame({'name': name,
            'train': np.sqrt(train[name]),
@@ -178,7 +171,7 @@ DataFrame({'name': name,
 #
 ######################################
 
-# - split train and test, fit standard scaling using train set
+### - split train and test, fit standard scaling using train set
 from sklearn.preprocessing import StandardScaler
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.model_selection import cross_val_score, KFold
@@ -187,7 +180,7 @@ scale = StandardScaler().fit(X_train)
 X_train = scale.transform(X_train)
 X_test = scale.transform(X_test)
 
-## fit with 5-fold CV to choose n_components
+### fit with 5-fold CV to choose n_components
 n_splits=5
 kf = KFold(n_splits=n_splits, shuffle=True, random_state=0)
 mse = Series(dtype=float)
@@ -202,7 +195,7 @@ for i in np.arange(1, 31):
                             scoring='neg_mean_squared_error').mean()
     mse.loc[i] = -score
 
-## show CV results and best model
+### show CV results and best model
 fig, ax = plt.subplots(clear=True, num=1, figsize=(5, 3))
 mse.plot(ylabel='Mean Squared Error',
          xlabel='Number of Components',
@@ -212,10 +205,9 @@ best = mse.index[mse.argmin()]
 ax.plot(best, mse.loc[best], "or")
 ax.legend(['MSE', f"best={best}"])
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'pls' + figext))
-plt.show()
+plt.savefig(imgdir / 'pls.jpg')
 
-# evaluate train and test mse
+### evaluate train and test mse
 model = PLSRegression(n_components=best).fit(X_train, Y_train)
 name = f"PLS Regression"
 Y_pred = Series(index=Y_test.index,
@@ -234,8 +226,8 @@ plot_date(pd.concat([Y_test, Y_pred], axis=1),
           fontsize=8,
           figsize=(5, 3))
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'pls_test' + figext))
-plt.show()
+plt.savefig(imgdir / 'pls_test.jpg')
+
 
 DataFrame({'name': name,
            'train': np.sqrt(train[name]),
@@ -255,9 +247,9 @@ X_train, X_test, Y_train, Y_test = ts_split(X, Y)
 scale = StandardScaler().fit(X_train)
 X_train = scale.transform(X_train)
 X_test = scale.transform(X_test)
-
 np.random.seed(42)
-# Plot fitted coefficients vs regularization alpha
+
+### Plot fitted coefficients vs regularization alpha
 coefs = [Ridge(alpha, fit_intercept=False)\
          .fit(X_subset, Y_train).coef_ for alpha in alphas]
 fig, ax = plt.subplots(num=1, clear=True, figsize=(5, 3))
@@ -266,11 +258,11 @@ ax.set_xscale('log')
 ax.set_xlabel('value of alpha regularization parameter')
 ax.set_title('Ridge Regression fitted coefficients')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'ridge' + figext))
-plt.show()
+plt.savefig(imgdir / 'ridge.jpg')
 
 
-# RidgeCV LOOCV
+
+### RidgeCV LOOCV
 model = RidgeCV(alphas=alphas,
                 scoring='neg_mean_squared_error',
                 cv=None,  # to use Leave-One-Out cross validation
@@ -292,8 +284,8 @@ plot_date(pd.concat([Y_test, Y_pred], axis=1),
           fontsize=8,
           figsize=(5, 3))
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'ridge_test' + figext))
-plt.show()
+plt.savefig(imgdir / 'ridge_test.jpg')
+
 
 DataFrame({'name': name,
            'train': np.sqrt(train[name]),
@@ -312,7 +304,7 @@ scale = StandardScaler().fit(X_train)
 X_train = scale.transform(X_train)
 X_test = scale.transform(X_test)
 
-# Plot fitted coefficients vs regularization
+### Plot fitted coefficients vs regularization
 coefs = [Lasso(max_iter=10000, alpha=alpha)\
          .fit(X_subset, Y_train).coef_  for alpha in alphas]
 fig, ax = plt.subplots(num=3, clear=True, figsize=(5, 3))
@@ -321,10 +313,10 @@ ax.set_xscale('log')
 ax.set_xlabel('value of alpha regularization parameter')
 ax.set_title('Lasso fitted coefficients')
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'lasso' + figext))
-plt.show()
+plt.savefig(imgdir / 'lasso.jpg')
 
-# LassoCV 10-Fold CV
+
+### LassoCV 10-Fold CV
 model = LassoCV(alphas=None,
                 cv=10,
                 n_jobs=-1,
@@ -346,15 +338,15 @@ plot_date(pd.concat([Y_test, Y_pred], axis=1),
           fontsize=8,
           figsize=(5, 3))
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'lasso_test' + figext))
-plt.show()
+plt.savefig(imgdir / 'lasso_test.jpg')
+
 
 DataFrame({'name': name,
            'train': np.sqrt(train[name]),
            'test_robust': np.sqrt(test_robust[name]),
            'test': np.sqrt(test[name])}, index=['RMSE'])
 
-# Display nonzero coefs
+### Display nonzero coefs
 nonzero = np.sum(np.abs(model.coef_) > 0)
 argsort = np.flip(np.argsort(np.abs(model.coef_)))[:nonzero]
 df = DataFrame({'series_id': columns_unmap(X.columns[argsort])[0],
@@ -362,9 +354,7 @@ df = DataFrame({'series_id': columns_unmap(X.columns[argsort])[0],
                 'desc': [alf.header(s)
                          for s in columns_unmap(X.columns[argsort])[0]],
                 'coef': model.coef_[argsort]}).round(6).set_index('series_id')
-show(df,
-     max_colwidth=70,
-     caption="Lasso: Nonzero Coefficients")
+show(df, max_colwidth=70, caption="Lasso: Nonzero Coefficients", **SHOW)
 
 
 
@@ -379,7 +369,7 @@ scale = StandardScaler().fit(X_train)
 X_train = scale.transform(X_train)
 X_test = scale.transform(X_test)
 
-# tune max_depth with 5-fold CV
+### tune max_depth with 5-fold CV
 n_splits=5
 kf = KFold(n_splits=n_splits, shuffle=True, random_state=0)
 mse = Series(dtype=float)
@@ -401,10 +391,10 @@ best = mse.index[mse.argmin()]
 ax.plot(best, mse.loc[best], "or")
 ax.legend(['mse', f"best={best}"])
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'boosting' + figext))
-plt.show()
+plt.savefig(imgdir / 'boosting.jpg')
 
-# evaluate train and test MSE
+
+### evaluate train and test MSE
 name = f"Boosting (depth={best})"
 model = GradientBoostingRegressor(max_depth=best,
                                   random_state=0).fit(X_train, Y_train)
@@ -424,15 +414,15 @@ plot_date(pd.concat([Y_test, Y_pred], axis=1),
           fontsize=8,
           figsize=(5, 3))
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'boosting_test' + figext))
-plt.show()
+plt.savefig(imgdir / 'boosting_test.jpg')
+
 
 DataFrame({'name': name,
            'train': np.sqrt(train[name]),
            'test_robust': np.sqrt(test_robust[name]),
            'test': np.sqrt(test[name])}, index=['RMSE'])
 
-# Show feature importance
+### Show feature importance
 top_n = 10
 imp = Series(model.feature_importances_, index=X.columns).sort_values()
 show(DataFrame.from_dict({i+1: {'importance': imp[s],
@@ -441,8 +431,7 @@ show(DataFrame.from_dict({i+1: {'importance': imp[s],
                                 'description': alf.header(s.split('_')[0])}
                           for i, s in enumerate(np.flip(imp.index[-top_n:]))},
                          orient='index'),
-     max_colwidth=70,
-     caption="Gradient Boosting: Feature Importances")
+     max_colwidth=70, caption="Gradient Boosting: Feature Importances", **SHOW)
 
 ##################
 #
@@ -452,7 +441,7 @@ show(DataFrame.from_dict({i+1: {'importance': imp[s],
 from sklearn.ensemble import RandomForestRegressor
 X_train, X_test, Y_train, Y_test = ts_split(X, Y)
 
-# tune max_depth with 5-fold CV
+### tune max_depth with 5-fold CV
 n_splits=5
 kf = KFold(n_splits=n_splits,
            shuffle=True,
@@ -477,8 +466,8 @@ best = mse.index[mse.argmin()]
 ax.plot(best, mse.loc[best], "or")
 ax.legend(['Mean Squared Error', f"best={best}"])
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'forest' + figext))
-plt.show()
+plt.savefig(imgdir / 'forest.jpg')
+
 
 name = f"RandomForest (depth={best})"
 model = RandomForestRegressor(max_depth=best,
@@ -499,12 +488,14 @@ plot_date(pd.concat([Y_test, Y_pred], axis=1),
           fontsize=8,
           figsize=(5, 3))
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'forest_test' + figext))
-plt.show()
+plt.savefig(imgdir / 'forest_test.jpg')
+
 
 DataFrame({'name': name,
            'train': np.sqrt(train[name]),
-           fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 5))
+           'test_robust': np.sqrt(test_robust[name]),
+           'test': np.sqrt(test[name])}, index=['RMSE'])
+fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 5))           
 pd.concat([np.sqrt(r.to_frame()) for r in [train, test, test_robust]], axis=1)\
   .sort_values('test')\
   .plot.barh(ax=ax, width=0.85)
@@ -512,12 +503,9 @@ ax.yaxis.set_tick_params(labelsize=10)
 ax.set_title('Regression RMSE')
 ax.figure.subplots_adjust(left=0.35)
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'rmse' + figext))
-plt.show()'test_robust': np.sqrt(test_robust[name]),
-           'test': np.sqrt(test[name])}, index=['RMSE'])
+plt.savefig(imgdir / 'rmse.jpg')
 
-
-# show top feature Importances
+### show top feature Importances
 top_n = 10
 imp = Series(model.feature_importances_, index=X.columns).sort_values()
 show(DataFrame.from_dict({i+1: {'importance': imp[s],
@@ -526,11 +514,10 @@ show(DataFrame.from_dict({i+1: {'importance': imp[s],
                                 'description': alf.header(s.split('_')[0])}
                           for i, s in enumerate(np.flip(imp.index[-top_n:]))},
                          orient='index'),
-     max_colwidth=70,
-     caption="Feature Importances with Random Forest")
+     max_colwidth=70, caption="Feature Importances with Random Forest", **SHOW)
 
 
-# Plot summary of model RMSE's
+## Plot summary of model RMSE's
 #np.sqrt(train.rename('train').to_frame().join(test.rename('test')))\
 
 fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 5))
@@ -541,5 +528,5 @@ ax.yaxis.set_tick_params(labelsize=10)
 ax.set_title('Regression RMSE')
 ax.figure.subplots_adjust(left=0.35)
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'rmse' + figext))
-plt.show()
+plt.savefig(imgdir / 'rmse.jpg')
+

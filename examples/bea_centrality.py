@@ -7,12 +7,6 @@ Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-import os
 import time
 import numpy as np
 import pandas as pd
@@ -22,14 +16,19 @@ import networkx as nx
 from finds.database import Redis
 from finds.sectors import Sectoring, BEA
 from finds.graph import graph_info, nodes_centrality, graph_draw
+from finds.display import show
 from conf import credentials, VERBOSE, paths
+
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
 
 LAST_YEAR = 2021
 years = np.arange(1947, LAST_YEAR) 
 vintages = [1997, 1963, 1947]   # when sectoring schemes were revised
 rdb = Redis(**credentials['redis'])
 bea = BEA(rdb, **credentials['bea'], verbose=VERBOSE)
-imgdir = os.path.join(paths['images'], 'bea')
+imgdir = paths['images'] / 'bea'
 
 # Read IOUse tables from BEA website
 
@@ -114,8 +113,7 @@ for ifig, year in enumerate([year0, year1]):
                      labels=master['bea'].to_dict(),
                      title=f"By Pagerank: {year} IO-Use ({vintage} vintage)")
     if imgdir:
-        plt.savefig(os.path.join(imgdir, str(year) + figext))
-plt.show()
+        plt.savefig(imgdir / f"{year}.jpg")
 
 ## Display node centrality
 c = pd.concat([yearc[year0].rank(ascending=False).astype(int),

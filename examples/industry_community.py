@@ -7,12 +7,6 @@ Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-import os
 import zipfile
 import io
 import time
@@ -28,21 +22,25 @@ from finds.database import SQL, requests_get
 from finds.busday import BusDay
 from finds.structured import PSTAT
 from finds.sectors import Sectoring
-from finds.graph import graph_draw, graph_info, nodes_centrality, \
-    community_quality, community_detection, link_prediction
+from finds.display import show
+from finds.graph import graph_info, community_quality, community_detection
 from conf import credentials, paths, VERBOSE
+
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
 
 sql = SQL(**credentials['sql'])
 bd = BusDay(sql)
 pstat = PSTAT(sql, bd)
-imgdir = os.path.join(paths['images'], 'tnic')  # None
+imgdir = paths['images'] / 'tnic'  # None
 tnic_scheme = 'tnic3'
 
 # Retrieve TNIC scheme from Hoberg and Phillips website
 
 ## https://hobergphillips.tuck.dartmouth.edu/industryclass.htm
 root = 'https://hobergphillips.tuck.dartmouth.edu/idata/'   
-source = os.path.join(root, tnic_scheme + '_data.zip')
+source = root + tnic_scheme + '_data.zip'
 if source.startswith('http'):
     response = requests_get(source)
     source = io.BytesIO(response.content)
@@ -121,9 +119,7 @@ for year in years:
         modularity[scheme] = community_quality(g, communities)
     df = DataFrame.from_dict(modularity, orient='index').sort_index()
     collect['modularity'][year] = df
-    show(df,
-         latex=False,
-         caption=f"Modularity of sectoring schemes {year}")
+    show(df, caption=f"Modularity of sectoring schemes {year}", **SHOW)
 
     # detect communities and report modularity
     communities = community_detection(g)
@@ -134,9 +130,7 @@ for year in years:
         print('total elapsed:', round(time.time() - tic, 0), key)
     df = DataFrame.from_dict(quality, orient='index').sort_index()
     collect['community'][year] = df
-    show(df,
-         latex=False,
-         caption=f"Modularity community detection algorithms {year}")
+    show(df, caption=f"Modularity community detection algorithms {year}", **SHOW)
     
     # Plot Fama-French codes49 industry representation as heatmap
     for ifig, detection in enumerate(['label', 'greedy', 'louvain']):
@@ -175,8 +169,7 @@ for year in years:
         ax.set_ylabel('{scheme} industry')
         fig.subplots_adjust(left=0.4)
         plt.tight_layout(pad=3)
-        plt.savefig(os.path.join(imgdir, f'{detection}_{year}' + figext))
-plt.show()
+        plt.savefig(imgdir + f'{detection}_{year}.jpg')
 
 # Display latest year info
 

@@ -7,12 +7,6 @@ Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-import os
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -23,11 +17,15 @@ import numpy.ma as ma
 from numpy.ma import masked_invalid as valid
 from finds.database import SQL
 from finds.graph import graph_info, graph_draw, nodes_centrality
+from finds.display import show
 from conf import VERBOSE, paths, credentials
 
-VERBOSE = 0
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
-imgdir = os.path.join(paths['images'], 'supplychain')  # None
+imgdir = paths['images'] / 'supplychain')
 
 # Retrieve principal customers info
 year = 2016
@@ -57,7 +55,7 @@ graph_info(G)
 
 pos = graph_draw(G,
                  figsize=(12, 12),
-                 savefig=os.path.join(imgdir, 'graph' + figext),
+                 savefig=imgdir / 'graph.jpg',
                  font_color='k',
                  node_color='y')
 plt.show()
@@ -97,5 +95,5 @@ graph_draw(ego,
            labels=labels,
            style='-',
            title=f"Ego network for node with largest {c}: {center}") 
-plt.show()
+
 

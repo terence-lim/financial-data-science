@@ -4,26 +4,25 @@
 - ALFRED: archival, releases, vintages, revisions
 - FRED-MD: release dates
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
 import time
-import os
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
 from finds.alfred import Alfred, fred_md, fred_qd
+from finds.display import show
 from datetime import datetime
 from conf import credentials, VERBOSE, paths
 
-imgdir = os.path.join(paths['images'], 'ts')
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
+imgdir = paths['images'] / 'ts'
 alf = Alfred(api_key=credentials['fred']['api_key'], verbose=VERBOSE)
 #savefile=paths['scratch'] + 'fred.md')
 today = datetime.today().strftime('%Y-%m-%d')
@@ -39,8 +38,7 @@ for page in [1]:   # scrape first two pages
         else:
             r.update({s: t.iloc[-1][['title', 'popularity']]})
 show(DataFrame.from_dict(r, orient='index'),
-     max_colwidth=82,
-     caption=f"Popular Series in FRED, retrieved {today}")
+     caption=f"Popular Series in FRED, retrieved {today}", **SHOW)
     
 # Traversing categories tree
 node = 0
@@ -102,8 +100,7 @@ df.index = pd.DatetimeIndex(df.index.astype(str))
 ax = df.plot(logy=False)
 ax.set_title(f"{series_id}: Revisions up to N-months later")
 if imgdir:
-    plt.savefig(os.path.join(imgdir, 'release_months' + figext))
-plt.show()
+    plt.savefig(imgdir / 'release_months.jpg')
 print(df)
 
 # INDPRO revisions history by revision number
@@ -115,10 +112,9 @@ df.index = pd.DatetimeIndex(df.index.astype(str))
 ax = df.plot(logy=False)
 ax.set_title(f"Revisions of {series_id} by release number")
 if imgdir:
-    plt.savefig(os.path.join(imgdir, 'release_revisions' + figext))
-plt.show()
+    plt.savefig(imgdir / 'release_revisions.jpg')
 show(df[df.index > '2019-01-01'],
-     caption=f"{series_id} Revisions, retrieved {today}")
+     caption=f"{series_id} Revisions, retrieved {today}", **SHOW)
 
 
 # Release dates of series in FRED-MD collection
@@ -169,8 +165,7 @@ ax.set_xticks(np.arange(len(release)))
 ax.set_xticklabels(release.index, rotation=90, fontsize='xx-small')
 plt.tight_layout(pad=2)
 if imgdir:
-    plt.savefig(os.path.join(imgdir, 'fredmd_release' + figext))
-plt.show()
+    plt.savefig(imgdir / 'fredmd_release.jpg')
 
 Series(release.values,
        index=[(s, alf.header(s)) for s in release.index]).tail(20)

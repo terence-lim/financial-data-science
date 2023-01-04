@@ -1,22 +1,16 @@
-"""Market Microstructure
+"""Market Microstructure: intraday liquidity from tick data
 
-- Tick data: NYSE Daily TAQ 
-- Spreads: quoted, effective, price impact, realized
-- Volatility: variance ratio, Parkinsons, Klass-Garman
+- NYSE Daily TAQ tick data: Lee-Ready tick test
+- Intraday spreads: quoted, effective, price impact, realized
+- Intraday volatility: variance ratio, Parkinsons, Klass-Garman
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
 import numpy as np
 import pandas as pd
 import time
-import os
 from pandas import DataFrame, Series
 from matplotlib import colors
 import matplotlib.pyplot as plt
@@ -24,11 +18,14 @@ from finds.database import SQL, Redis
 from finds.structured import CRSP
 from finds.busday import BusDay
 from finds.taq import opentaq, itertaq, bin_trades, bin_quotes, TAQ
-from finds.display import plot_time, row_formatted
-from finds.recipes import weighted_average
+from finds.display import plot_time, row_formatted, show
+from finds.recipes import weighted_average, Volatility
 from conf import credentials, paths, VERBOSE
 
-VERBOSE = 0
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 user = SQL(**credentials['user'], verbose=VERBOSE)
 bday = BusDay(sql)
@@ -41,7 +38,6 @@ open_t = pd.to_datetime('1900-01-01T9:30')    # exclude <=
 close_t = pd.to_datetime('1900-01-01T16:00')  # exclude >
 EPSILON = 1e-15
 
-
 def volatility_HL(high: DataFrame, low: DataFrame,
                   last: DataFrame = None) -> DataFrame:
     """Compute Parkinson volatility from high and low prices
@@ -52,7 +48,7 @@ def volatility_HL(high: DataFrame, low: DataFrame,
         last: DataFrame of last prices, for forward filling if high low missing
 
     Returns:
-        Dataframe of Parkinson volatility = 
+        Estimated volatility
     """
     if last is not None:
         high = high.where(high.notna(), last.shift())
@@ -73,7 +69,7 @@ def volatility_OHLC(first: DataFrame, high: DataFrame, low: DataFrame,
         last: DataFrame of close prices (observations x stocks)
 
     Returns:
-        Dataframe of Parkinson volatility = 
+        Estimated volatility 
     """
     if ffill:
         last = last.ffill()
@@ -195,21 +191,19 @@ for d, date in enumerate(dates):
 daily_df = DataFrame(daily_all)
 bins_df = {k: DataFrame(bins[k]) for k in bins.keys()}
 
-raise Exception('stop')
-
 if True:
     import pickle
-    with open(os.path.join(paths['scratch'], 'tick.daily'), 'wb') as outfile:
+    with open(paths['scratch'] / 'tick.daily', 'wb') as outfile:
         pickle.dump(daily_df, outfile)
-    with open(os.path.join(paths['scratch'], 'tick.bins'), 'wb') as outfile:
+    with open(paths['scratch'] / 'tick.bins', 'wb') as outfile:
         pickle.dump(bins_df, outfile)
-    with open(os.path.join(paths['scratch'], 'tick.shrcls'), 'wb') as outfile:
+    with open(paths['scratch'] / 'tick.shrcls', 'wb') as outfile:
         pickle.dump(shareclass, outfile)
 if False:    
     import pickle
-    with open(os.path.join(paths['scratch'], 'tick.daily'), 'rb') as f:
+    with open(paths['scratch'] / 'tick.daily', 'rb') as f:
         daily_df = pickle.load(f)
-    with open(os.path.join(paths['scratch'], 'tick.bins'), 'rb') as f:
+    with open(paths['scratch'] / 'tick.bins', 'rb') as f:
         bins_df = pickle.load(f)
 
 
@@ -269,7 +263,7 @@ results.update(result)
 
 ## display table of results
 show(row_formatted(DataFrame(results).T, formats),
-     caption="Average Liquidity by Market Cap/Exchange Listed")
+     caption="Average Liquidity by Market Cap/Exchange Listed", **SHOW)
 
 
 
@@ -307,7 +301,7 @@ ax = plot_helper(result.T,
                  keys=keys,
                  legend='Size/Exch',
                  num=1)
-plt.savefig(os.path.join(imgdir, 'tunch' + figext))
+plt.savefig(imgdir / 'tunch.jpg')
 
 labels = [f"qunch{v}{u}" for v, u in intervals]
 result = groupby[labels].median()*100
@@ -318,7 +312,7 @@ ax = plot_helper(result.T,
                  keys=keys,
                  legend='Size/Exch',
                  num=2)
-plt.savefig(os.path.join(imgdir, 'qunch' + figext))
+plt.savefig(imgdir / 'qunch.jpg')
 
 labels = [f"tzero{v}{u}" for v, u in intervals]
 result = groupby[labels].median()*100
@@ -329,7 +323,7 @@ ax = plot_helper(result.T,
                  keys=keys,
                  legend='Size/Exch',
                  num=3)
-plt.savefig(os.path.join(imgdir, 'tzero' + figext))
+plt.savefig(imgdir / 'tzero.jpg')
 
 labels = [f"tvar{v}{u}" for v, u in intervals]
 result = groupby[labels].median()
@@ -341,7 +335,7 @@ ax = plot_helper(result.T,
                  keys=keys,
                  legend='Size/Exch',
                  num=4)
-plt.savefig(os.path.join(imgdir, 'tvratio' + figext))
+plt.savefig(imgdir / 'tvratio.jpg')
     
 labels = [f"tvar{v}{u}" for v, u in intervals]
 result = np.sqrt(groupby[labels].median())
@@ -352,7 +346,7 @@ ax = plot_helper(result.T,
                  keys=keys,
                  legend='Size/Exch',
                  num=5)
-plt.savefig(os.path.join(imgdir, 'tstd' + figext))
+plt.savefig(imgdir / 'tstd.jpg')
 
 labels = [f"qvar{v}{u}" for v, u in intervals]
 result = np.sqrt(groupby[labels].median())
@@ -363,8 +357,7 @@ ax = plot_helper(result.T,
                  keys=keys,
                  legend='Size/Exch',
                  num=6)
-plt.savefig(os.path.join(imgdir, 'qstd' + figext))
-plt.show()
+plt.savefig(imgdir / 'qstd.jpg')
 
 
 # Compare methods of volatility estimates, by interval and market cap/exchange
@@ -392,7 +385,7 @@ for ifig, (split_label, split_df) in enumerate(groupby):
                      num=1+ifig,
                      ylim=[0.0 ,0.05],
                      legend='method')
-    plt.savefig(os.path.join(imgdir, 'tick_' + "_".join(split_label) + figext))
+    plt.savefig(imgdir / 'tick_' + "_".join(split_label) + figext))
 
 
 # Intraday spreads, depths and volumes
@@ -425,5 +418,5 @@ for num, key in enumerate(keys):
               fontsize=8)
     plt.subplots_adjust(right=0.8)
     plt.tight_layout()
-    plt.savefig(os.path.join(imgdir, key + '' + figext))
-plt.show()
+    plt.savefig(imgdir / (key + '.jpg'))
+

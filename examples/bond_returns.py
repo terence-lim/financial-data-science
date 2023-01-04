@@ -1,17 +1,11 @@
-"""Bond Returns and Interest Rates
+"""Principal Components of Bond Returns
 
-- Principal Components Analysis: bond index returns and interest rates
+- Principal components analysis, bond returns
 
 Copyright 2022, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-import os
 import re
 import numpy as np
 import pandas as pd
@@ -19,9 +13,13 @@ from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
 import seaborn as sns
 from finds.alfred import Alfred
+from finds.display import show
 from conf import VERBOSE, credentials, paths
 
-imgdir = os.path.join(paths['images'], 'ts')
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+imgdir = paths['images'] / 'ts'
 alf = Alfred(api_key=credentials['fred']['api_key'])
 
 # Bond Return Components and Interest Rate Risk Indicators
@@ -51,7 +49,7 @@ show(Series(alf.header(rets.columns),
             index=rets.columns,
             name='title').to_frame().rename_axis('series'),
      max_colwidth=88,
-     caption="Bond Index Total Returns")
+     caption="Bond Index Total Returns", **SHOW)
 
 
 # Marginal Variance Explained
@@ -86,8 +84,7 @@ ax.set_title('Scree Plot: PCA of FRED BofA Bond Return Indexes', fontsize=16)
 ax.xaxis.set_tick_params(labelsize=12)
 ax.set_ylabel("Percent Variance Explained", fontsize=14)
 ax.set_xlabel("Principal Component", fontsize=14)
-plt.savefig(os.path.join(imgdir, 'scree' + figext))
-plt.show()
+plt.savefig(imgdir / 'scree.jpg')
 
 # Rsquare of components explained by Interest Rate Indicators
 rates = ['BAA10Y', 'T10Y2Y', 'DGS10']  # compare rate levels
@@ -107,9 +104,8 @@ res['Rsq of rate changes'] = [sm.OLS(factors[col],
                                       rates.diff().fillna(0))\
                                .fit().rsquared
                                for col in factors.columns]
-show(res,
-     max_colwidth=75,
-     caption="R-squared of each PC explained by Interest Rate Indicators")
+show(res, max_colwidth=75, 
+     caption="R-squared of each PC explained by Interest Rate Indicators", **SHOW)
 
 # Plot of cumulative components compared to levels of selected interest rates   
 fig = plt.figure(figsize=(10, 12), num=1, clear=True)
@@ -129,7 +125,7 @@ for isub, col in enumerate(factors.columns):
     if not isub:
         ax.set_title('Selected Interest Rates')
     ax.set_xlabel(alf.header(rates.columns[isub])[:80])
-plt.savefig(os.path.join(imgdir, 'components' + figext))
+plt.savefig(imgdir / 'components.jpg')
 plt.tight_layout()
-plt.show()
+
 

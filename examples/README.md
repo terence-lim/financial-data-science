@@ -1,255 +1,118 @@
-# Financial Data Science: Exercises in Python
+# 30+ Financial Data Science Projects
 
-These code examples explore data science and machine learning methods
-on large or textual financial data sets (note that the accompanying Jupyter notebooks
-in the
-[https://github.com/terence-lim/data-science-notebooks](https://github.com/terence-lim/data-science-notebooks) repo
-reflect an older version, and will be updated very soon)
+1. [Track stock identifier changes and price adjustments](stock_prices.py)
+   - stock splits, dividends, identifiers, and total holding returns
 
-[https://github.com/terence-lim/financial-data-science](https://github.com/terence-lim/financial-data-science)
+2. [Construct Jegadeesh-Titman rolling portfolios](jegadeesh_titman.py)
+   - Newey-West correction; momentum effect
 
-by: [Terence Lim](https://www.linkedin.com/in/terencelim)
+3. [Construct Fama-French sorted portfolio](fama_french.py)
+   - linear regression; value and size anomaly
 
-&nbsp;
+   ## Expected Returns
 
+4. [Estimate Fama-Macbeth cross-sectional regressions](fama_macbeth.py)
+   - CAPM tests; polynomial regression; feature transformations
 
-## Applications in Unsupervised Learning
+5. [Backtesting a stock price reversal trading strategy](weekly_reversal.py)
+   - Contrarian strategy; statistical arbitrage
+   - implementation shortfall; structural change with unknown breakpoint
 
+2. [Event studies of key developments news](event_study.py)
+   - Abnormal returns; post-announcement drift; multiple testing
 
-### Topic Models from FOMC meeting minutes
+2. [Performance evaluation of factor investing](quant_factors.py)
+   - Return predicting signals; performance evaluation
 
-[fomc_topics.py](fomc_topics.py)
+   ## Risk
 
-- Topic Models: FOMC minutes text
-- Matrix Decomposition: NMF, LSA, LDA, PLSI
+2. [Conditional volatility of cryptocurrencies](conditional_volatility.py)
+   - Value at Risk, Expected Shortfall, GARCH, EWMA; bitcoin, etherium
 
-### Hidden State Models and Economic Time Series
+2. [Covariance matrix estimates of industry returns](covariance_matrix.py)
+   - Covariance Matrix: PCA, SVD, Shrinkage
+   - Risk Decomposition, Black-Litterman, Risk Parity
 
-[economic_states.py](economic_states.py)
+2. [Visualizing the term structure of interest rates](term_structure.py)
+   - yield curve, duration, bootstrap
+   
+2. [Examine principal components of bond returns](bond_returns.py)
+   - Principal components analysis, bond returns
+   
+2. [Market microstructure: Intra-day liquidity from tick data](market_microstructure.py)
+   - TAQ tick data; spreads, Lee-Ready tick test, intra-day volatility
 
-- Recurrent Neural Networks: LSTM and Elman SRN
-- Linear Dynamic Factor Models
-- Hidden Markov Models and Gaussian Mixture Model
 
+   ## Econometric Methods
 
-## Applications in Supervised Learning
+2. [Revisions of macroeconomic time series from ALFRED](revisions_vintage.py)
+   - Archival-FRED, vintages
 
-### Classification of events text
+2. [Analyze linear regression gaussian assumptions](linear_diagnostics.py)
+   - Residual analysis, outliers, leverage, influential points
+   - Multicollinearity; robust standard errors
 
-[keydev_classifier.py](keydev_classifier.py)
+2. [Forecast inflation time series](econometric_forecast.py)
+   - trends, stationarity, seasonality, ARMA, smoothing, cointegration
+   - granger causality, impulse response function
 
-- Text classification: S&P Key Developments events
-- Logistic regression: Generalized Linear Models, stochastic gradient descent
-- nltk: tokenizer, lemmatizer, stemmer
-- sklearn metrics: accuracy, precision, recall, confusion_matrix, auc, roc_curve
+2. [Approximate factor model of FRED-MD macroeconomic series](approximate_factors.py)
+   - PCA-EM, unit root
 
-### Classification models and events text
 
-[classification_models.py](classification_models.py)
+   ## Network Science
 
-- Supervised learning models for classification
+2. [Ego network of principal customers supply chain](customer_ego.py)
+   - Induced subgraph, ego network
 
-  - Text classification, S&P Key Developments
-  - gensim: preprocessing, phrases
-  - sklearn: naivebayes, logistic, linearsvc, decisiontree
+2. [Centrality measures of BEA input-output tables](bea_centrality.py)
+   - Graph centrality algorithms
 
-### Deep Averaging Networks for text classification
+2. [Community detection for industry sectoring](industry_community.py)
+   - Community detection graph algorithms
 
-[dan_classifier.py](dan_classifier.py)
+2. [Link prediction on company relationships](link_prediction.py)
+   - Accuracy metrics; imbalanced sample
+   - Random graphs, link prediction graph algorithms
 
-- Feedforward Neural Networks: torch, deep averaging networks
-- Word vectors: spacy, GloVe, relativize, frozen, fine-tuning
 
+   ## Text Mining
 
-### Sentiment Analysis of 10K MD&A in Edgar Company Filings
+2. [Text classification with logistic regression](keydev_classifier.py)
+   - Logistic regression, stochastic gradient descent
 
-[mda_sentiment.py](mda_sentiment.py)
+2. [Sentiment analysis of 10-K management discussion text](mda_sentiment.py)
+   - SEC Edgar, Loughran-MacDonald dictionary
 
-- Sentiment Analysis: Loughran and McDonald (2011) sentiment word list
-- 10-K Company Filings: SEC Edgar, Cohen, Malloy and Nguyen (2020), 
+2. [Syntactic analysis of 10-K business descriptions for industry classifications](business_description.py)
+   - Softmax regression; POS tagging, named entity recognition
 
+2. [Topic modeling of FOMC meeting minutes](fomc_topics.py)
+   - Matrix decomposition algorithms
 
-### Approximate factor models, VAR and TCN from FRED-MD
 
-[approximate_factors.py](approximate_factors.py)
+   ## Machine Learning
 
-- Approximate Factor Models, VAR and TCN
+2. [Compare classification models for text classification](classification_models.py)
+   - Generalized linear models, SVM, KNN, Naive-Bayes, decision tree
+   - Cross-validation, feature importances
 
-  - PCA, EM
-  - Approximate factors and selection: Bai and Ng (2002), McCracken and Ng (2016)
-  - vector autoregression, temporal convolutional networks
+2. [Compare regression models for inflation prediction](regression_models.py)
+   - Subset selection, dimensional reduction, penalized least squares, ensembles
+   - Regularization
 
-### Supervised Learning Regression Models
+2. [Estimate state space economic models](economic_states.py)
+   - Mixture models, hidden markov models
 
-[regression_models.py](regression_models.py)
 
-- subset selection, partial least squares, ridge, gradient boost, random forest
-- cross validation, feature importances, dimension reduction
-- sklearn, statsmodels
+   ## Deep Learning
 
-## Applications in Linear Regression
+2. [Tune word embeddings for text classification](dan_classifier.py)
+   -  Deep averaging networks, Feed forward neural net
 
-### Econometrics and Forecasting
+2. [Recurrent neural network and dynamic factor models](elman_kalman.py)
+   - Long short term memory (LSTM), kalman filter
 
-[econometric_forecast.py](econometric_forecast.py)
+2. [Temporal convolutional networks and VAR](tcn_var.py)
+   - Convolutional neural network, vector autoregression
 
-- Trends: seasonality
-- Autocorrelation Function: AR, MA, SARIMAX
-- Unit root: integration order
-- Forecasting: single-step, multi-step
-- Granger Casuality
-- Vector Auto-Regression: impulse response function
-
-### Linear Regression Diagonostics and Residual Plots
-
-[linear_diagnostics.py](linear_diagnostics.py)
-
-- Linear regression diagnostics: HAC robust standard errors
-- Outliers: leverage, influential points, residual plots
-- Multicollinearity: variance inflation factor
-- Interactions and Polynomial Regression
-
-### Economic Time Series
-
-[revisions_vintage.py](revisions_vintage.py)
-
-- St Louis Fed FRED: popular series, api
-- ALFRED: archival, releases, vintages, revisions
-- FRED-MD: release dates
-
-
-## Applications in Risk Modelling
-
-### Market Microstructure
-
-[market_microstructure.py](market_microstructure.py)
-
-- Tick data: NYSE Daily TAQ 
-- Spreads: quoted, effective, price impact, realized
-- Volatility: variance ratio, Parkinsons, Klass-Garman
-
-### Covariance Matrix and Risk Decomposition
-
-[covariance_matrix.py](covariance_matrix.py)
-
-- Covariance Matrix: Principal Components, Shrinkage, EWMA
-- Risk Decomposition, Black-Litterma
-
-### Conditional Volatility
-
-[conditional_volatility.py](conditional_volatility.py)
-
-- Value at Risk, Expected Shortfall
-- GARCH, EWMA
-- VIX, Bitcoin
-
-### Bond market index components and interest rate indicators
-
-[bond_returns.py](bond_returns.py)
-
-- Bond Returns and Interest Rates
-
-- Principal Components Analysis: bond index returns and interest rates
-
-
-### Term Structure of Interest Rates
-
-[term_structure.py](term_structure.py)
-
-- yield curve, duration, forward rates, spot rates, yield-to-maturity
-- bootstrap, splines
-- reconstructed yield curve (Liu and Wu, 2020), St Louis Fed FRED
-
-
-## Applications in Network Science
-
-
-### Graph centrality and BEA input-output use tables
-
-[bea_centrality.py](bea_centrality.py)
-
-- Graph Centrality and BEA Input-Output Use Tables
-
-  - Centrality: eigenvector, hub, authority, pagerank,
-  - BEA: Input-Output Use Table, Choi and Foerster (2017)
-
-
-### Industry Sectoring and Community Detection
-
-[industry_community.py](industry_community.py)
-
-- Community Detection
-- Text-based Network Industry Classification (Hoberg and Phillips, 2016)
-
-### Link Prediction
-
-[link_prediction.py](link_prediction.py)
-
-- Link prediction: resource_allocation, jaccard coefficient, 
-  adamic_adar, preferential_attachment
-- Accuracy: precision, recall, ROC curve, AUC, confusion matrix, 
-- Text-based Network Industry Classification (Hoberg and Phillips, 2016)
-
-### Principal Customers Network
-
-[customer_ego.py](customer_ego.py)
-
-- Graphs: ego network, induced subgraph
-- Supply chain: principal customers
-
-## Applications in Quantitative Finance
-
-### Event Study Abnormal Returns
-
-[event_study.py](event_study.py)
-
-- S&P/Capital IQ Key Developments
-- event study: CAR, BHAR, post-announcement drift (Kolari et al 2010 and others)
-- multiple testing: Holm FWER, Benjmain-Hochberg FDR, Bonferroni p-values
-
-### Weekly Reversals Strategy
-
-[weekly_reversal.py](weekly_reversal.py)
-
-- Weekly reversal contrarian strategy (Lo and Mackinlay 1990, and others)
-- Structural change with unknown breakpoint
-- Implementation slippage
-
-
-### Survivorship-bias and low-price stocks strategy
-
-[lowprice_survivors.py](lowprice_survivors.py)
-
-- Low-price portfolio spread returns
-- Survivorship-bias
-- Autocorrelation-consistent standard errors: Newey-West
-
-### Stock Prices and Adjustments
-
-[stock_prices.py](stock_prices.py)
-
-- Total stock returns: splits and dividend adjustment factors
-
-
-
-### Factor Investing
-
-[quant_factors.py](quant_factors.py)
-
-- return predicting signals (Green, Hand and Zhang, 2013, and others)
-- CRSP, Compustat, IBES
-
-### Risk Premiums from Fama-Macbeth Cross-sectional Regression
-
-[fama_macbeth.py](fama_macbeth.py)
-
-- Fama-Macbeth cross-sectional regression: risk premiums
-- CRSP, Compustat, 
-- Ken French Data Library: Fama-French test assets
-### Fama-French Research Factors
-
-[fama_french.py](fama_french.py)
-
-- Fama-French monthly research factors: HML, SMB, Mom, STRev
-- Portfolio sorts
-- CRSP, Compustat, Ken French Data Library

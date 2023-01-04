@@ -1,24 +1,14 @@
 """Classification of events text
 
-- Text classification: S&P Key Developments events
-- Logistic regression: Generalized Linear Models, stochastic gradient descent
+- Text classification: S&P Key developments news
+- Logistic regression, stochastic gradient descent, regularization
 - nltk: tokenizer, lemmatizer, stemmer
-- sklearn metrics: accuracy, precision, recall, confusion_matrix, auc, roc_curve
+- sklearn accuracy metrics: precision, recall, confusion_matrix, auc, roc_curve
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
-import finds.display
-def show(df, latex=True, ndigits=4, **kwargs):
-    return finds.display.show(df, latex=latex, ndigits=ndigits, **kwargs)
-figext = '.jpg'
-
-#
-# TODO: only 2018-2019 presently, include earlier situations?
-# TODO: test confusion poor, predict lower only half right: no regularization
-#
-import os
 import re
 import numpy as np
 import matplotlib.pyplot as plt
@@ -31,10 +21,13 @@ from finds.unstructured import Unstructured
 from finds.structured import PSTAT
 from conf import credentials, VERBOSE, paths
 
-VERBOSE = 0
+%matplotlib qt
+VERBOSE = 1      # 0
+SHOW = dict(ndigits=4, latex=True)  # None
+
 mongodb = MongoDB(**credentials['mongodb'], verbose=VERBOSE)
 keydev = Unstructured(mongodb, 'KeyDev')
-imgdir = os.path.join(paths['images'], 'keydev')
+imgdir = paths['images'] / 'keydev'
 
 events_ = PSTAT._event
 
@@ -81,8 +74,7 @@ zipf.plot(logx=True,
           ylabel='log freq',
           figsize=(7, 6))
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'zipf.jpg'))
-plt.show()
+plt.savefig(imgdir / 'zipf.jpg')
 
 ## 3. remove stopwords
 import nltk
@@ -159,6 +151,9 @@ def one_hot(word2id, line):
 #
 ########################################################
 
+#
+# TODO: regularization
+#
 np.random.seed(0)
 out = {'nll': [],  'train_acc': [], 'test_acc': []}  # store results per epoch
 T = 100                     # max epochs to iterate SGD
@@ -212,8 +207,7 @@ bx.set_ylabel('accuracy')
 bx.legend(['Train accuracy', 'Test accuracy'], loc='center right')
 plt.xticks(np.arange(0, T, T // 10))
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'accuracy' + figext))
-plt.show()
+plt.savefig(imgdir / ('accuracy' + figext))
 
 # Compute predicted probs in test set
 y, yproba = [], []
@@ -235,8 +229,7 @@ ax.set_ylabel('True Positive Rate')
 ax.set_xlabel('False Positive Rate')
 ax.set_title('Receiver Operating Characteristic')
 plt.tight_layout(pad=2)
-plt.savefig(os.path.join(imgdir, 'roc' + figext))
-plt.show()
+plt.savefig(imgdir / ('roc' + figext))
 
 # Evaluate confusion matrix: precision, recall, F1 in test set
 n = len(y)
@@ -283,7 +276,7 @@ output.update({"Type II error | beta | (1 - Power)":
 print(f"=== Negative/Label=0 is {events_[events[0]]} ===")
 print(f"=== Positive/Label=1 is {events_[events[1]]} ===")
 pd.set_option('max_colwidth', 50)
-show(DataFrame.from_dict(output, orient='index'))
+show(DataFrame.from_dict(output, orient='index'), **SHOW)
 
 # Display confusion matrix of test set
 labels = [f"{i}={events_[events[i]].split()[-1]}" for i in range(len(events))]
@@ -310,8 +303,7 @@ ax.yaxis.set_tick_params(labelsize=8, rotation=0)
 ax.xaxis.set_tick_params(labelsize=8, rotation=0)
 plt.subplots_adjust(left=0.35, bottom=0.25)
 plt.tight_layout()
-plt.savefig(os.path.join(imgdir, 'confusion' + figext))
-plt.show()
+plt.savefig(mgdir / ('confusion' + figext))
 
 # Display top words in wordcloud
 wc = WordCloud(width=500, height=500, stopwords=stop_words, colormap='cool')
@@ -324,5 +316,4 @@ for ax, words, e in zip(axes, [arg_sort[:top_k], arg_sort[-top_k:]], events):
     ax.axis("off")
     plt.tight_layout(pad=3)
     ax.set_title(events_[e], fontdict=dict(fontsize=10))
-plt.savefig(os.path.join(imgdir, 'words" + figext))
-plt.show()
+plt.savefig(imgdir / ('words' + figext))
