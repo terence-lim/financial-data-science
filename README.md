@@ -1,12 +1,12 @@
 # Financial Data Science -
 
 This repo contains a Python modules library, code examples, and
-Jupyter notebooks for exploring data science and machine learning
+Jupyter notebooks for exploring quantitative and machine learning
 methods on structured and unstructured financial data sets.
 
 __NEW!__ [See documentation in sphinx-format](https://terence-lim.github.io/financial-data-science-docs/)
 
-Copyright 2002, by [Terence Lim](https://www.linkedin.com/in/terencelim)
+Copyright 2003, by [Terence Lim](https://www.linkedin.com/in/terencelim)
 
 License: MIT
 
@@ -23,13 +23,12 @@ learning models.
 
 - [Documentation in sphinx-format](https://terence-lim.github.io/financial-data-science-docs/)
 
-## [Exercises](examples) in Python code
+## [Examples and Projects](examples) in Python
 
-- Code examples exploring data science and machine learning methods
-on large and textual financial data sets.
+- Financial data science projects exploring quantitive and machine learning methods
+on large financial and textual data sets.
 
 ## [Jupyter Notebooks](https://github.com/terence-lim/data-science-notebooks)
 
-- Results and code from examples as notebooks (Note: notebooks are from an older version and no longer
-match the python code examples; updated versions will be loaded very soon)
+- Results and code from examples as notebooks
 
