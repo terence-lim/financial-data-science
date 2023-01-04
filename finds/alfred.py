@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 from pandas.api import types
 import time
 from finds.database import requests_get
-from finds.busday import to_date, to_monthend
+from finds.busday import BusDay
 from typing import Dict, List, Tuple
 
 _VERBOSE = 0
@@ -70,8 +70,8 @@ def multpl(page: str) -> DataFrame:
                          'html.parser')
     tables = soup.findChildren('table')
     df = pd.read_html(tables[0].decode())[0]
-    df.iloc[:,0] = to_date(df.iloc[:,0], format='%b %d, %Y')
-    df['date'] = to_monthend(df.iloc[:, 0])
+    df.iloc[:,0] = BusDay.to_date(df.iloc[:,0], format='%b %d, %Y')
+    df['date'] = BusDay.to_monthend(df.iloc[:, 0])
     df = df.sort_values('Date').groupby('date').last().iloc[:,-1]
     if not types.is_numeric_dtype(df):
         df = df.map(lambda x: re.sub('[^\d\.\-]','',x)).astype(float)
@@ -128,8 +128,8 @@ def fred_md(vintage: int | str = 0, url: str = '',
             label = re.sub("[^a-z]", '', row[0].lower()) # simplify label str
             meta[label] = row[1:].astype(int).to_dict()  # as dict of int codes
     df = df[df.iloc[:, 0].str.find('/') > 0]      # keep rows with valid date
-    df.index = to_date(df.iloc[:, 0], format='%m/%d/%Y')
-    df.index = to_monthend(df.index)
+    df.index = BusDay.to_date(df.iloc[:, 0], format='%m/%d/%Y')
+    df.index = BusDay.to_monthend(df.index)
     return df.iloc[:, 1:], DataFrame(meta)
 
 def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = 0):
@@ -161,8 +161,8 @@ def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = 0):
             label = re.sub("[^a-z]", '', row[0].lower()) # simplify label str
             meta[label] = row[1:].astype(int).to_dict()  # as dict of int codes
     df = df[df.iloc[:, 0].str.find('/') > 0]      # keep rows with valid date
-    df.index = to_date(df.iloc[:, 0], format='%m/%d/%Y')
-    df.index = to_monthend(df.index)
+    df.index = BusDay.to_date(df.iloc[:, 0], format='%m/%d/%Y')
+    df.index = BusDay.to_monthend(df.index)
     return df.iloc[:, 1:], DataFrame(meta)
         
 
@@ -660,7 +660,7 @@ class Alfred:
             s = Series()
         elif series_id in ['CLAIMS']:
             df = DataFrame(self('ICNSA'))
-            df['Date'] = to_monthend(df.index)
+            df['Date'] = BusDay.to_monthend(df.index)
             s = df.groupby('Date').mean().iloc[:,0]
         elif series_id in shiller.keys():
             v = shiller[series_id]

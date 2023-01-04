@@ -731,7 +731,7 @@ class BackTest(Structured):
 
         # compute time-series regression results
         rhs = ' + '.join([f"Q('{b}')" for b in benchnames])
-        r = smf.ols(f"{self.label} ~ {rhs}", data=p).fit()
+        r = smf.ols(f"Q('{self.label}') ~ {rhs}", data=p).fit()
         r = r.get_robustcov_results(cov_type='HAC', use_t=None, maxlags=haclags)
         pre2002 = p.loc[p.index < 20020101, self.label]
         post2002 = p.loc[p.index >= 20020101, self.label]
@@ -801,7 +801,7 @@ class BackTest(Structured):
 
 
 class DailyPerformance:
-    """Computing daily realized returns on periodic holdings
+    """Compute daily realized returns on periodic holdings
     
     Args:
       stocks: Stocks returns dataset
@@ -820,15 +820,15 @@ class DailyPerformance:
         Returns:
           Series of daily realized portfolio returns
         """
-        rebals = sorted(holdings.keys())   # rebalance dates, including initial
-        dates = self.stocks.bd.date_range(rebals[0], end)[1:] # return dates
+        rebals = sorted(holdings.keys())   # portfolio rebalance dates
+        dates = self.stocks.bd.date_range(rebals[0], end) # daily rebaldates
         curr = holdings[rebals[0]]         # initial portfolio
-        perf = dict()                      # collect daily performance
+        perf = dict()                      # to collect daily performance
         for date in dates[1:]:   # loop over return dates
             ret = self.stocks.get_section(dataset='daily',
                                           fields=['ret','retx'],
                                           date_field='date',
-                                          date=date)
+                                          date=date).dropna()
             perf[date] = sum(curr*ret['ret'].reindex(curr.index, fill_value=0))
             if date in rebals:   # update daily portfolio holdings
                 curr = holdings[date]

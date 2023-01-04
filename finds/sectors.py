@@ -466,14 +466,13 @@ class BEA(Sectoring):
         self.verbose = verbose
 
     def get(self, datasetname: str = "", parametername: str = "",
-            use_cache: bool | None = True, **kwargs) -> DataFrame:
+            cache_mode: str = "rw", **kwargs) -> DataFrame:
         """Wrapper to execute common BEA web api calls
 
         Args:
             datasetname: Name of dataset to retrieve, e.g. 'ioUse'
             parametername: Parameter to retrieve, e.g. 'TableID'
-            use_cache: Whether to use cache of previously retrieved data,
-               True reads and writes to cache, False writes only, None ignores
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
             kwargs: Additional parameters, such as tableid or year
 
         Examples:
@@ -508,7 +507,7 @@ class BEA(Sectoring):
                         url += "&" + str(k) + "=" + str(v)
         self._print(url, str(kwargs))
 
-        if use_cache and self.rdb is not None and self.rdb.redis.exists(url):
+        if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(url):
             self._print('(BEA get rdb)', url)
             return self.rdb.load(url)
         response = requests_get(url)
@@ -525,18 +524,18 @@ class BEA(Sectoring):
         df.columns = df.columns.map(str.lower).map(str.rstrip)
         if 'index' in kwargs:
             df = df.set_index(kwargs['index'])
-        if use_cache is not None and self.rdb is not None:
+        if 'w' in cache_mode and self.rdb:
             self.rdb.dump(url, df)
         return df
 
 
-    def read_ioUse_xls(self, year: int, use_cache: bool | None = True,
+    def read_ioUse_xls(self, year: int, cache_mode: str = "rw",
                        source: str = Sectoring.bea_url) -> DataFrame:
         """Helper to load a year's ioUSE table from vintage xls on website
         
         Args:
             year: year of IoUse to fetch
-            use_cache: Whether retrieve from (redis) cache or website
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
             source: url or filename to read from
         """
 
@@ -548,7 +547,7 @@ class BEA(Sectoring):
         url = filename + '_' + str(year)
         self._print(url)
 
-        if use_cache and self.rdb and self.rdb.redis.exists(url):
+        if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(url):
             self._print('(BEA get rdb)', url)
             return self.rdb.load(url)
         
@@ -573,18 +572,18 @@ class BEA(Sectoring):
                            axis=0,
                            ignore_index=True,
                            sort=True)
-        if use_cache is not None and self.rdb:
+        if 'w' in cache_mode and self.rdb:
             self.rdb.dump(url, result)   # save to redis
         return result
 
     def read_ioUse(self, year: int, vintage: int = 0,
-                   use_cache: bool | None = True) -> DataFrame:
+                   cache_mode: str = "rw") -> DataFrame:
         """Load ioUse table from BEA web api (or xls if early vintage)
 
         Args:
             year: Year of IO-Use to load
             vintage: Year of sectoring; allows different eras to be compared
-            use_cache: Whether to use redis cache for data accessed from BEA
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Returns:
             DataFrame in stacked form, flows amounts in 'datavalue' column, and
@@ -611,7 +610,7 @@ class BEA(Sectoring):
         """
 
         if year >= 1997: # after 1997, via web apis; before, in xls spreadsheets
-            df = self.get(**self._params['ioUse'], year=year, use_cache=True)
+            df = self.get(**self._params['ioUse'], year=year, cache_mode="rw")
             df.columns = df.columns.map(str.lower)
             df = df[['colcode','rowcode','datavalue']]
             df['datavalue'] = pd.to_numeric(df['datavalue'], errors='coerce')
@@ -657,7 +656,7 @@ if __name__ == "__main__":
     from finds.busday import BusDay
     from conf import VERBOSE, credentials, paths
 
-    def test_sectors():
+    def update_sectors():
         downloads = paths['scratch']
         sql = SQL(**credentials['sql'])
         bd = BusDay(sql)
@@ -683,7 +682,7 @@ if __name__ == "__main__":
         scheme = 'NAICS'  # NAICS from SIC Crosswalk
         codes = Sectoring(sql, scheme)
         codes.load(source="")
-
+        
         for scheme in [1947, 1963, 1997]:   # BEA sectoring scheme
             codes = Sectoring(sql, f"bea{scheme}")
             codes.load(source="")
@@ -701,3 +700,5 @@ if __name__ == "__main__":
                 df = bea.read_ioUse(year, vintage=vintage)
                 ioUses[(vintage, year)] = df
             print(f"Sectoring vintage year {vintage}: {len(ioUses)} records")
+
+    update_sectors()

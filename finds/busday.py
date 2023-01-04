@@ -29,70 +29,13 @@ from pandas.api.types import is_list_like
 from pandas.tseries.offsets import MonthEnd
 from sqlalchemy import Column, Integer
 from datetime import datetime
-from finds import database
+from finds.database import SQL
 
 _VERBOSE = 1
 _MAXDATE = 20221231
 
 # List of anticipated NYSE holidays to remove
 _hols = ['20220530', '20220704', '20220905', '20221124','20221226']
-
-def to_datetime(arg: Any, format: str = '%Y%m%d',
-                **kwargs) -> Timestamp | DatetimeIndex:
-    """Wrapper over pandas.to_datetime to convert string to TimeStamp format"""
-    return pd.to_datetime(arg, format=format, **kwargs)
-
-def to_date(dates: Any, format: str = '%Y-%m-%d') -> int | List[int]:
-    """Construct int date from strings using input and output formats
-
-    Args:
-        date: Input date strings or Timestamp or pydatetime to convert
-        format: Optional format of input date string
-
-    Returns:
-        int dates with year, month, date components according to outformat
-
-    Formats specified as in strptime() and strftime():
-
-    -  %b %B %h = input month name
-    -  %F = %Y-%m-%d
-    -  %T = %H:%M:%S
-    -  %n = whitespace
-    -  %w %W %U %V = week number
-    -  %u = day of week (1-7)
-
-    Examples:
-
-        >>> to_date('12-31-1999', informat='%m-%d-%Y')
-        >>> to_date(['1999-01-01', '1999-12-31'])
-        >>> int(datetime.strptime(str(19991231), '%Y%m%d').strftime('%Y%m%d'))
-    """
-    if is_list_like(dates):
-        return [to_date(s, format) for s in dates]
-    if not hasattr(dates, 'strftime'):  # not already datetime or Timestamp
-        dates = datetime.strptime(str(dates), format)
-    return int(dates.strftime('%Y%m%d'))
-
-
-def to_monthend(dates: int | Iterable[int]) -> int | List[int]:
-    """Return calendar monthend date given an int date or list
-
-    Args:
-        dates: input YYYYMMDD (or first 4-, 6-digits) int date, or list
-
-    Returns:
-        Output dates converted to monthend of calendar    
-    """
-
-    if is_list_like(dates):
-        return [to_monthend(d) for d in dates]
-    if dates <= 9999:
-        dt = datetime(year=dates, month=12, day=1) + MonthEnd(0)
-    elif dates <= 999999:
-        dt = datetime(year=dates//100, month=dates % 100, day=1) + MonthEnd(0)
-    else:
-        dt = to_datetime(dates) + MonthEnd(0)
-    return int(dt.strftime('%Y%m%d'))
 
 def _map(func, dates, *args, **kwargs) -> List:
     """Helper classmethod to apply a func to each date in list
@@ -130,7 +73,7 @@ class BusDay:
         Non-trading holidays inferred from Ken French and NYSE websites
     """
     def __init__(self, 
-                 sql: database.SQL, 
+                 sql: SQL, 
                  start: int = 19251231, 
                  end: int = _MAXDATE, 
                  new: bool = False, 
@@ -145,7 +88,7 @@ class BusDay:
                                     data_source='famafrench',
                                     start=1900, end=2050)[0]\
                                         .index.sort_values().unique()
-            df = DataFrame({'date': to_date(f.astype(str), '%Y-%m-%d')})
+            df = DataFrame({'date': BusDay.to_date(f.astype(str), '%Y-%m-%d')})
             self.table.create(checkfirst=True)
             sql.load_dataframe('busdates', df)
         else:
@@ -153,7 +96,7 @@ class BusDay:
 
         # 1. Initially, actual dates = actual FamaFrench busdays
         dates = pd.DatetimeIndex(sorted(list(df['date'].unique().astype(str))))
-        last = to_datetime(df.iloc[-1]['date'])
+        last = BusDay.to_datetime(df.iloc[-1]['date'])
         if verbose:
             print('Last FamaFrench Date', last)
 
@@ -170,40 +113,104 @@ class BusDay:
                                normalize=True)
         alldates = set(pd.date_range(dates[0], dates[-1], freq=freq))
 
-        # 5. Finalize actual holidays = all dates less actual dates
+        # 5. Finalize actual holidays = all potential dates less actual dates
         hols = np.array(list(alldates.difference(dates)), 
                         dtype='datetime64[D]')
         hols = sorted(set(hols).union([np.datetime64('1926-01-01')]))
 
-        # 6. Custom calendar and offsets from 6-day week less actual holidays
+        # 6. Set custom cal and offsets from 6-day week less actual holidays
         self._busdaycal = np.busdaycalendar(weekmask='1111110', holidays=hols)
         self._customcal = pd.offsets.CDay(calendar=self._busdaycal)
         self._begmocal = pd.offsets.CBMonthBegin(calendar=self._busdaycal)
         self._endmocal = pd.offsets.CBMonthEnd(calendar=self._busdaycal)
 
-    @classmethod
-    def year(self, date: int | Iterable[int]) -> int | List[int]:
+    @staticmethod
+    def today() -> int:
+        return BusDay.to_date(datetime.now())
+
+    @staticmethod
+    def to_datetime(arg: Any, format: str = '%Y%m%d',
+                    **kwargs) -> Timestamp | DatetimeIndex:
+        """Wrapper over pd.to_datetime converts string to TimeStamp format"""
+        return pd.to_datetime(arg, format=format, **kwargs)
+
+    @staticmethod
+    def to_date(dates: Any, format: str = '%Y-%m-%d') -> int | List[int]:
+        """Construct int date from strings using input and output formats
+
+        Args:
+            date: Input date strings or Timestamp or pydatetime to convert
+            format: Optional format of input date string
+
+        Returns:
+            int dates with year, month, date components according to outformat
+
+        Formats specified as in strptime() and strftime():
+
+        -  %b %B %h = input month name
+        -  %F = %Y-%m-%d
+        -  %T = %H:%M:%S
+        -  %n = whitespace
+        -  %w %W %U %V = week number
+        -  %u = day of week (1-7)
+
+        Examples:
+
+        >>> to_date('12-31-1999', informat='%m-%d-%Y')
+        >>> to_date(['1999-01-01', '1999-12-31'])
+        >>> int(datetime.strptime(str(19991231), '%Y%m%d').strftime('%Y%m%d'))
+        """
+        if is_list_like(dates):
+            return [BusDay.to_date(s, format) for s in dates]
+        if not hasattr(dates, 'strftime'): # not already datetime or Timestamp
+            dates = datetime.strptime(str(dates), format)
+            return int(dates.strftime('%Y%m%d'))
+        return int(dates.strftime('%Y%m%d'))
+
+    @staticmethod
+    def to_monthend(dates: int | Iterable[int]) -> int | List[int]:
+        """Return calendar monthend date given an int date or list
+            
+        Args:
+            dates: input YYYYMMDD (or first 4-, 6-digits) int date, or list
+
+        Returns:
+            Output dates converted to monthend of calendar    
+        """
+
+        if is_list_like(dates):
+            return [BusDay.to_monthend(d) for d in dates]
+        if dates <= 9999:
+            dt = datetime(year=dates, month=12, day=1) + MonthEnd(0)
+        elif dates <= 999999:
+            dt = datetime(year=dates//100, month=dates%100, day=1) + MonthEnd(0)
+        else:
+            dt = BusDay.to_datetime(dates) + MonthEnd(0)
+        return int(dt.strftime('%Y%m%d'))
+
+    @staticmethod
+    def year(date: int | Iterable[int]) -> int | List[int]:
         """Helper to extract int years from input date or list"""
         if is_list_like(date):
-            return _map(self.year, date)
+            return _map(BusDay.year, date)
         while date > 9999:      # input date may be missing month and day
             date //= 100
         return date
 
-    @classmethod
-    def month(self, date: int | Iterable[int]) -> int | List[int]:
+    @staticmethod
+    def month(date: int | Iterable[int]) -> int | List[int]:
         """Helper to extract int months from input date or list"""
         if is_list_like(date):
-            return _map(self.month, date)
+            return _map(BusDay.month, date)
         while date > 999999:        # input date may be missing day
             date //= 100
         return date % 100
         
-    @classmethod
-    def day(self, date: int | Iterable[int]) -> int | List[int]:
+    @staticmethod
+    def day(date: int | Iterable[int]) -> int | List[int]:
         """Helper to extract int day of month from input date or list"""
         if is_list_like(date):
-            return _map(self.day, date)
+            return _map(BusDay.day, date)
         return date % 100    # date may be missing year or month
 
     def __call__(self, date: Any | Iterable[Any], month: int | None = None,
@@ -368,7 +375,7 @@ class WeeklyDay(BusDay):
         weeks : DataFrame of weeks in rows, index is weeknum and 
                 columns for beg, end dates and ismonthend indicator
     """
-    def __init__(self, sql: database.SQL, day: str | int, beg: int = 19251231, 
+    def __init__(self, sql: SQL, day: str | int, beg: int = 19251231, 
                  end: int = 20401231):
         """Derive weekly trading calendar, ending on specified day of week"""
         
@@ -382,7 +389,7 @@ class WeeklyDay(BusDay):
         if isinstance(day, int):
             day = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][day % 7]
         if not day.startswith('W-'):
-            day = 'W-' + day.upper()
+            day = 'W-' + day.upper()[:3]
         weekly_end = pd.date_range(self(beg), self(end), freq=day)
 
         
@@ -433,25 +440,29 @@ if __name__ == "__main__":
 #    sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from database import SQL
     from conf import credentials, VERBOSE
-    VERBOSE = 0
+    VERBOSE = 1
 
+    def update_busday():
+        sql = SQL(**credentials['sql'], verbose=VERBOSE)
+        bd = BusDay(sql, new=True, verbose=VERBOSE)
+    
     def test_to_monthend():
-        print(to_monthend(1999))
-        print(to_monthend(199901))
-        print(to_monthend(19990101))
-        print(to_monthend([19991231, 199901]))
+        print(BusDay.to_monthend(1999))
+        print(BusDay.to_monthend(199901))
+        print(BusDay.to_monthend(19990101))
+        print(BusDay.to_monthend([19991231, 199901]))
 
     def test_to_date():
-        print(to_date('12-31-1999', informat='%m-%d-%Y'))
-        print(to_date(['1999-01-01', '1999-12-31']))
+        print(BusDay.to_date('12-31-1999', informat='%m-%d-%Y'))
+        print(BusDay.to_date(['1999-01-01', '1999-12-31']))
 
     def test_daily():
-        sql = SQL(**credentials['sql'], verbose=_VERBOSE)
+        sql = SQL(**credentials['sql'], verbose=VERBOSE)
         bd = BusDay(sql)
         print(bd.offset(19990101, 0))
         print(bd.offset(19991231, -2, 3))
         print(bd.offset([19991231, 19990101, 19991231], -2, 3))
-        print(to_date(datetime(1999, 12, 31)))
+        print(BusDay.to_date(datetime(1999, 12, 31)))
         print(bd.december_fiscal(20100331))
         print(bd.december_fiscal(20100831))
         print(bd.june_universe(20100331))
@@ -465,8 +476,12 @@ if __name__ == "__main__":
         print(wd.endwk([20220609, 20220601]))
         print(wd.date_range(20210603, 20220610))
         print(wd.date_tuples([20220520, 20220527, 20220603, 20220610]))
-        
-    #test_to_monthend()
-    #test_to_date()
+        return wd
+    
+    """update
+    update_busday()
+    sql = SQL(**credentials['sql'])
+    bd = BusDay(sql)
+    """
 
- 
+    

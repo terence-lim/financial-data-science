@@ -2,13 +2,13 @@
 
 - SQL: sqlalchemy
 - MongoDB: pymongo
-- Redis NoSQL key-value store: redis
+- NoSQL store: redis
 
 Convenience methods to:
 
 - Load, store and manipulate pandas DataFrames that match SQL database schemas
 
-- Serialize DataFrames to Redis key-value store (for caching SQL query results)
+- Serialize DataFrame to Redis key-value store (cache SQL query results)
 
 
 Copyright 2022, Terence Lim
@@ -37,7 +37,7 @@ import redis
 from pymongo import MongoClient
 from typing import Dict, Any, List
 
-_VERBOSE = 1   # default verbose leverl
+_VERBOSE = 0   # default verbose level
 _headers = {'User-Agent':
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
             '(KHTML, like Gecko) Chrome/51.0.2704.106 Safari/537.36'
@@ -527,13 +527,14 @@ if __name__ == "__main__":
         rdb.dump('my_key', df)
         print(rdb.load('my_key'))
 
-    def init_sql():
+    def update_sql(*databases):
         """Create initial raw and user databases"""
         query = "mysql+pymysql://{user}:{password}@{host}:{port}"\
             .format(**credentials['sql'])
         engine = sqlalchemy.create_engine(query)
-        engine.execute("CREATE DATABASE db1")
-        engine.execute("CREATE DATABASE user1")
+        for database in databases:
+            print('Creating Database: ' + database)
+            engine.execute("CREATE DATABASE " + database)
 
     def test_sql():
         sql = SQL(**credentials['sql'], verbose=VERBOSE)
@@ -547,7 +548,11 @@ if __name__ == "__main__":
         user.run('drop table if exists test')
         user.load_dataframe('test', df)
         s = user.run('select * from test')
-        print(s)
+        print('test:', s)
 
-    test_sql()    
-    
+
+    test_sql()
+        
+    """Update
+    update_sql(credentials['sql']['database']))
+    """

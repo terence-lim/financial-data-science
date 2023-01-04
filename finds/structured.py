@@ -4,14 +4,12 @@
 - S&P/CapitalIQ Compustat (Annual, Quarterly, Key Development, customers)
 - IBES Summary
 
-Redis store: SQL query results are (optionally) cached in in Redis
+Notes:
 
-Signals class to store and retrieve derived signal values
-
-Subclasses to mimic parent class interfaces with pre-loaded batch in memory
-
-Lookup identifiers within and across data sets
-
+- Redis store: some methods optionally cache SQL query results in Redis
+- Signals class to create, store and retrieve derived signal values
+- Subclasses to mimic parent class database interfaces with in-memory batch
+- Lookup identifiers within and across datasets
 
 
 Copyright 2022, Terence Lim
@@ -30,11 +28,10 @@ from sqlalchemy import Table, Column, Index, Integer, String, Float, \
     SmallInteger, Boolean, BigInteger
 from datetime import datetime
 from finds.database import SQL, Redis
-from finds.busday import BusDay, to_date
+from finds.busday import BusDay
 from finds.recipes import fractiles
-from finds.busday import to_datetime
 
-_VERBOSE = 1
+_VERBOSE = 0
 
 def as_dtypes(df: DataFrame, 
               columns: Dict, 
@@ -73,19 +70,22 @@ def as_dtypes(df: DataFrame,
     if len(drop_duplicates):
         df.drop_duplicates(subset=drop_duplicates, keep=keep, inplace=True)
     for col, v in columns.items():
-        if col in replace:
-            df[col] = df[col].replace(*replace[col])
-        if isinstance(v, Integer) or isinstance(v, SmallInteger):
-            df[col] = df[col].replace('', 0).astype(int)
-        elif isinstance(v, Boolean):
-            df[col] = df[col].replace('', False).astype(bool)
-        elif isinstance(v, Float):
-            df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-        elif isinstance(v, String):
-            df[col] = df[col].astype(str).str.encode(
-                'ascii', 'ignore').str.decode('ascii')
-        else:
-            raise Exception('Unknown type for column ' + col)
+        try:
+            if col in replace:
+                df[col] = df[col].replace(*replace[col])
+            if isinstance(v, Integer) or isinstance(v, SmallInteger):
+                df[col] = df[col].replace('', 0).astype(int)
+            elif isinstance(v, Boolean):
+                df[col] = df[col].replace('', False).astype(bool)
+            elif isinstance(v, Float):
+                df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
+            elif isinstance(v, String):
+                df[col] = df[col].astype(str).str.encode('ascii', 'ignore')\
+                                                 .str.decode('ascii')
+            else:
+                raise Exception('Unknown type for column ' + col)
+        except:
+            raise Exception('as_dtypes: col ' + col)
     return df
 
 
@@ -285,7 +285,7 @@ class Structured(object):
             self.target = target
             self.fillna = fillna
 
-        def __call__(self, label: str, date: int = 99999999) -> Any:
+        def __call__(self, label: List | str, date: int = 99999999) -> Any:
             """Return target identifiers matched to source as of date"""
             if is_list_like(label):
                 return [self(b) for b in label]
@@ -298,8 +298,8 @@ class Structured(object):
         def __getitem__(self, labels):
             return self(labels)
 
-    def build_lookup(self, source: str, target: str, date_field: str,
-                     dataset: str, fillna: Any) -> Any:
+    def build_lookup(self, source: str, target: str,
+                     date_field: str,  dataset: str, fillna: Any) -> Any:
         """Helper to build lookup of target from source identifiers"""
         table = self[dataset]    # Table object for dataset
         assert table is not None
@@ -477,7 +477,7 @@ class Stocks(Structured):
                       dataset: str = 'daily', 
                       field: str = 'ret', 
                       date_field: str = 'date',
-                      use_cache: bool | None = True) -> Series:
+                      cache_mode: str = 'rw') -> Series:
         """Compounded returns between start and end dates of all stocks
 
         Args:
@@ -486,8 +486,7 @@ class Stocks(Structured):
             dataset: Name of dataset to retrieve (default is `daily`)
             field: Name of returns field
             date_field: Name of date field
-            use_cache: True to read and and write cache; 
-                False to write but not read cache; None to ignore cache
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Series:
             DataFrame with prod(min_count=1) of returns in column `ret`, 
@@ -504,7 +503,7 @@ class Stocks(Structured):
             start = (start // 100) * 100
             end = (end // 100 * 100) + 99
         rkey = "_".join([field, str(self), str(start), str(end)])
-        if use_cache and self.rdb and self.rdb.redis.exists(rkey):
+        if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(rkey):
             self._print('(get_ret load)', rkey)
             return self.rdb.load(rkey)[field]    # use cache
 
@@ -533,21 +532,20 @@ class Stocks(Structured):
         df[field] += 1
         df = (df.groupby(self.identifier).prod(min_count=1)-1).dropna()
 
-        if use_cache is not None and self.rdb and start != end:  # if cache
+        if 'w' in cache_mode and self.rdb and start != end:  # if write cache
             self._print('(get_ret dump)', rkey)
             self.rdb.dump(rkey, df)
         return df[field]
 
     def get_compounded(self, periods: List[Tuple[int, int]], 
                              permnos: List[int], 
-                             use_cache: bool | None = True) -> DataFrame:
+                             cache_mode: str = "rw") -> DataFrame:
         """Compound returns within list of periods, for given permnos
 
         Args:
             periods: Tuples of inclusive begin and end dates of returns period
             permnos: List of permnos
-            use_cache: If True, then read and write cache; If False, then
-                write but not read cache.  None to ignore cache
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Returns:
             DataFrame of compounded returns in rows, for permnos in cols
@@ -555,8 +553,8 @@ class Stocks(Structured):
         # accumulate horizontally, then finally transpose
         r = DataFrame(index=permnos)
         for beg, end in periods:
-            r[end] = self.get_ret(beg, end, use_cache=use_cache)\
-                                 .reindex(permnos)
+            r[end] = self.get_ret(beg, end, cache_mode=cache_mode)\
+                         .reindex(permnos)
         return r.transpose()
 
     def cache_ret(self, dates: List[Tuple[int, int]], 
@@ -799,8 +797,8 @@ class Stocks(Structured):
                         fields: List[str] | Dict[str, str],
                         date_field: str, 
                         beg: int, 
-                        end: int, 
-                 use_cache: bool | None = None) -> DataFrame:
+                        end: int,
+                        cache_mode: str = "rw") -> DataFrame:
         """Return field values within a date range
 
         Args:
@@ -809,8 +807,7 @@ class Stocks(Structured):
             date_field: Name of date column in the table
             beg: Inclusive start date in YYYYMMDD format
             end: Inclusive end date in YYYYMMDD format
-            use_cache: True to read and and write cache; 
-                False to write but not read cache; None to ignore cache
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Returns:
             DataFrame multi-indexed by permno, date
@@ -826,7 +823,7 @@ class Stocks(Structured):
 
         rkey = f"CRSP_{'_'.join(fields)}_{beg}_{end}"
 
-        if self.rdb and use_cache and self.rdb.redis.exists(rkey):
+        if self.rdb and 'r' in cache_mode and self.rdb.redis.exists(rkey):
             self._print('(get_range load)', rkey)
             return self.rdb.load(rkey)
         q = ("SELECT {fields}, {date_field} FROM {table} WHERE "
@@ -839,7 +836,7 @@ class Stocks(Structured):
         self._print('(get_range)', q)
         r = self.sql.read_dataframe(q).set_index([self.identifier, date_field])
         r = r.rename(columns=rename) if rename else r.iloc[:,0]
-        if use_cache is not None and self.rdb:
+        if 'w' in cache_mode and self.rdb:
             self._print('(get_range dump)', rkey)
             self.rdb.dump(rkey, r)
         return r
@@ -916,10 +913,10 @@ class Benchmarks(Stocks):
 import pandas_datareader as pdr
 
 class FFReader:
-    """Wraps over pandas_datareader to extract FamaFrench factors
+    """Wraps over pandas_datareader to load FamaFrench factors from website
 
     Attributes:
-        _datasets: List of common FF factors/industries
+        datasets: List of common FF factors/industries
     """
     _datasets: List[Tuple[str, int, str]] = [
         ('F-F_Research_Data_5_Factors_2x3_daily', 0, ''),
@@ -954,8 +951,8 @@ class FFReader:
             end: latest date to retrieve 
             date_formatter: to reformat dates, e.g. bd.offset or bd.endmo
         """
-        start = to_datetime(start)
-        end = to_datetime(end)
+        start = BusDay.to_datetime(start)
+        end = BusDay.to_datetime(end)
         df = pdr.data.DataReader(name=name,
                                  data_source='famafrench',
                                  start=start,
@@ -1021,11 +1018,11 @@ class CRSP(Stocks):
                 Column('dlstcd', SmallInteger, primary_key=True),
                 Column('nwperm', Integer, default=0), # '0' - '99841'  (int64)
                 Column('nwcomp', Integer, default=0), # '0' - '90044'  (int64)
-                Column('nextdt', Integer, default=0), # 'String(8)' '19870612' @0
+                Column('nextdt', Integer, default=0), # 'String(8) '19870612' @0
                 Column('dlamt', Float),    # '0' - '2349.5'  (float64)
                 Column('dlretx', Float),    # 'Float' '-0.003648' @ 3
                 Column('dlprc', Float),    # '-1315' - '2349.5'  (float64)
-                Column('dlpdt', Integer, default=0),  # 'String(8)' '19870612' @0
+                Column('dlpdt', Integer, default=0),  #'String(8)''19870612' @0
                 Column('dlret', Float),    # 'Float' '-0.003648' @ 3
             ),
             'dist': sql.Table(
@@ -1082,15 +1079,14 @@ class CRSP(Stocks):
                                     fillna=fillna)
 
     def get_cap(self, date: int, 
-                      use_cache: bool | None = True, 
+                      cache_mode: str ="rw", 
                       use_daily: bool = True, 
                       use_permco: bool = True) -> Series:
         """Compute a cross-section of market capitalization values
 
         Args:
             date: YYYYMMDD int date of market cap
-            use_cache: Is True, then both read and write cache; if False, then
-                write but not read cache; If None, then ignore cache
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
             use_daily: If True, use shrout from 'daily' table, else 'shares'
             use_permco: If True, sum caps by permco, else by permno
 
@@ -1098,7 +1094,7 @@ class CRSP(Stocks):
             Series of market cap indexed by permno
         """
         rkey = f"cap{'co' if use_permco else ''}_{str(self)}_{date}"
-        if self.rdb and use_cache and self.rdb.redis.exists(rkey):
+        if self.rdb and 'r' in cache_mode and self.rdb.redis.exists(rkey):
             self._print('(get_cap load)', rkey)
             return self.rdb.load(rkey)['cap']
         if use_daily:   # where 'daily' table contains 'shrout'
@@ -1138,21 +1134,20 @@ class CRSP(Stocks):
             df = df[['permco']].join(sumcap, on='permco')[['cap']]
         self._print('NULL CAP =', sum(df['cap'].isna()))
         df = df[df > 0].dropna()
-        if self.rdb and use_cache is not None:
+        if self.rdb and 'w' in cache_mode:
             self._print('(get_cap dump)', rkey)
             self.rdb.dump(rkey, df)
         return df['cap']
 
     def get_universe(self, date: int, 
                            minprc: float = 0.0, 
-                           use_cache : bool | None = True) -> DataFrame:
+                           cache_mode: str = "rw") -> DataFrame:
         """Return standard CRSP universe of US-domiciled common stocks
 
         Args:
             date: Rebalance date (YYYYMMDD)
             minprc: Minimum share price filter
-            use_cache: If True, then read and write cache; if False, then
-                write but not read cache; If None then ignore cache
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Returns:
             DataFrame of screened universe, indexed by permno, with columns: 
@@ -1165,7 +1160,7 @@ class CRSP(Stocks):
         - TODO: market cap by permco
         """
         rkey = "_".join(["universe", str(self), str(date)])
-        if use_cache and self.rdb and self.rdb.redis.exists(rkey):
+        if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(rkey):
             self._print('(get_universe load)', rkey)
             df = self.rdb.load(rkey)
         else: 
@@ -1201,7 +1196,7 @@ class CRSP(Stocks):
                                      keys=df.loc[df['nyse'], 'cap'],
                                      ascending=False)
             df = df[['cap', 'decile', 'nyse', 'siccd', 'prc', 'naics']]
-            if use_cache is not None and self.rdb:
+            if 'w' in cache_mode and self.rdb:
                 self._print('(get_universe dump)', rkey)
                 self.rdb.dump(rkey, df)
         return df[df['prc'].abs().gt(minprc)] if minprc > 0.0 else df
@@ -1233,20 +1228,19 @@ class CRSP(Stocks):
 
     def get_dlstret(self, start: int, 
                           end: int, 
-                          use_cache: bool | None = True) -> Series:
+                          cache_mode: str = "rw") -> Series:
         """Compounded delisting returns from start to end dates for all permnos
 
         Args:
             start: Inclusive start date (YYYYMMDD)
             end: Inclusive end date (YYYYMMDD)
-            use_cache: If True, then read and write cache; if False, then
-                write but not read cache; If None then ignore cache
+            cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Returns:
             Series of compounded returns
         """
         rkey = "_".join(["dlst", str(self), str(start), str(end)])
-        if use_cache and self.rdb and self.rdb.redis.exists(rkey):
+        if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(rkey):
             self._print("(get_dlstret load)", rkey, str(self))
             return self.rdb.load(rkey)['ret']
 
@@ -1260,7 +1254,7 @@ class CRSP(Stocks):
         df = self.sql.read_dataframe(q).sort_values(self.identifier)
         if len(df):
             df = (df.groupby(self.identifier).prod(min_count=1)-1).dropna()
-        if use_cache is not None and self.rdb:
+        if 'w' in cache_mode and self.rdb:
             self._print("(get_dlstret dump)", rkey, str(self))
             self.rdb.dump(rkey, df)
         return df['ret']
@@ -1557,21 +1551,21 @@ class PSTAT(Structured):
                 'quarterly',
                 Column('gvkey', Integer, primary_key=True),
                 Column('datadate', Integer, primary_key=True),
-                Column('fyearq', SmallInteger, primary_key=True),
-                Column('fqtr', SmallInteger, primary_key=True),
                 Column('indfmt', String(4), primary_key=True),
                 Column('consol', String(1), primary_key=True),
                 Column('popsrc', String(1), primary_key=True),
                 Column('datafmt', String(3), primary_key=True),
+                Column('costat', String(1), primary_key=True),
                 Column('cusip', String(9)),
-                Column('datacqtr', String(6)),
-                Column('datafqtr', String(6)),
-                Column('rdq', Integer, default=0),
                 Column('cik', BigInteger, default=0),
-                Column('costat', String(1)),
-                Column('prccq', Float),
                 Column('naics', Integer, default=0),
                 Column('sic', SmallInteger, default=0),
+                Column('datacqtr', String(6)),
+                Column('datafqtr', String(6)),
+                Column('fqtr', SmallInteger, default=0),
+                Column('fyearq', SmallInteger, default=0),
+                Column('rdq', Integer, default=0),
+                Column('prccq', Float),
                 *(Column(key, Float) for key in
                   ['actq', 'atq', 'ceqq', 'cheq', 'cogsq',
                    'cshoq', 'dlcq', 'ibq', 'lctq', 'ltq',
@@ -1698,7 +1692,7 @@ class IBES(Structured):
                 Column('ticker', String(6), primary_key=True),
                 Column('fpedats', Integer, primary_key=True),
                 Column('statpers', Integer, primary_key=True),
-                Column('measure', String(3)), #### NEXT TIME: primary_key=True
+                Column('measure', String(3), primary_key=True), #new key
                 Column('fpi', String(1), primary_key=True),
                 Column('numest', SmallInteger, default=0),
                 Column('numup', SmallInteger, default=0),
@@ -1713,6 +1707,7 @@ class IBES(Structured):
             ),
             'ident': sql.Table(
                 'ident',
+                Column('sdates', Integer, primary_key=True),
                 Column('ticker', String(6), primary_key=True),
                 Column('cusip', String(8)),
                 Column('oftic', String(8)),
@@ -1726,7 +1721,6 @@ class IBES(Structured):
                 #Column('country', String(1)),
                 #Column('compflag', String(1)),
                 #Column('usfirm', SmallInteger, default=0),
-                Column('sdates', Integer, primary_key=True),
             ),
             'adjust': sql.Table(
                 'adjust',
@@ -1862,6 +1856,30 @@ class StocksBuffer(Stocks):
         self.identifier = identifier
         self.bd = stocks.bd
 
+    def get_section(self, dataset: str, 
+                          fields: List[str], 
+                          date_field: str,
+                          date: int, 
+                          start: int = -1) -> DataFrame:
+        """Return a cross-section of values of fields as of a single date
+
+        Args:
+            dataset: Dataset to extract from
+            fields: list of columns to return
+            date_field: Name of date column in the table
+            date: Desired date in YYYYMMDD format
+            start: Non-inclusive date of starting range (ignored)
+
+        Returns:
+            Most recent row within date range, indexed by permno
+
+        """
+        df = self.rets[self.rets['date'].eq(date)]\
+                 .drop(columns=['date'])\
+                 .set_index('permno')\
+                 .dropna()
+        return df[fields]
+        
     def get_ret(self, beg: int, end: int, field: str = 'ret') -> Series:
         """Return compounded stock returns between beg and end dates
 
@@ -2256,7 +2274,7 @@ class Finder:
 if __name__ == "__main__":
 #    from os.path import dirname, abspath
 #    sys.path.insert(0, dirname(dirname(abspath(__file__))))
-    from conf import credentials, _VERBOSE
+    from conf import credentials, VERBOSE
 
     import glob
     import time
@@ -2267,8 +2285,7 @@ if __name__ == "__main__":
     VERBOSE = 1
 
     # open all structured datasets
-    if False:
-        VERBOSE = 0
+    if True:
         sql = SQL(**credentials['sql'], verbose=VERBOSE)
         user = SQL(**credentials['user'], verbose=VERBOSE)
         rdb = Redis(**credentials['redis'])
@@ -2277,11 +2294,15 @@ if __name__ == "__main__":
         find = Finder(sql)
         print(find('GOOG'))
 
+        crsp = CRSP(sql, bd, rdb=rdb)
+        pstat = PSTAT(sql, bd)
+        ibes = IBES(sql, bd)
+
     # load benchmarks (mostly FamaFrench)
     def update_FamaFrench():
         print("\n".join(f"[{i}] {d}" 
-              for i, d in enumerate(FFReader.datasets)))
-        for name, item, suffix in FFReader.datasets:
+              for i, d in enumerate(FFReader._datasets)))
+        for name, item, suffix in FFReader._datasets:
             date_formatter = (bd.endmo if suffix == '(mo)' else bd.offset)
             df = FFReader.fetch(name=name, 
                                 item=item,
@@ -2299,16 +2320,25 @@ if __name__ == "__main__":
 
     # load CRSP: TODO handle missing return codes (< -1, see below)
     def update_crsp():
-        downloads = '/home/terence/Downloads/stocks2022/'
-        downloads = '/home/terence/Downloads/stocks2021/'
-        dir = os.path.join(downloads, 'CRSP') + '/'
-        crsp.load_csv('names', dir + 'names.txt.gz', sep='\t')   # 103383
-        crsp.load_csv('shares', dir + 'shares.txt.gz', sep='\t') # 2346131
-        crsp.load_csv('dist', dir + 'dist.txt.gz', sep='\t') # 935880
-        crsp.load_csv('delist', dir + 'delist.txt.gz', sep='\t')  # 33584
-        crsp.load_csv('monthly', dir + 'monthly.txt.gz', sep='\t') #4606907
-        for i, s in enumerate(sorted(glob.glob(dir + 'stocks*.txt.gz'))):
-        # for s in [dir + 'daily2021.txt.gz']:
+        dir = '/home/terence/Downloads/stocks2022/v1/CRSP/'
+        crsp.load_csv('names',
+                      os.path.join(dir, 'names.txt.gz'),
+                      sep='\t')   # 103383
+        crsp.load_csv('shares',
+                      os.path.join(dir, 'shares.txt.gz'),
+                      sep='\t') # 2346131
+        crsp.load_csv('dist',
+                      os.path.join(dir, 'dist.txt.gz'),
+                      sep='\t') # 935880
+        crsp.load_csv('delist',
+                      os.path.join(dir, 'delist.txt.gz'),
+                      sep='\t')  # 33584
+        crsp.load_csv('monthly',
+                      os.path.join(dir, 'monthly.txt.gz'),
+                      sep='\t') #4606907
+#        for s in sorted(glob.glob(os.path.join(dir, 'stocks*.txt.gz')),
+#                        reverse=True):
+        for s in [os.path.join(dir, 'stocks20202021.txt.gz')]:
             tic = time.time()
             crsp.load_csv('daily',
                           csvfile=s,
@@ -2317,15 +2347,14 @@ if __name__ == "__main__":
                                 'date': ['.'],
                                 'shrout':['.']})
             print(s, round(time.time() - tic, 0), 'secs')
-    # def_update_crsp()
 
 
     # Pre-generate weekly returns and save in Redis cache
-    begweek = 19730629  # increased stocks coverage in CRSP around this date
-    middate = 19850628  # increased stocks traded in CRSP around this date
-    endweek = 20211231  # is a Friday
+    middate = 19740102  # increased stocks coverage in CRSP in mid Dec 1972
+    begweek = 19251231
+    endweek = 20221230
     def update_weekly():
-        wd = WeeklyDay(sql, 'Fri')   # Generate Friday-end weekly cal
+        wd = WeeklyDay(sql, bd(endweek).strftime('%A'))   # Generate weekly cal
         rebaldates = wd.date_range(begweek, endweek)
         r = wd.date_tuples(rebaldates)
         batchsize = 40
@@ -2336,10 +2365,9 @@ if __name__ == "__main__":
     
     # load Compustat
     def update_pstat():
-        downloads = '/home/terence/Downloads/stocks2021/'
-        dir = os.path.join(downloads, 'PSTAT') + '/'
+        dir = '/home/terence/Downloads/stocks2022/v1/PSTAT/'
         df = pstat.load_csv('links',
-                            csvfile=dir + 'links.txt.gz',
+                            csvfile=os.path.join(dir, 'links.txt.gz'),
                             sep='\t',    # rows=33036
                             drop={'lpermno': ['0', 0], 'linkprim': ['N', 'J']},
                             replace={'linkdt': (['C', 'E', 'B'], 0),
@@ -2348,18 +2376,16 @@ if __name__ == "__main__":
         f = (lag.gvkey == df.gvkey) & (lag.lpermno != df.lpermno)
         print('permnos in links changed in ', sum(f), 'of', len(df)) # 1063
 
-        downloads = '/home/terence/Downloads/stocks2020/'
-        dir = os.path.join(downloads, 'PSTAT') + '/'
-        pstat.load_csv('annual', dir + 'pstat.csv.gz') #rows = 464753
-
-        downloads = '/home/terence/Downloads/stocks2020/'
-        dir = os.path.join(downloads, 'PSTAT') + '/'
-        pstat.load_csv('quarterly', dir +  'quarterly.csv.gz') # 1637274
-        pstat.load_csv('customer', dir + 'supplychain.csv.gz') #107114
-
-        downloads = '/home/terence/Downloads/stocks2020/'
-        dir = os.path.join(downloads, 'PSTAT') + '/'
-        for s in glob.glob(dir +  'keydev*.txt.gz'):
+        pstat.load_csv('annual',
+                       os.path.join(dir, 'annual.txt.gz'),
+                       sep='\t') #rows = 464753
+        pstat.load_csv('quarterly',
+                       os.path.join(dir, 'quarterly.txt.gz'),
+                       sep='\t') #1637274
+        pstat.load_csv('customer',
+                       os.path.join(dir, 'supplychain.csv.gz'),
+                       sep='\t') #107114
+        for s in glob.glob(os.path.join(dir, 'keydev*.txt.gz')):
             tic = time.time()   # 12256909
             df = pstat.load_csv('keydev',
                                 csvfile=s,
@@ -2371,18 +2397,39 @@ if __name__ == "__main__":
 
     # load IBES
     def update_ibes():
-        downloads = '/home/terence/Downloads/stocks2021/'
-        dir = os.path.join(downloads, 'IBES') + '/'    
-        ibes.load_csv('ident', dir + 'ident.txt.gz', sep='\t')  # 85550
+        dir = '/home/terence/Downloads/stocks2022/v1/IBES/'
+        ibes.load_csv('ident',
+                      os.path.join(dir, 'ident.txt.gz'),
+                      sep='\t')  # 85550
         ibes.write_links()  #  (missing, count) = 14642  85550
-        ibes.load_csv('summary', dir + 'summary.txt.gz', sep='\t') # 8470688
+        ibes.load_csv('summary',
+                      os.path.join(dir, 'summary.txt.gz'),
+                      sep='\t') # 8470688
         #ibes.load_csv('adjust', downloads + 'adjustment.csv') #rows=24777
         #ibes.load_csv('surprise', downloads + 'surprise.csv')  #rows=528933
 
     def test_rets():
-        find = StocksBuffer(crsp, 20210101, 20211231)
-        df = find.get_ret(20210101, 20210131)
+        stocks = StocksBuffer(crsp, 20210101, 20211231)
+        df = stocks.get_ret(20210101, 20210131)
         print(df) 
         m = crsp.get_ret(20210101, 20210131)
         print(m)
 
+
+    """Update
+    CRSP tab-delimited text & gzip (*.txt.gz), YYMMDDn8 date format
+    - names, shares, dist, delist, monthly
+    - monthly: prc, ret, retx
+    - daily: shrout, ...
+    update_crsp()
+
+    Compustat/CRSP Merged Linking: 
+    - all Linking options: LC, LU ?
+    - Link and Identifying Information
+    update_pstat()
+    
+
+
+    """
+
+    

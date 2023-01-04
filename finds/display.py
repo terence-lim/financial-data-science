@@ -1,4 +1,4 @@
-"""Convenience wrappers and functions for data plotting and display
+"""Wrappers and convenience functions for data plotting and display
 
 - matplotlib
 - seaborn
@@ -11,7 +11,7 @@ Functions for:
 - regression diagnostics
 - formatting DataFrames
 
-Copyright 2022, Terence Lim
+Copyright 2023, Terence Lim
 
 MIT License
 """
@@ -39,7 +39,7 @@ from matplotlib import colors, cm
 from matplotlib.lines import Line2D
 from pandas.plotting import register_matplotlib_converters
 register_matplotlib_converters()  # for date formatting in plots
-from finds.busday import to_date, to_datetime
+from finds.busday import BusDay
 
 # plt.style.use('ggplot')
 
@@ -51,7 +51,7 @@ from finds.busday import to_date, to_datetime
 def plot_date(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
               xmin: int = 0, xmax: int = 99999999, cn: int = 0,
               fontsize: int = 12, rescale: bool = False, yscale: bool = False,
-              ls1: str = '-', ls2: str = '-', marker: str = '',
+              ls1: str = '-', ls2: str = '-', marker: str | None = '',
               hlines: List[float] = [], vlines: List[int] = [],
               vspans: List[Tuple[int, int]] = [], xlabel: str = '',
               points: DataFrame | Series | None = None, rotation: float = 0,
@@ -65,6 +65,7 @@ def plot_date(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
         y2: Plot on secondary y-axis
         ax: Matplotlib axes object from plt.subplots() or plt.gca()
         cn: Starting CN color to cycle through
+        marker: Marker style, None to cycle (default '' means no marker)
         xmin: Minimum of x-axis date range
         xmax: Maximum of x-axis date range (default is auto)
         rotation: Rotation of x-axis ticks
@@ -80,6 +81,7 @@ def plot_date(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
         legend1, legend2: Lists of legend labels
         loc1, loc2: Locations to place legends
     """
+    markers = "os*.x+D8Xv41<2>3os*.x+D8Xv41<2>3os*.x+D8Xv41<2>3"
     ax = ax or plt.gca()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y%m%d'))
     ax.xaxis.set_tick_params(rotation=rotation, labelsize=fontsize)
@@ -92,13 +94,13 @@ def plot_date(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
         #y = y1.loc[f], ax=ax)
         for ci, c in enumerate(y1.columns):
             f = y1.loc[:,c].notnull().values
-            ax.plot(to_datetime(y1.index[f]),
+            ax.plot(BusDay.to_datetime(y1.index[f]),
                     y1.loc[f,c] / (base[c] if rescale else 1),
-                    marker=marker,
+                    marker=markers[ci] if marker is None else marker,
                     linestyle=ls1,
                     color=f'C{ci+cn}')
         if points is not None:
-            ax.scatter(to_datetime(points.index),
+            ax.scatter(BusDay.to_datetime(points.index),
                        points,
                        marker='o',
                        color='r')
@@ -118,9 +120,9 @@ def plot_date(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
         bx = ax.twinx()
         for cj, c in enumerate(y2.columns):
             g = y2.loc[:,c].notnull().values
-            bx.plot(to_datetime(y2.index[g]),
+            bx.plot(BusDay.to_datetime(y2.index[g]),
                     y2.loc[g, c] / (base[c] if rescale else 1),
-                    marker=marker,
+                    marker=markers[ci+cj] if marker is None else marker,
                     linestyle=ls2,
                     color=f"C{ci+cj+cn+1}")
         if yscale:
@@ -139,11 +141,11 @@ def plot_date(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
                     linestyle='-.',
                     color='y')
     for vline in vlines:
-        plt.axvline(to_datetime(vline),
+        plt.axvline(BusDay.to_datetime(vline),
                     ls='-.',
                     color='y')
     for vspan in vspans:
-        plt.axvspan(*([to_datetime(v) for v in vspan]),
+        plt.axvspan(*([BusDay.to_datetime(v) for v in vspan]),
                     alpha=0.5,
                     color='grey')
     plt.title(title, fontsize=fontsize+4)
@@ -190,7 +192,7 @@ def plot_bands(mean: Series, stderr: Series, width: float = 1.96,
 def plot_scatter(x: Series, y: Series, labels: List = [], ax: Any = None,
                  xlabel: str = '', ylabel: str = '', c: Any = None,
                  cmap: Any = None, alpha: float = 0.75, edgecolor: Any = None,
-                 s: float = 10, marker: str | None = None, title: str = '',
+                 s: float = 10, marker: str = 'o', title: str = '',
                  abline: bool | None = True, fontsize: int = 12):
     """Scatter plot, optionally with abline slope and point labels
 
@@ -344,7 +346,7 @@ open_t = pd.to_datetime('1900-01-01T09:30')  # usual NYSE open
 close_t = pd.to_datetime('1900-01-01T16:00') # usual NYSE close
 def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
               xmin: Timestamp = open_t, xmax: Timestamp = close_t,
-              marker: str = '', title: str = '', loc1: str = '',
+              marker: str = ' ', title: str = '', loc1: str = '',
               loc2: str = '', legend1: List[str] = [],
               legend2: List[str] = [], fontsize: int = 12, **kwargs):
     """Plot lines with Timestamp time on x-axis; primary and secondary y-axis
@@ -372,9 +374,10 @@ def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
     for cn, c in enumerate(left.columns):
         f = left.loc[:, c].notnull().values
         if cn:    # kludgy hack with time-axis
-            ax.plot(left.index[f], left.loc[f, c], color = 'C' + str(cn))
+            ax.plot(left.index[f], left.loc[f, c], marker=marker,
+                    color = 'C' + str(cn))
         else:
-            sns.lineplot(x=left.index[f], y=left.loc[f, c],
+            sns.lineplot(x=left.index[f], y=left.loc[f, c], marker=marker,
                          color='C' + str(cn),  ax=ax)
     ax.legend(legend1 or left.columns, loc=loc1 or 'upper left',
               fontsize=fontsize)
@@ -390,7 +393,8 @@ def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
         bx.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         for i, c in enumerate(right.columns):
             g = right.loc[:, c].notnull().values
-            bx.plot(right.index[g], right.loc[g, c], color='C' + str(cn+i+1))
+            bx.plot(right.index[g], right.loc[g, c], marker=marker,
+                    color='C' + str(cn+i+1))
         bx.legend(legend2 or right.columns, loc=loc2 or 'lower right',
                   fontsize=fontsize)
         if len(right.columns) > 1:
@@ -612,11 +616,11 @@ def row_formatted(df: DataFrame, formats: Dict = {}, default: str = '{}',
 def show(df: DataFrame, latex: bool | None = True, ndigits: int | None = None,
          max_colwidth: int = 100, caption: str = '',
          **kwargs) -> DataFrame | None:
-    """Helper to output a DataFrame in publishing format
+    """Helper to format DataFrame for output
 
     Args:
         df: DataFrame to display
-        latex: True is to_latex. False is to_string. None simply returns df
+        latex: True returns to_latex. False returns to_string. None returns df
         max_colwidth: Pandas context to allow maximum width of column
         ndigits: Number of digits to round floats
         caption: Caption of latex table, or title with underline to print
@@ -650,7 +654,7 @@ def show(df: DataFrame, latex: bool | None = True, ndigits: int | None = None,
             else:
                 return df                       
         else:
-            s = df.to_string()  # print and return entire frame as str
+            s = df.to_string(**kwargs)  # print and return entire frame as str
             if caption:
                 print(caption)
                 print('-' * len(caption))

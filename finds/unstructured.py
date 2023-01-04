@@ -1,4 +1,4 @@
-"""Classes to implement interface for unstructured and textual datasets
+"""Classes for unstructured and textual datasets
 
 - FOMC minutes
 - Loughran and McDonald words
@@ -13,16 +13,17 @@ import pandas as pd
 from pandas import DataFrame, Series
 import re
 import requests
-import gzip
 import io
 import csv
 import time
 import os
 import json
+import gzip
+import pickle
 import random
 from nltk.tokenize import RegexpTokenizer
 from sklearn.model_selection import train_test_split
-from collections import Counter
+from collections import Counter, namedtuple
 import torch
 from bs4 import BeautifulSoup
 from functools import reduce
@@ -31,6 +32,120 @@ from finds.database import MongoDB
 from typing import Dict, Iterable, List, Any, Tuple
 
 _VERBOSE = 1
+
+#
+# Helper to store key-value attributes as namedtuple
+#
+class Store:
+    """Store key-value attributes as namedtuple
+    Args:
+        path: Local folder to store in
+        filetype: 'pickle' or 'gzip' or 'json'
+        name: Optional name of NamedTuple
+        verbose: Debug messages
+
+    Examples:
+    >>> store = Store('Downloads')
+    >>> store.dump(mydict, 'varname')
+    >>> mydict = store.load('varname')
+
+    >>> store['tuplename'] = dict(a=1, b=2)
+    >>> mytuple = store['tuplename']
+    """
+    def __init__(self, path: str = "", filetype: str = 'pickle',
+                 name: str = 'NamedTuple', verbose: int = 0):
+        self.path_ = str(path)
+        self.name_ = name
+        self.filetype_ = filetype[0].lower()
+        self.verbose_ = verbose
+
+    def pathjoin(self, *p) -> str:
+        return os.path.join(self.path_, *p)
+
+    def pathname(self, filename: str, filetype: str):
+        filename = os.path.join(self.path_, filename)
+        if filetype[0].lower() == 'p' and not filename.endswith('.pkl'):
+            filename += '.pkl'
+        if filetype[0].lower() == 'g' and not filename.endswith('.gz'):
+            filename += '.gz'
+        if filetype[0].lower() == 'j' and not filename.endswith('.json'):
+            filename += 'json'
+        return filename
+
+    @staticmethod
+    def gzip_dump(obj: Any, filename: str):
+        with gzip.open(filename, 'wt') as fp:
+            json.dump(obj, fp)
+
+    @staticmethod
+    def gzip_load(filename: str) -> Any:
+        with gzip.open(filename, 'rt') as fp:
+            return json.load(fp)
+
+    @staticmethod
+    def json_dump(obj: Any, filename: str):
+        with open(filename, 'wt') as fp:
+            json.dump(obj, fp)
+
+    @staticmethod
+    def json_load(filename: str) -> Any:
+        with open(filename, 'rt') as fp:
+            return json.load(fp)
+
+    @staticmethod
+    def pickle_dump(obj: Any, filename: str):
+        with open(filename, 'wb') as fp:
+            pickle.dump(obj, fp)
+
+    @staticmethod
+    def pickle_load(filename: str) -> Any:
+        with open(filename, 'rb') as fp:
+            return pickle.load(fp)
+
+    def load(self, filename: str):
+        load_ = dict(p=Store.pickle_load,
+                     j=Store.json_load,
+                     g=Store.gzip_load).get(self.filetype_)
+        filename = self.pathname(filename, self.filetype_)
+        return load_(filename)
+        
+
+    def dump(self, obj: Any, filename: str):
+        dump_ = dict(p=Store.pickle_dump,
+                     j=Store.json_dump,
+                     g=Store.gzip_dump).get(self.filetype_)
+        filename = self.pathname(filename, self.filetype_)
+        dump_(obj, filename)
+    
+    def __contains__(self, filename: str) -> bool:
+        """Check if filename (after path prepend and suffix append) exists"""
+        filename = self.pathname(filename, filetype=self.filetype_)        
+        return os.path.exists(filename)
+
+    def __call__(self, **kwargs) -> namedtuple:
+        """Convert keyword args dict to namedtuple"""
+        NamedTuple = namedtuple(self.name_, list(kwargs.keys()))
+        return NamedTuple(**kwargs)
+
+    def __setitem__(self, filename: str, items: Dict | namedtuple):
+        """Stores keywords args dict or namedtuple object to file"""
+        if issubclass(type(items), tuple):
+            items = items._asdict()
+        assert isinstance(items, dict)
+        dump_ = dict(p=Store.pickle_dump,
+                     j=Store.json_dump,
+                     g=Store.gzip_dump).get(self.filetype_)
+        filename = self.pathname(filename, self.filetype_)
+        dump_(items, filename)
+
+    def __getitem__(self, filename: str) -> namedtuple:
+        """Loads namedtuple attribute values from file"""
+        load_ = dict(p=self.pickle_load,
+                     j=self.json_load,
+                     g=self.gzip_load).get(self.filetype_)
+        filename = self.pathname(filename, self.filetype_)
+        return self(**load_(filename))
+
 
 def form_batches(batch_size: int, idx: List) -> List[List[int]]:
     """Shuffles idx list into minibatches each of size batch_size
@@ -287,6 +402,14 @@ class Unstructured(object):
     >>> fomc.insert('minutes', doc)
     >>> fomc['minutes'].estimated_document_count() # count docs in collection
     >>> fomc['minutes', 'field']
+
+    Notes:
+    - sudo apt-get install -y mongodb-org  # install latest community version
+    - sudo systemctl start mongod     # start and stop mongodb server
+    - sudo systemctl status mongod
+    - sudo systemctl restart mongod
+    - sudo systemctl stop mongod
+
     """
     def __init__(self, mongodb: MongoDB, database: str):
         self.mongodb = mongodb
@@ -600,3 +723,5 @@ if __name__ == "__main__":
         from glob import glob
         stopfiles = glob(os.path.join(paths['downloads'], 'stocks2022/LM/*'))
         LMReader.update(wordlists, stopfiles)
+
+    print("unstructured")

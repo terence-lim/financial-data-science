@@ -12,7 +12,7 @@ MIT License
 import re
 import calendar
 from datetime import datetime
-from typing import Iterable, Mapping, List, Any, NamedTuple, Dict
+from typing import Iterable, Mapping, List, Any, NamedTuple, Dict, Tuple
 import numpy as np
 from numpy.ma import masked_invalid as valid
 import pandas as pd
@@ -274,6 +274,54 @@ def winsorize(df, quantiles=[0.025, 0.975]):
     else:   # input was Series
         return df.clip(lower=lower, upper=upper)
 
+
+def impute_em(X: np.ndarray, add_intercept: bool = True,
+              tol: float = 1e-12, maxiter: int = 200,
+              verbose: int = 1) -> Tuple[np.ndarray, DataFrame]:
+    """Fill missing data with EM Normal distribution"""
+    if add_intercept:
+        X = np.hstack((np.ones((X.shape[0], 1)), X))
+    missing = np.isnan(X)   # identify missing entries
+    assert(not np.any(np.all(missing, axis=1)))    # no row all missing
+    assert(not np.any(np.all(missing, axis=0)))    # no column all missing
+    cols = np.flatnonzero(np.any(missing, axis=0)) # columns with missing 
+
+    results = []
+    for niter in range(maxiter+1):
+        if not niter:
+            # Initially, just replace with column means
+            for col in cols: 
+                X[missing[:, col], col] = np.nanmean(X[:, col])
+        else:
+            XX = X.T @ X
+            inv_XX = inv(XX)
+            for col in cols:  # E, M step for each column with missing values
+                # "M" step: estimate covariance matrix
+                mask = np.ones(X.shape[1], dtype=bool)
+                mask[col] = 0
+                # x = np.delete(X, (col), axis=1)
+                if False:
+                    #xx = np.delete(np.delete(XX, (col), axis=0), (col), axis=1)
+                    M = inv(XX[:, mask][mask, :]) @ X[:, mask].T @ X[:, col]
+                else:
+                    M = -inv_XX[mask, col] / inv_XX[col, col]
+
+                # "E" step: update expected missing values
+                # y = X[:, mask] @ M
+                X[missing[:, col], col] = X[missing[:, col],:][:, mask] @ M
+        x = X[:, add_intercept:]
+        # record the current NLL
+        nll = -sum(multivariate_normal.logpdf(x,
+                                              mean=np.mean(x, axis=0),
+                                              cov=np.cov(x.T, bias=True),
+                                              allow_singular=True))
+        if verbose:
+            print(f"{niter} {nll:.6f}")
+        if niter and prev_nll - nll < tol:
+            break
+        prev_nll = nll
+    return x
+
 ######################
 #
 # Econometrics
@@ -492,149 +540,185 @@ def halflife(alpha):
     else:
         return np.inf if (alpha > 0) else 0
 
-def value_at_risk_historical(x: Series, alpha: float = 0.95):
-    """Empirical value at risk from historical data"""
-    return np.percentile(x, 100 * (1 - alpha))
-
-
-def expected_shortfall_historical(x: Series, alpha: float = 0.95):
-    """Empirical expected shortfall from historical data"""
-    return np.mean(x[x < value_at_risk_historical(x=x, alpha=alpha)])
-
-
-def value_at_risk_normal(x: Series, alpha: float = 0.95):
-    """Theoretical value at risk assuming normal with same stdev"""
-    return np.std(x) * norm.ppf(1 - alpha)
-
-
-def expected_shortfall_normal(x: Series, alpha: float = 0.95):
-    """Theoretical expected shortfall assuming normal with same stdev"""
-    return -np.std(x) * norm.pdf(norm.ppf(1 - alpha))/(1 - alpha)
-
+class RiskMeasure:
+    """Class to compute risk measures for a time series
+    Args:
+        x: Time series of observations
+        alpha: Risk tolerance threshold (default is 0.95 for 5% tail)
+    """
+    def __init__(self, x: Series, alpha: float = 0.95):
+        self.x = x
+        self.alpha = alpha
+        
+    def expected_shortfall(self, normal: bool = False):
+        """Return value at risk: empirical or normal assumption"""
+        if normal:
+            return (-np.std(self.x) * norm.pdf(norm.ppf(1 - self.alpha))
+                    / (1 - self.alpha))
+        else:
+            return np.mean(self.x[self.x < self.value_at_risk()])
+            
+    def value_at_risk(self, normal: bool = False):
+        """Return value at risk: empirical or normal assumption"""
+        if normal:
+            return np.std(self.x) * norm.ppf(1 - self.alpha)
+        else:
+            return np.percentile(self.x, 100 * (1 - self.alpha))
+        
 
 # helper methods for basic bond math calculations
-def to_present_value(flow: float, n: float, spot: float) -> float:
-    """Present Value of a cash flow at n period, given spot interest rate
+class Interest:
+    
+    @staticmethod
+    def present_value(flow: float, n: float, spot: float) -> float:
+        """Present Value of a cash flow at n period, given spot interest rate
 
-    Args:
-        flow: Amount of future cash flow
-        n: Number of periods to discount
-        spot: Interest rate per period
+        Args:
+           flow: Amount of future cash flow
+            n: Number of periods to discount
+            spot: Interest rate per period
 
-    Returns:
-        PV of cash flow discounted by spot rate compounded over n periods
-    """
-    return flow / ((1 + spot) ** n)
-
-
-def to_weighted_maturity(flows: List[float], spot: float, first: int = 1,
-                      returned: bool = False) -> float:
-    """Average maturity weighted by PV of flows discounted by spot rate 
-
-    Args:
-        flows: List of cash flow amounts at each future period
-        spot: Interest rate per period
-        first: First period when cash flows begin
-        returned: If `True`, the tuple (`average`, `sum_of_weights`)
-            is returned, otherwise only the average is returned.
-
-    Returns:
-        Weighted average maturity of future cash flows
-    """
-    v = [to_present_value(flow=flow,
-                          n=n + first,
-                          spot=rate)
-         for n, (flow, rate) in enumerate(zip(flows, spot))]
-    return np.average(np.arange(len(v)) + first, weights=v, returned=returned)
+        Returns:
+           PV of cash flow discounted by spot rate compounded over n periods
+        """
+        return flow / ((1 + spot) ** n)
 
 
-def to_par_duration(nominal: float, n: int, face: float = 1.,
-                 m: int = 1, first: float = 1.) -> float:
-    """Macaulay duration of a coupon bond, currently selling at par price
+    @staticmethod
+    def weighted_maturity(flows: List[float], spot: float, first: int = 1,
+                          returned: bool = False) -> float:
+        """Average maturity weighted by PV of flows discounted by spot rate 
 
-    Args:
-        nominal: Nominal annual coupon rate of the bond
-        n: Number of years till maturity
-        face: Face value of bond to be returned at maturity
-        m: Number of intra-year coupon payments
-        first: First year when cash flows begin
+        Args:
+            flows: List of cash flow amounts at each future period
+            spot: Interest rate per period
+            first: First period when cash flows begin
+            returned: If `True`, the tuple (`average`, `sum_of_weights`)
+                is returned, otherwise only the average is returned.
 
-    Returns:
-        Macaulay duration of a par coupon bond
-
-    Notes:
-        Assumes bond currently selling at par
-    """
-    coupon = nominal * face     # assume par bond
-    flows = [coupon / m] * (n * m - 1) + [face + coupon / m]  # face in last
-    d, v = to_weighted_maturity(flows,
-                                [nominal / m] * (n * m),
-                                first=first * m,
-                                returned=True)
-    return d / m
-
-def to_discounted_cash_flow(flows: float | List[float],
-                            spot: float | List[float], first: int = 1) -> float:
-    """PV of future cash flows, starting at first period
-
-    Args:
-        flows: Amounts of future annual cash flows
-        spot: Interest rate, or rates, per year
-        first: First period when cash flow begins
-
-    Returns:
-        Discounter present value of future cash flows
-    """
-
-    if not types.is_list_like(flows):   # flows can be different each period
-        flows = [flows]                 #  else assume same flow every period
-    if not types.is_list_like(spot):    # spot rates can be different each flow
-        spot = [spot]                   #  else use same spot rate every period
-    if len(flows) == 1:
-        flows = list(flows) * len(spot) # repeat flows to be same length as spot
-    if len(spot) == 1:
-        spot = list(spot) * len(flows)  # repeat spot to be same length as flows
-    return np.sum([to_present_value(flow=flow,
-                                    n=first + n,
+        Returns:
+            Weighted average maturity of future cash flows
+        """
+        v = [Interest.present_value(flow=flow,
+                                    n=n + first,
                                     spot=rate)
-                   for n, (flow, rate) in enumerate(zip(flows, spot))])
+             for n, (flow, rate) in enumerate(zip(flows, spot))]
+        return np.average(np.arange(len(v)) + first, weights=v, returned=returned)
 
 
-def to_forward_rates(spot: List[float], base=0) -> List[float]:
-    """Forward rates implied by spot rates starting after base periods
+    @staticmethod
+    def par_duration(nominal: float, n: int, face: float = 1.,
+                     m: int = 1, first: float = 1.) -> float:
+        """Macaulay duration of a coupon bond, currently selling at par price
 
-    Args:
-        spot: List of current annual spot interest rates at each period
-        base: Base periods skipped by initial spot rate in input list
+        Args:
+            nominal: Nominal annual coupon rate of the bond
+            n: Number of years till maturity
+            face: Face value of bond to be returned at maturity
+            m: Number of intra-year coupon payments
+            first: First year when cash flows begin
 
-    Returns:
-        List of forward curve annual rates
-    """
-    return [(((1 + num)**(n + 1 + base)
-              / (1 + den)**(n + base)) - 1)
-            for n, (num, den) in enumerate(zip(spot, [0] + list(spot[:-1])))]
+        Returns:
+            Macaulay duration of a par coupon bond
+
+        Notes:
+            Assumes bond currently selling at par
+        """
+        coupon = nominal * face     # assume par bond
+        flows = [coupon / m] * (n * m - 1) + [face + coupon / m]  # face in last
+        d, v = Interest.weighted_maturity(flows,
+                                          spot=[nominal / m] * (n * m),
+                                          first=first * m,
+                                          returned=True)
+        return d / m
+
+    @staticmethod
+    def discounted_cash_flow(flows: float | List[float],
+                             spot: float | List[float],
+                             first: int = 1) -> float:
+        """PV of future cash flows, starting at first period
+
+        Args:
+            flows: Amounts of future annual cash flows
+            spot: Interest rate, or rates, per year
+            first: First period when cash flow begins
+
+        Returns:
+            Discounter present value of future cash flows
+        """
+
+        if not types.is_list_like(flows):    # flows can be different each period
+            flows = [flows]                  # else assume same flow every period
+            if not types.is_list_like(spot): # spot rate can be different per flow
+                spot = [spot]                # else use same spot rate each period
+        if len(flows) == 1:
+            flows = list(flows) * len(spot)  # flows to be same length as spot
+        if len(spot) == 1:
+            spot = list(spot) * len(flows)   # spot to be same length as flows
+        return np.sum([Interest.present_value(flow=flow,
+                                              n=first + n,
+                                              spot=rate)
+                       for n, (flow, rate) in enumerate(zip(flows, spot))])
 
 
+    @staticmethod
+    def forward_rates(spot: List[float], base=0) -> List[float]:
+        """Forward rates implied by spot rates starting after base periods
+
+        Args:
+            spot: List of current annual spot interest rates at each period
+            base: Base periods skipped by initial spot rate in input list
+
+        Returns:
+            List of forward curve annual rates
+        """
+        return [(((1 + num)**(n + 1 + base) / (1 + den)**(n + base)) - 1)
+                for n, (num, den) in enumerate(zip(spot, [0] + list(spot[:-1])))]
 
 
-def to_bootstrap_rates(ytm: float, nominal: List[float], m: int = 1) -> float:
-    """Nominal rate to maturity of par bond from ytm and sequence of nominals
+    @staticmethod
+    def bootstrap_rates(ytm: float, nominal: List[float], m: int = 1) -> float:
+        """Nominal rate to maturity of par bond from ytm and sequence of nominals
 
-    Args:
-        ytm: Annualized yield to maturity of par bond
-        nominal: Annualized spot rates each period (excl last maturity period)
-        m: Number of periods per year
+        Args:
+            ytm: Annualized yield to maturity of par bond
+            nominal: Annualized spot rates each period (excl last maturity period)
+            m: Number of periods per year
 
-    Returns:
-        Nominal annualized effective interest rate till maturity
+        Returns:
+            Nominal annualized effective interest rate till maturity
 
-    Notes:
-        Assumes bond currently selling at par
-    """
-    n = len(nominal) + 1       # implicit number of coupons through maturity
-    spot = [r / m for r in nominal]  # spot rate per period
-    return (((1 + ytm / m) \
-             / (1 - to_discounted_cash_flow(flows=ytm/m,
-                                         spot=spot)))**(1 / n) - 1) * m
+        Notes:
+            Assumes bond currently selling at par
+        """
+        n = len(nominal) + 1       # implicit number of coupons through maturity
+        spot = [r / m for r in nominal]  # spot rate per period
+        pv = (1 - Interest.discounted_cash_flow(flows=ytm/m, spot=spot))
+        return (((1 + (ytm / m)) / pv)**(1 / n) - 1) * m
+
+
+from cvxopt import matrix, solvers
+def quadprog(sigma):
+    """Quadratic solver for portfolio optimization"""
+    G = matrix(np.diag([-1.]*sigma.shape[1]))
+    A = matrix(np.ones((1, sigma.shape[1])))
+    b = matrix(np.ones((1, 1)))
+    h = matrix(np.zeros((sigma.shape[1], 1)))
+    sol = solvers.qp(P=matrix(sigma), q=h, G=G, h=h, A=A, b=b,
+                     options=dict(show_progress=False))
+    x = np.array(sol['x']).ravel()
+    return x
+
+    
+if __name__=="__main__":
+    # Verify with Jorion Chapter 5 Solution
+    ytm = list(np.arange(0.0525, 0.1025, 0.0025))
+    spot = np.array([])
+    for y in ytm:
+        spot = np.append(spot, Interest.bootstrap_rates(y, nominal=spot, m=2))
+    jorion_sol5 = [.0797,.0827,.0859,.0892,.0925,.0961,.0997,.1036,.1077,.112]
+    assert np.allclose(jorion_sol5, spot[-len(jorion_sol5):], atol=0.0001)
+    print(spot)
+
 
 
