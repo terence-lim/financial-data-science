@@ -1,6 +1,6 @@
 # 30+ Financial Data Science Projects
 
-1. [Track stock identifier changes and price adjustments](stock_prices.py)
+1. [Stock identifier changes and price adjustments](stock_prices.py)
    - stock splits, dividends, identifiers, and total holding returns
 
 2. [Construct Jegadeesh-Titman rolling portfolios](jegadeesh_titman.py)
