@@ -1,7 +1,7 @@
 """Fama-French portfolio sorts
 
-- Value and size anomaly
-- 2-way portfolio sorts
+- Value and size effect
+- Bivariate portfolio sorts
 - Fama-French research factors: HML, SMB, Mom, STRev
 
 Copyright 2022, Terence Lim
@@ -10,6 +10,7 @@ MIT License
 """
 import numpy as np
 import pandas as pd
+from scipy.stats import skew, kurtosis
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
 import statsmodels.formula.api as smf
@@ -18,7 +19,7 @@ from finds.structured import CRSP, Signals, Benchmarks, PSTAT, famafrench_sorts
 from finds.backtesting import BackTest
 from finds.busday import BusDay
 from finds.recipes import fractiles
-from finds.display import plot_date, plot_scatter, show
+from finds.display import plot_date, plot_scatter, plot_hist, show
 from tqdm import tqdm
 from conf import credentials, VERBOSE, paths, CRSP_DATE
 
@@ -38,7 +39,7 @@ pstat = PSTAT(sql, bd, verbose=VERBOSE)
 bench = Benchmarks(sql, bd)
 signals = Signals(user)
 
-## Construct HML signal
+## Construct HML and SMB signal
 """
 - load items from Compustat Annual
 - Construct HML as shareholders equity plus investment tax credits, 
@@ -86,23 +87,36 @@ df[label] /= df['cap']
 df = df[df[label].gt(0) & df['count'].gt(1)]  # 2+ years in Compustat
 signals.write(df, label)
 
-### helper for plotting and comparing portfolio returns
-def plot_ff(y, label, num=1, imgdir=None):
-    """Helper to plot similarity of portfolio and benchmark returns"""
+### helpers to show histograms and comparisons of portfolio returns
+def plot_ff(y, label, savefig=None):
+    """helper to scatter plot and compare portfolio returns"""
     y = y.rename(columns={'excess': label})
     corr = np.corrcoef(y, rowvar=False)[0,1]
-    fig, (ax1, ax2) = plt.subplots(2, 1, num=num, clear=True, figsize=(9,10))
-    plot_date(y, ax=ax1, title=" vs ".join(y.columns))
-    plot_scatter(y.iloc[:,0], y.iloc[:,1], ax=ax2, abline=False)
-    ax2.set_title(f"corr={corr:.4f}", fontsize=8)
-    plt.tight_layout(pad=3)
-    if imgdir is not None:
-        plt.savefig(imgdir / (label + '.jpg'))
-        print(f"<Correlation of {label} vs {benchname}"
-              f" ({y.index[0]} - {y.index[-1]}): {corr:.4f}")
+    fig, (ax1, ax2) = plt.subplots(2, 1, clear=True, figsize=(5, 5))
+    plot_date(y, ax=ax1, title=" vs ".join(y.columns), fontsize=7)
+    plot_scatter(y.iloc[:,0], y.iloc[:,1], ax=ax2, abline=False, fontsize=7)
+    plt.legend([f"corr={corr:.4f}"], fontsize=8)
+    plt.tight_layout(pad=0.5)
+    if savefig:
+        plt.savefig(imgdir / savefig)
+    print(f"<Correlation of {label} vs {benchname}"
+          f" ({y.index[0]} - {y.index[-1]}): {corr:.4f}")
 
-
-## Display HML 2-way portfolio sorts, and compare to Ken French Library returns
+def plot_summary(y, label, savefig=None):
+    """helper to plot histogram and statistics of portfolio returns"""
+    y = y[label]
+    kurt = kurtosis(y, bias=True, fisher=True)  # excess kurtosis
+    skewness = skew(y, bias=True)
+    fig, ax = plt.subplots(1, 1, clear=True, figsize=(5, 5))
+    ax.hist(y, bins=30)
+    ax.set_title(f"Histogram of monthly returns ({y.index[0]}-{y.index[-1]})")
+    ax.set_xlabel(f"skewness={skewness:.4f}, excess kurtosis={kurt:.4f}")
+    plt.legend([label])
+    plt.tight_layout()
+    if savefig:
+        plt.savefig(imgdir / savefig)
+        
+## Construct HML bivariate portfolio sorts, and show counts
 label, benchname = 'hml', 'HML(mo)'
 rebalend = LAST_DATE
 rebalbeg = 19640601
@@ -114,29 +128,42 @@ portfolios = famafrench_sorts(stocks=crsp,
                               window=12,
                               months=[6])
 
+sizes = {b: [int(np.mean(list(portfolios['sizes'][b[0]+s[0]].values())))
+             for s in "SB"]
+         for b in ["High b/m", "Medium b/m", "Low b/m"]}
+show(DataFrame(sizes, index=["Small size", "Big size"]),
+     caption="Average number of stocks in bivariate-sorted subportfolios",
+     **SHOW)
+
+### Plot histogram and comparison of HML returns
 holdings = portfolios['holdings'][label]        
-backtest = BackTest(user, bench, 'RF', LAST_DATE)
+backtest = BackTest(user, bench, 'RF', LAST_DATE, verbose=VERBOSE)
 result = backtest(crsp, holdings, label)
 y = backtest.fit([benchname], 19700101, LAST_DATE)
-plot_ff(y, label, num=1, imgdir=imgdir)
-
-# Linear regression on Mkt-Rf and intercept
+plot_ff(y, label, savefig=imgdir / (label + '.jpg'))
+plot_summary(y, benchname, savefig=imgdir / (label + '_hist.jpg'))
+          
+### Linear regression on Mkt-Rf and intercept
 x = bench.get_series('mkt-rf(mo)', start=y.index[0], end=y.index[-1])
-hml = smf.ols(f'Q("{benchname}")~Q("{x.name}")', data=pd.concat([y, x], axis=1))\
-         .fit(cov_type='HAC', cov_kwds={'maxlags': 12})
-print(hml.summary())
+lm = smf.ols(f'Q("{benchname}")~Q("{x.name}")', data=pd.concat([y, x], axis=1))\
+        .fit(cov_type='HAC', cov_kwds={'maxlags': 6})
+print(f"Period: {rebalbeg}-{rebalend}")
+print(lm.summary())
 
-## Display SMB portfolio returns and compare to Ken French Library
+### Plot histogram and comparison of SMB returns
 label, benchname = 'smb', 'SMB(mo)'
 holdings = portfolios['holdings'][label]
 result = backtest(crsp, holdings, label)
 y = backtest.fit([benchname], 19700101, LAST_DATE)
-plot_ff(y, label, num=2, imgdir=imgdir)   
+plot_ff(y, label, savefig=imgdir / (label + '.jpg'))
+plot_summary(y, benchname, savefig=imgdir / (label + '_hist.jpg'))
 
 # Linear regression on Mkt-Rf and intercept
-smb = smf.ols(f'Q("{benchname}")~Q("{x.name}")', data=pd.concat([y, x], axis=1))\
-         .fit(cov_type='HAC', cov_kwds={'maxlags': 12})
-print(smb.summary())
+x = bench.get_series('mkt-rf(mo)', start=y.index[0], end=y.index[-1])
+lm = smf.ols(f'Q("{benchname}")~Q("{x.name}")', data=pd.concat([y, x], axis=1))\
+        .fit(cov_type='HAC', cov_kwds={'maxlags': 6})
+print(f"Period: {rebalbeg}-{rebalend}")
+print(lm.summary())
 
 
 ## Construct MOM signal
@@ -163,7 +190,7 @@ for rebaldate in tqdm(bd.date_range(rebalbeg, rebalend, 'endmo')):
     df = pd.concat([df, q[['permno', 'rebaldate', label]]], axis=0)
 signals.write(df, label, overwrite=True)
 
-## Display MOM 2-way portfolio sorts, and compare to Ken French Library returns
+## Construct MOM bivariate portfolio sorts
 portfolios = famafrench_sorts(stocks=crsp,
                               label=label,
                               signals=signals,
@@ -175,7 +202,16 @@ portfolios = famafrench_sorts(stocks=crsp,
 holdings = portfolios['holdings'][label]
 result = backtest(crsp, holdings, label)
 y = backtest.fit([benchname])
-plot_ff(y, label, num=3, imgdir=imgdir)
+
+# plot histogram and comparison of returns
+plot_ff(y, label, savefig=imgdir / (label + '.jpg'))
+plot_summary(y, benchname, savefig=imgdir / (label + '_hist.jpg'))
+
+# Linear regression on Mkt-Rf and intercept
+lm = smf.ols(f'Q("{benchname}")~Q("{x.name}")', data=pd.concat([y, x], axis=1))\
+        .fit(cov_type='HAC', cov_kwds={'maxlags': 6})
+print(f"Period: {rebalbeg}-{rebalend}")
+print(lm.summary())
 
 
 ## Construct STRev signal
@@ -203,7 +239,7 @@ for rebaldate in tqdm(bd.date_range(rebalbeg, rebalend, 'endmo')):
 # Save signals values
 signals.write(df, label, overwrite=True)
                   
-# Display 2-way portfolio sorts, and compare to Ken French Library returns
+# Construct bivariate portfolios sort
 portfolios = famafrench_sorts(stocks=crsp,
                               label=label,
                               signals=signals,
@@ -215,4 +251,13 @@ portfolios = famafrench_sorts(stocks=crsp,
 holdings = portfolios['holdings'][label]
 result = backtest(crsp, holdings, label)
 y = backtest.fit([benchname])
-plot_ff(y, label, num=4, imgdir=imgdir)
+
+# plot histogram and comparison of returns
+plot_ff(y, label, savefig=imgdir / (label + '.jpg'))
+plot_summary(y, benchname, savefig=imgdir / (label + '_hist.jpg'))
+
+# Linear regression on Mkt-Rf and intercept
+lm = smf.ols(f'Q("{benchname}")~Q("{x.name}")', data=pd.concat([y, x], axis=1))\
+        .fit(cov_type='HAC', cov_kwds={'maxlags': 6})
+print(f"Period: {rebalbeg}-{rebalend}")
+print(lm.summary())

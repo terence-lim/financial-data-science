@@ -1,7 +1,7 @@
 """Jegadeesh-Titman rolling portfolios
 
 - Relative strength, momentum effect
-- Overlapping portfolio returns, Newey-West correction
+- Overlapping portfolio returns, Newey-West correction, rolling portfolios
 
 Copyright 2023, Terence Lim
 
@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 import matplotlib.pyplot as plt
+from scipy.stats import kurtosis, skew
+from tqdm import tqdm
 from finds.database import SQL, Redis
 from finds.busday import BusDay
 from finds.structured import CRSP, Finder
@@ -28,7 +30,7 @@ bd = BusDay(sql, verbose=VERBOSE)
 crsp = CRSP(sql, bd, rdb=rdb, verbose=VERBOSE)
 imgdir = paths['images']
 
-begyear = 1977
+begyear = 1927
 endyear = 2022
 retdates = bd.date_range(bd.begyr(begyear), bd.endyr(endyear), 'begmo')
 rebaldates = bd.offset(retdates, -1)
@@ -37,7 +39,7 @@ maxhold = 6    # hold each monthly-rebalanced portfolio for 6 months
 
 ## Overlapping returns: hold monthly spread portfolios for 6 months
 mom = []
-for rebaldate in rebaldates:
+for rebaldate in tqdm(rebaldates):
     
     # determine required dates relative to rebaldate
     beg = bd.endmo(rebaldate, -6)   # require price at beg date
@@ -69,8 +71,8 @@ for rebaldate in rebaldates:
 
     mom.append(float(ret) / nhold)
 
-show(DataFrame({'mean': np.mean(mom), 'std':np.std(mom)}.
-               index=['Overlapping Returns']), **SHOW)
+DataFrame({'mean': np.mean(mom), 'std': np.std(mom)},
+          index=['Overlapping Returns'])
 
 
 ## Non-overlapping: monthly average returns of past 6 months' rebalances
@@ -78,7 +80,7 @@ show(DataFrame({'mean': np.mean(mom), 'std':np.std(mom)}.
 # Jegadeesh-Titman rolling portfolios
 ports = []  # to roll 6 past portfolios
 jt = []
-for rebaldate in rebaldates:
+for rebaldate in tqdm(rebaldates):
     
     # determine required dates relative to rebaldate
     beg = bd.endmo(rebaldate, -6)   # require price at beg date
@@ -101,12 +103,12 @@ for rebaldate in rebaldates:
     porthi, portlo = [df.loc[tritile==t, 'cap'] for t in [1, 3]]
     port =  pd.concat((porthi/porthi.sum(), -portlo/portlo.sum()))
 
-    # keep only last 6 months' rebalances
+    # keep up to 6 months of monthly-rebalanced portfolios
     ports.insert(0, port)
     if len(ports) > maxhold:
         ports.pop(-1)
 
-    # compute all portfolios' monthly capwtd returns, and store eqlwtd average
+    # compute all 6 portfolios' monthly capwtd returns, and store eqlwtd average
     begret = bd.offset(rebaldate, 1)
     endret = bd.endmo(begret)
     rets = crsp.get_ret(begret, endret, delist=True)
@@ -114,12 +116,12 @@ for rebaldate in rebaldates:
                    for p in ports])
     jt.append(ret)
 
-    # adjust stock weights by monthly appreciation
+    # adjust stock weights by monthly capital appreciation
     retx = crsp.get_ret(begret, endret, field='retx')
     ports = [(1+retx.reindex(p.index).fillna(0.)).mul(p, axis=0) for p in ports]
 
-show(DataFrame({'mean': np.mean(jt), 'std':np.std(jt)}.
-               index=['Non-overlapping Returns']), **SHOW)
+DataFrame({'mean': np.mean(jt), 'std': np.std(jt)},
+          index=['Non-overlapping Returns'])
 
 
 ## Autocorrelations of portfolio returns
@@ -144,22 +146,35 @@ for out, label in zip([mom, jt], keys):
     reg = smf.ols('ret ~ 1',data=data).fit()
     a = Series({stat: round(float(getattr(reg, stat)), 6)
                 for stat in ['params','bse','tvalues','pvalues']},
-               name='uncorrected')
+               name='uncorrected')  # coef, stderr, t-value, P>|z|
     #print(reg.summary())
+
     reg = smf.ols('ret ~ 1',data=data)\
-             .fit(cov_type='HAC', cov_kwds={'maxlags': 12})
-    # coef, stderr, t-value, P>|z|
+             .fit(cov_type='HAC', cov_kwds={'maxlags': 6})
     b = Series({stat: round(float(getattr(reg, stat)), 6)
                 for stat in ['params','bse','tvalues','pvalues']},
-               name='NeweyWest')
+               name='NeweyWest')   # coef, stderr, t-value, P>|z|
     res.append(pd.concat([a, b], axis=1))
 show(pd.concat(res, axis=1, keys=keys),
      caption='Uncorrected and Newey-West corrected standard errors', **SHOW)     
 
 
-## Plot monthly average returns of Jegadeesh-Titman rolling portfolios
+## Plot cumulative monthly average returns of Jegadeesh-Titman rolling portfolios
+fig, ax = plt.subplots(figsize=(5, 5), clear=True)
 plot_date(DataFrame(index=rebaldates, data=np.cumsum(jt), columns=['momentum']),
-          fontsize=8, rotation=90,
+          ax=ax, fontsize=8, rotation=90,
           ylabel='Cumulative Returns', xlabel='Rebalance Date',
-          title='Monthly returns of Jegadeesh-Titman 6-month momentum portfolios')
+          title='Jegadeesh-Titman 6-month momentum portfolios')
+plt.tight_layout()
 plt.savefig(imgdir / 'jegadeesh_titman.jpg')
+
+## Plot histogram of monthly portfolio returns
+fig, ax = plt.subplots(1, 1, clear=True, figsize=(5, 5))
+ax.hist(jt, bins=30)
+ax.set_title(f"Histogram of monthly returns")
+ax.legend(['6-month momentum'])
+kurt = kurtosis(jt, bias=True, fisher=True)  # excess kurtosis
+skewness = skew(jt, bias=True)
+ax.set_xlabel(f"skewness={skewness:.4f}, excess kurtosis={kurt:.4f}")
+plt.tight_layout()
+plt.savefig(imgdir / 'jegadeesh_titman_hist.jpg')

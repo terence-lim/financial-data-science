@@ -1,7 +1,8 @@
-"""Backtest weekly stock price reversal trading strategy
+"""Weekly stock price reversal trading strategy
 
-- Contrarian strategy (Lo and Mackinlay 1990, and others), statistical arbitrage
-- implementation shortfall, structural change with unknown breakpoint
+- Contrarian trading (Lo and Mackinlay 1990, and others), statistical arbitrage
+- implementation shortfall
+- structural break with unknown changepoint
 
 Copyright 2023, Terence Lim
 
@@ -23,15 +24,16 @@ from conf import credentials, VERBOSE, paths
 VERBOSE = 1      # 0
 SHOW = dict(ndigits=4, latex=True)  # None
 
-endweek = 20220330
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 rdb = Redis(**credentials['redis'])
 bd = BusDay(sql, verbose=VERBOSE)
 crsp = CRSP(sql, bd, rdb=rdb, verbose=VERBOSE)
 bench = Benchmarks(sql, bd)
 imgdir = paths['images']
+endweek = 20220331   # Thursday close
+endweek = 20220401   # Friday close
 
-# Construct weekly reversal
+## Construct weekly reversal
 begweek = 19740102   # increased stocks coverage in CRSP in Jan 1973
 middate = 19851231   # increased stocks traded in CRSP around this date
 wd = WeeklyDay(sql, bd(endweek).strftime('%A'))   # Generate weekly cal
@@ -42,19 +44,19 @@ retdates = wd.date_tuples(rebaldates)
 june_universe = 0  # to track when reached a June end to update universe
 year = 0           # to track new year to retrieve prices in batch
 results = []
-lagged_exposures = Series(dtype=float)   # for "turnover" of stock weights
+lagged_weights = Series(dtype=float) # to track "turnover" of stock weights
 
-for rebaldate, pastdates, nextdates in tqdm(zip(rebaldates[1:-1],
-                                                retdates[:-1],
+# loop over weekly rebalance dates
+for rebaldate, pastdates, nextdates in tqdm(zip(rebaldates[1:-1], retdates[:-1],
                                                 retdates[1:])):
-    # screen by June universe
+    # screen universe each June: largest 5 size deciles
     d = bd.june_universe(rebaldate)
     if d != june_universe:  # need next June's universe
         june_universe = d                        # update universe every June
         univ = crsp.get_universe(june_universe)  # usual CRSP universe screen
-        univ = univ[univ['decile'] <= 5]         # drop smallest half stocks
+        univ = univ[univ['decile'] <= 9]         # drop smallest half stocks
 
-    # retrieve new batch of prices when start each year        
+    # retrieve new annual batch of daily prices and returns when start year
     if bd.begyr(rebaldate) != year:
         year = bd.begyr(rebaldate)
         prc = crsp.get_range(dataset='daily',
@@ -71,18 +73,16 @@ for rebaldate, pastdates, nextdates in tqdm(zip(rebaldates[1:-1],
         .join(crsp.get_ret(*pastdates).reindex(univ.index))\
         .dropna()
 
-    # convert past week's contrarian returns to standardized exposures
-    exposures = ((past_week['ret'].mean() - past_week['ret']) /
-                 (past_week['ret'].std(ddof=0) * len(past_week)))
+    # convert past week's minus returns to standardized weights in portfolio
+    weights = ((past_week['ret'].mean() - past_week['ret']) /
+               (past_week['ret'].std(ddof=0) * len(past_week)))
 
-    # turnover is abs change in stock weight, scaled by total abs weight
-    delta = pd.concat([exposures, -lagged_exposures], axis=1)\
-              .fillna(0)\
-              .sum(axis=1)\
-              .abs()\
-              .sum()\
-              / (exposures.abs().sum() + lagged_exposures.abs().sum())
-    lagged_exposures = exposures
+    # turnover = total abs change in stock weight, scaled by total abs weight
+    chg_weights = pd.concat([weights, -lagged_weights], axis=1)\
+                       .fillna(0)\
+                       .sum(axis=1)
+    total_weight = weights.abs().sum() + lagged_weights.abs().sum()
+    lagged_weights = weights
     
     # get next week's returns
     next_week = crsp.get_ret(*nextdates).reindex(past_week.index).fillna(0)
@@ -92,56 +92,68 @@ for rebaldate, pastdates, nextdates in tqdm(zip(rebaldates[1:-1],
         .reset_index()\
         .set_index('permno')\
         .drop(columns='date')\
-        .reindex(past_week.index)
+        .reindex(chg_weights.index)
     avgprc = next_day[['bidlo', 'askhi', 'prc']].abs().mean(axis=1)
 
-    # if no trade next day, then enter at askhi (long) or bidlo (short)
-    bidask = next_day['askhi'].where(exposures > 0, next_day['bidlo']).abs()
+    # if no trade next day, then enter position at askhi (long) or bidlo (short)
+    bidask = next_day['askhi'].where(weights > 0, next_day['bidlo']).abs()
     avgprc = next_day['prc'].where(next_day['prc'] > 0, bidask)
 
-    # drift to next's day price => delay cost is -drift * exposure
-    drift = (avgprc.div(next_day['prc'].abs())\
-             .mul(1 + next_day['ret']) - 1).fillna(0.)
+    # delay slippage (positive is cost) = weights chg * drift of next day price
+    drift = avgprc.div(next_day['prc'].abs())\
+                  .mul(1 + next_day['ret'])\
+                  .sub(1)\
+                  .fillna(0)
 
     # accumulate weekly computations
-    results.append(DataFrame({'ret': exposures.dot(next_week),
-                              'ic': exposures.corr(next_week),
+    results.append(DataFrame({'ret': weights.dot(next_week),
+                              'ic': weights.corr(next_week),
                               'n': len(next_week),
                               'beg': nextdates[0],
                               'end': nextdates[1],
-                              'absweight': np.sum(exposures.abs()),
-                              'turnover': delta,
+                              'absweight': np.sum(weights.abs()),
+                              'turnover': chg_weights.abs().sum()/total_weight,
                               'vol': next_week.std(ddof=0),
-                              'delay': exposures.dot(-drift)},
+                              'delay': chg_weights.dot(drift)},
                              index=[rebaldate]))
 
 # Combine accumulated weekly computations
 df = pd.concat(results, axis=0)
 dates = df.index
-
-# Plot returns, i.c. and cross-sectional vol over time
-fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 5))
 df.index = pd.DatetimeIndex(df.index.astype(str))
-df['ret'].cumsum().plot(ax=ax, ls='--', color='r', rot=0)
+
+# Show summary
+cols = ['ic' ,'vol', 'ret', 'delay', 'turnover']
+indexes = ['Information coefficient', 'Cross-sectional Volatility',
+           'Alpha (gross return)', 'Delay cost', 'Portfolio turnover']
+show(pd.concat([df[cols].mean(axis=0).rename('mean'),
+                df[cols].std(axis=0).rename('std')],
+               axis=1).set_index(pd.Index(indexes)),
+     caption=f'Summary of Weekly Mean Reversion Strategy {dates[0]}-{dates[-1]}',
+     **SHOW)
+
+## Plot returns, and rolling avg information coefficient and cross-sectional vol
+fig, ax = plt.subplots(num=1, clear=True, figsize=(10, 5))
+df['ret'].cumsum().plot(ax=ax, ls='-', color='r', rot=0)
 ax.legend(['cumulative returns'], loc='upper left')
 ax.set_ylabel('cumulative returns')
 
 bx = ax.twinx()
-df['ic'].rolling(250).mean().plot(ax=bx, ls=':', lw=1, rot=0, color='b')
-df['vol'].rolling(250).mean().plot(ax=bx, ls=':', lw=1, rot=0, color='g')
+roll = 250  # 250 week rolling average ~ 5 years
+df['ic'].rolling(roll).mean().plot(ax=bx, ls=':', lw=1, rot=0, color='b')
+df['vol'].rolling(roll).mean().plot(ax=bx, ls=':', lw=1, rot=0, color='g')
 #bx.axhline(df['ic'].mean(), linestyle='-', color='C0', lw=2)
 bx.axhline(0, linestyle='-', color='black', lw=1)
-bx.legend(['information coefficient', 'cross-sectional vol'], loc='lower right')
-ax.set_title('Profitability of Weekly Mean Reversion')
+bx.legend([f"information coefficient ({roll}-week roll)",
+           f"cross-sectional vol ({roll}-week roll)"],
+          loc='lower right')
+ax.set_title(f'Profitability of Weekly Mean Reversion {dates[0]}-{dates[-1]}')
 plt.tight_layout(pad=2)
 plt.savefig(imgdir / 'weekrev.jpg')
 
-show(pd.concat([df[['ic' ,'vol', 'ret']].mean(axis=0).rename('mean'),
-                df[['ic' ,'vol', 'ret']].std(axis=0).rename('std')],
-               axis=1),
-     caption=f'Alpha, IC and Vol of Weekly Mean Reversion Strategy', **SHOW)
 
-# Structural Break Test with Unknown Date
+
+## Structural Break Test with Unknown Changepoint
 import rpy2.robjects as ro
 from rpy2.robjects.packages import importr
 from finds.pyR import PyR
@@ -159,7 +171,7 @@ breakpoints_r = ro.r['breakpoints'](formula)         # candidate breakpoints
 confint_r = ro.r['confint'](breakpoints_r, breaks=1) # conf interval for 1 break
 sctest_r = ro.r['sctest'](fstats_r, **{'type': 'aveF'})
 
-# Extract output from R results
+### Extract output from R results
 confint = PyR(confint_r[0]).frame.iloc[0].astype(int) - 1  # R index starts at 1
 output = dict(zip(confint.index, df.index[confint]))       # confidence interval
 for k,v in zip(sctest_r.slots['names'][:3], sctest_r[:3]): # significance values
@@ -168,7 +180,10 @@ output['mean(pre)'] = Y[df.index <= output['breakpoints']].mean()
 output['mean(post)'] = Y[df.index > output['breakpoints']].mean()
 fstat = [0] + list(PyR(fstats_r[0]).values) + [0, 0]  # pad beyond from and to 
 
-# Plot breakpoint F-stats
+show(DataFrame(output, index=['sctest']),
+     caption="Structural break test with unknown changepoint", **SHOW)
+
+### Plot breakpoint F-stats
 fig, ax = plt.subplots(num=2, clear=True, figsize=(10, 5))
 ax.plot(df.index, fstat, color='C0')
 arg = np.nanargmax(fstat)
@@ -178,21 +193,18 @@ ax.legend(['F-stat', 'Max-F', 'C.I. of Break Date'])
 ax.annotate(df.index[arg].strftime('%Y-%m-%d'), xy=(df.index[arg], fstat[arg]))
 ax.set_ylabel('F-statistic at Breakpoints')
 ax.set_xlabel('Date of Breakpoints')
-ax.set_title('Structural Change with Unknown Breakpoint: '
-             'Weekly Mean Reversion Spread Returns')
+ax.set_title('Structural Break with Unknown Changepoint: '
+             'Weekly Mean Reversion')
 plt.tight_layout(pad=3)
 plt.savefig(imgdir / 'break.jpg')
 
 
-# Compute gross annualized sharpe ratio and delay slippage
+### Compute gross annualized sharpe ratio and delay slippage
 market = bench.get_series(permnos=['Mkt-RF'], field='ret').reset_index()
 breakpoint = BusDay.to_date(output['breakpoints'])
 out = dict()
-for period, select in enumerate([dates > 0,
-                                 dates > breakpoint,
-                                 dates <= breakpoint,
-                                 (dates > middate) & (dates <= breakpoint),
-                                 dates <= middate]):
+for select, period in zip([dates > 0, dates <= breakpoint, dates > breakpoint],
+                          ['Full', 'Pre-break', 'Post-break']):
     res = df[select].copy()
     res.index = dates[select]
 
@@ -203,7 +215,7 @@ for period, select in enumerate([dates > 0,
     model = lm(res['mkt'], res['ret'], flatten=True)
     
     # save df summary
-    out[f"Period {period}"] = {
+    out[f"{period} Period"] = {
         'start date': min(res.index),
         'end date': max(res.index),
         'Sharpe Ratio': np.sqrt(52)*res['ret'].mean()/res['ret'].std(),
