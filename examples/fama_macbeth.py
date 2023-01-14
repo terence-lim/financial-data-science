@@ -25,10 +25,16 @@ from finds.recipes import winsorize, least_squares
 from finds.display import show
 from conf import credentials, VERBOSE, paths, CRSP_DATE
 
+VERBOSE = 0
+SHOW = dict(ndigits=4, latex=None)
+try:
+    get_ipython().magic(u"%matplotlib qt")
+    VERBOSE = 1
+    SHOW = dict(ndigits=4, latex=True)
+except:
+    SHOW = dict(ndigits=4, latex=False)
+# %matplotlib inline
 LAST_DATE = CRSP_DATE
-%matplotlib qt
-VERBOSE = 1      # 0
-SHOW = dict(ndigits=4, latex=True)  # None)
 
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 user = SQL(**credentials['user'], verbose=VERBOSE)
@@ -144,7 +150,7 @@ print(ls.get_robustcov_results('cluster', groups=r['port']).summary())
 
 ## Fama-MacBeth with individual stock returns and standardized scores
 """
-Stock exposures: winsored at 5% tail
+Stock exposures (winsored at 5% tail)
 - size: -log of market cap, standardized
 - hml: book-to-market ratio, standardized 
 - mom: 12-month skip past month momentum, standardized
@@ -169,10 +175,10 @@ for pordate in tqdm(rebaldates):           # retrieve signal values every month
 
 ### Compute coefficients from FM cross-sectional regressions
 riskpremium = RiskPremium(user, bench, 'RF', LAST_DATE)
-riskpremium(stocks=crsp,        # FM regressions on standardized scores
-            loadings=loadings,
-            standardize=['value' ,'size', 'momentum'])
-
+out = riskpremium(stocks=crsp,        # FM regressions on standardized scores
+                  loadings=loadings,
+                  standardize=['value' ,'size', 'momentum'])
+     
 ### Compare estimated risk premiums to benchmark factors
 benchnames = {'beta': 'Mkt-RF(mo)',
               'momentum': 'Mom(mo)',

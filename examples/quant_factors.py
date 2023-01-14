@@ -23,12 +23,17 @@ from finds.backtesting import BackTest
 from finds.recipes import fractiles, maximum_drawdown
 from conf import credentials, CRSP_DATE, VERBOSE, paths
 from typing import List, Tuple, Any, Dict
+VERBOSE = 0
+SHOW = dict(ndigits=4, latex=None)      # show DataFrame by just returning it
+try:  # delete thru next if jupyter notebook
+    get_ipython().magic(u"%matplotlib qt")  # startup magic if IPython shell
+    VERBOSE = 1
+    SHOW = dict(ndigits=4, latex=True)  # show DataFrame as latex
+except: # 
+    SHOW = dict(ndigits=4, latex=False) # show DataFrame as string
+# %matplotlib inline
 
 LAST_DATE = CRSP_DATE
-%matplotlib qt
-VERBOSE = 1      # 0
-SHOW = dict(ndigits=4, latex=True)  # None
-
 imgdir = paths['images']
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 user = SQL(**credentials['user'], verbose=VERBOSE)
@@ -41,7 +46,7 @@ bench = Benchmarks(sql, bd)
 signals = Signals(user)
 ibes = IBES(sql, bd, verbose=VERBOSE)
 
-backtest = BackTest(user, bench, 'RF', LAST_DATE)
+backtest = BackTest(user, bench, 'RF', LAST_DATE, verbose=VERBOSE)
 outdir = paths['images'] / 'factors'
 
 # signals to flip signs when forming spread portfolios
@@ -51,7 +56,9 @@ leverage = {'mom1m':-1, 'mom36m':-1, 'pricedelay':-1, 'absacc':-1, 'acc':-1,
             'maxret':-1, 'ill':-1, 'zerotrade':-1, 'cashpr':-1, 'chinv':-1,
             'invest':-1, 'cinvest':-1, 'idiovol':-1, 'retvol':-1}
 
-## Helpers to lag characteristics and roll returns
+### Helper functions
+
+# to lag yearly characteristics
 def as_lags(df, var, key, nlags):
     """Return dataframe with {nlags} of column {var}, same {key} value in row"""
     out = df[[var]].rename(columns={var: 0})      # first col: not shifted
@@ -61,16 +68,18 @@ def as_lags(df, var, key, nlags):
         out.insert(i, i, prev[var])
     return out
 
+# rolling window of returns
 def as_rolling(df, other, width=0, dropna=True):
-    """enqueue next dataframe to a sliding window of fixed width of columns"""
-    df = df.join(other, how='outer', sort=True, lsuffix='l', rsuffix='r')
+    """join next dataframe to a sliding window with fixed number of columns"""
+    df = df.join(other, how='outer', sort=True, rsuffix='r')
     if width and len(df.columns) > width:          # if wider than width
         df = df.iloc[:, (len(df.columns)-width):]  #    then drop first cols
     if dropna:                                     # drop empty rows
         df = df[df.count(axis=1) > 0]
+    df.columns = list(range(len(df.columns)))
     return df
 
-## Helpers to construct spread portfolio weights, and run backtests
+# construct spread portfolio weights
 def portfolio_sorts(stocks: Stocks,
                     label: str,
                     signals: Signals,
@@ -102,7 +111,7 @@ def portfolio_sorts(stocks: Stocks,
     """
     rebaldates = stocks.bd.date_range(rebalbeg, rebalend, 'endmo')
     holdings = dict()
-    for rebaldate in rebaldates:
+    for rebaldate in tqdm(rebaldates, desc=label):
 
         # check if this is a rebalance month
         if not months or (rebaldate//100)%100 in months or not holdings:
@@ -147,6 +156,7 @@ def portfolio_sorts(stocks: Stocks,
         holdings[rebaldate] = pd.concat(list(weights.values()), axis=0)
     return holdings
 
+# pipeline to run backtest
 def backtest_pipeline(backtest: BackTest,
                       stocks: Stocks,
                       holdings: DataFrame,
@@ -155,7 +165,7 @@ def backtest_pipeline(backtest: BackTest,
                       suffix: str = '',
                       overlap: int = 0,
                       outdir: str ='',
-                      num: int = 1) -> DataFrame:
+                      num: int = None) -> DataFrame:
     """wrapper to run a backtest pipeline, and (optionally) save file and .jpg
 
     Args:
@@ -184,7 +194,7 @@ def backtest_pipeline(backtest: BackTest,
         plt.savefig(outdir / (label + '.jpg'))
         
         # performance metrics from backtest to output
-        sub = ['alpha', 'excess', 'inforatio', 'sharpe', 'welch-t', 'welch-p']
+        sub = ['alpha', 'excess', 'appraisal', 'sharpe', 'welch-t', 'welch-p']
         with open(outdir / 'index.html', 'at') as f:
             f.write(f"<p><hr><h2>{label + suffix}</h2>\n<pre>\n")
             f.write("{}-{} {}\n".format(min(backtest.excess.index),
@@ -197,25 +207,24 @@ def backtest_pipeline(backtest: BackTest,
             f.write(f"\n</pre>\n<img src='{label}.jpg'><p>{datetime.now()}\n")
     return summary
 
-
+## Specify subset of signals to (optionally) generate and run backtest
 testable = {'new', 'monthly', 'weekly', 'daily', 'pstann', 'pstqtr',
-            'ibesf1', 'ibesltg', 'rdq_daily', 'ibesf1_pstqtr',
+            'ibesf1', 'ibesltg', 'rdq_daily', 'ibesf1_hist', 'ibesf1_pstqtr',
             'ibesq1_pstqtr', 'summarize'}  # subset of steps to rerun
 regenerate = True  # False to only run backtest (and not regenerate Signals)
-showable = False  # Whether to pause and show after generating plots
 
-def plt_show(showable=showable):
-    if showable:
-        plt.show()
+# specify this run
+testable = {}
 
-
+# (optionally) initialize webpages to output results
 if 'new' in testable:
     with open(outdir / 'index.html', 'wt') as f:
         f.write('<h1>Quant Factors</h1><br>')
         f.write(' <br>')
         f.write('<p>\n')
 
-# Momentum and divyld from CRSP monthly
+
+## Momentum and divyld from CRSP monthly
 if 'monthly' in testable:
     if regenerate:
         beg, end = 19251231, LAST_DATE
@@ -271,8 +280,9 @@ if 'monthly' in testable:
 
             # 6-month two-digit sic industry momentum (group means of 'mom1')
             df['sic2'] = df['siccd'] // 100
-            df = df.join(DataFrame(df.groupby(['sic2'])['mom1'].mean()).rename(
-                columns={'mom1': 'indmom'}), on='sic2', how='left')
+            df = df.join(DataFrame(df.groupby(['sic2'])['mom1'].mean())\
+                         .rename(columns={'mom1': 'indmom'}),
+                         on='sic2', how='left')
             df['permno'] = df.index
             df['rebaldate'] = rebaldate
             out.append(df.dropna(subset=['start','end2'])\
@@ -300,11 +310,10 @@ if 'monthly' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
 
-## Helper method to calculate beta, idiovol and price delay from weekly returns
+## Weekly returns-based price response signals        
+# helper to calculate beta, idiovol and price delay from weekly returns
 def regress(x: np.array, y: np.array) -> Tuple[float, float, float]:
     """helper method to calculate beta, idiovol and price delay
 
@@ -315,7 +324,7 @@ def regress(x: np.array, y: np.array) -> Tuple[float, float, float]:
     Returns:
       beta: slope from regression on market returns and intercept
       idiovol: mean squared error of residuals
-      pricedelay: increase of adjusted Rsq withfour market lags over without
+      pricedelay: increase of adjusted Rsq with four market lags over without
     """
     v = np.logical_not(np.isnan(y))
     y = y[v]
@@ -344,8 +353,6 @@ def regress(x: np.array, y: np.array) -> Tuple[float, float, float]:
             sse0 or np.nan,
             (1 -(R0 / R4)) if R0>0 and R4>0 else np.nan]
 
-    
-## Weekly returns-based price response signals
 if 'weekly' in testable:    
     beg, end = 19260101, LAST_DATE
     columns  = ['beta', 'idiovol', 'pricedelay']
@@ -407,10 +414,8 @@ if 'weekly' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
 
-    plt_show()
 
 ## Liquidity signals from daily stock returns
 if 'daily' in testable:
@@ -490,9 +495,7 @@ if 'daily' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
 
 ## Fundamental signals from Compustat Annual
 if 'pstann' in testable:
@@ -683,9 +686,7 @@ if 'pstann' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
 
 ## Fundamental signals from Compustat Quarterly
 if 'pstqtr' in testable:
@@ -771,9 +772,7 @@ if 'pstqtr' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix='(-)'*(leverage.get(label, 1) < 0))
-    plt_show()
 
 ## IBES Fiscal Year 1 signals: chfeps, chnanalyst, disp
 if 'ibesf1' in testable:
@@ -824,9 +823,7 @@ if 'ibesf1' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
 
 
 ## IBES Long-term Growth signals: fgr5yr
@@ -865,9 +862,7 @@ if 'ibesltg' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
     
 ## Announcement date (rdq) in Quarterly, linked to CRSP daily: ear, aeavol
 if 'rdq_daily' in testable:
@@ -934,11 +929,9 @@ if 'rdq_daily' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
 
-## IBES Fiscal Year 1 linked to Quarterly PSTAT: sfe
+## IBES Fiscal Year 1 linked to Quarterly PSTAT: sfeq
 if 'ibesf1_pstqtr' in testable:
     beg, end = 19760101, LAST_DATE
     monthnum = lambda d: ((d//10000)-1900)*12 + ((d//100)%100) - 1
@@ -959,18 +952,69 @@ if 'ibesf1_pstqtr' in testable:
                  .drop_duplicates(['permno', 'statpers'])
         out['monthnum'] = monthnum(out['statpers'])
         out = out.set_index(['permno', 'monthnum'], drop=False)
-        out['sfe'] = np.nan
+        out['sfeq'] = np.nan
 
         for num in range(4): # match ibes statpers to any datadate in last 4 mos
             df['monthnum'] = monthnum(df['datadate']) - num
             df = df.set_index(['permno', 'monthnum'], drop=False)
             out = out.join(df[['prccq']], how='left')
-            out['sfe'] = out['sfe'].where(out['sfe'].notna(),
+            out['sfeq'] = out['sfeq'].where(out['sfeq'].notna(),
                                           out['meanest'] / out['prccq'].abs())
             out = out.drop(columns=['prccq'])
 
         out['rebaldate'] = bd.endmo(out['statpers'])
-        n = signals.write(out.reset_index(drop=True), 'sfe', overwrite=True)
+        n = signals.write(out.reset_index(drop=True), 'sfeq', overwrite=True)
+        
+    rebalbeg, rebalend = 19760101, LAST_DATE
+    benchnames = ['Mkt-RF(mo)']
+    label = 'sfeq'
+    holdings = portfolio_sorts(crsp,
+                               label,
+                               SignalsFrame(signals.read(label)),
+                               rebalbeg,
+                               rebalend,
+                               window=3,
+                               months=[],
+                               leverage=leverage.get(label, 1))
+    excess = backtest_pipeline(backtest,
+                               crsp,
+                               holdings,
+                               label,
+                               benchnames,
+                               overlap=0,
+                               outdir=outdir, 
+                               suffix=(leverage.get(label, 1) < 0)*'(-)')
+
+
+## IBES Fiscal Year 1 linked to IBES price history: sfe
+if 'ibesf1_hist' in testable:
+    beg, end = 19760101, LAST_DATE
+    if regenerate:
+        # retrieve monthly price history
+        df = ibes.get_linked(dataset='history',
+                             fields=['price'],
+                             date_field='statpers')
+        hist = df.dropna()\
+                 .sort_values(['permno', 'statpers'])\
+                 .drop_duplicates(['permno', 'statpers'], keep='last')\
+                 .set_index(['permno', 'statpers'])
+
+        # retrieve monthly FY1 mean estimate
+        df = ibes.get_linked(dataset='summary',
+                             fields=['fpedats', 'meanest'],
+                             date_field='statpers',
+                             where="fpi='1' AND statpers <= fpedats")
+        out = df.dropna()\
+                .sort_values(['permno', 'statpers', 'fpedats'])\
+                .drop_duplicates(['permno', 'statpers'])\
+                .set_index(['permno', 'statpers'])
+
+        # join on [permno, statpers], and reindex on [permno, rebaldate]
+        out = out.join(hist[['price']], how='left').reset_index()
+        out['rebaldate'] = bd.endmo(out['statpers'])
+        out = out.set_index(['permno', 'rebaldate'])
+        out['sfe'] = out['meanest'].div(out['price'].abs())
+        n = signals.write(out.reset_index(), 'sfe', overwrite=True)
         
     rebalbeg, rebalend = 19760101, LAST_DATE
     benchnames = ['Mkt-RF(mo)']
@@ -991,24 +1035,20 @@ if 'ibesf1_pstqtr' in testable:
                                overlap=0,
                                outdir=outdir, 
                                suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
     
 ## IBES Fiscal Quarter 1, linked to Quarterly: sue
-#
-# TODO: 'sfe' and 'sue' (where meanest) should use ibes price (prccq restated?)
-#
 if 'ibesq1_pstqtr' in testable:
     columns = ['sue']
     numlag = 4
     end = LAST_DATE
 
-    if regenerate:    
+    if regenerate:
         # retrieve quarterly, keep [permno, datadate] key with non null prccq
         df = pstat.get_linked(dataset='quarterly',
                               fields=['prccq', 'cshoq', 'ibq'],
                               date_field='datadate',
                               where=f"datadate <= {end//100}31")
-        fund = df.dropna(subset=['prccq'])\
+        fund = df.dropna(subset=['ibq'])\
                  .sort_values(['permno', 'datadate', 'cshoq'])\
                  .drop_duplicates(['permno', 'datadate'])
         fund['rebaldate'] = bd.endmo(fund['datadate'], numlag)
@@ -1019,22 +1059,40 @@ if 'ibesq1_pstqtr' in testable:
                              fields=['fpedats', 'medest', 'actual'],
                              date_field='statpers',
                              where=" fpi = '6' AND statpers <= fpedats")
-        out = df.dropna()\
-                .sort_values(['permno', 'fpedats', 'statpers'])\
-                .drop_duplicates(['permno', 'fpedats'], keep='last')
-        out['rebaldate'] = bd.endmo(out['fpedats'], numlag)
-        out = out.set_index(['permno', 'rebaldate']).reindex(fund.index)
+        summ = df.dropna()\
+                 .sort_values(['permno', 'fpedats', 'statpers'])\
+                 .drop_duplicates(['permno', 'fpedats'], keep='last')
+        summ['rebaldate'] = bd.endmo(summ['fpedats'], numlag)
+        summ = summ.set_index(['permno', 'statpers'])
 
-        # initial sue with ibes surprise, scaled by compustat quarterly price
-        fund['sue'] = (out['actual'] - out['medest']) / fund['prccq'].abs()
+        # retrieve ibes price, then left join
+        df = ibes.get_linked(dataset='history',
+                             fields=['price'],
+                             date_field='statpers')
+        hist = df.dropna()\
+                 .sort_values(['permno', 'statpers'])\
+                 .drop_duplicates(['permno', 'statpers'], keep='last')
+        hist = hist.set_index(['permno', 'statpers'])
+        summ = summ.join(hist[['price']], how='left')
+        summ = summ.reset_index()\
+                   .set_index(['permno', 'rebaldate'])\
+                   .reindex(fund.index)
 
-        # lag(4) difference in compustat quarterly for missing surprise
+        # sue with ibes surprise and price
+        fund['sue'] = (summ['actual'] - summ['medest']) / summ['price'].abs()
+
+        # sue with ibes surprice and compustat quarterly price
+        fund['sue'] = fund['sue']\
+            .where(fund['sue'].notna(),
+                   (summ['actual'] - summ['medest']) / fund['prccq'].abs())
+
+        # sue with lag(4) difference in compustat quarterly and price
         lag = fund.shift(4, fill_value=0)
-
         fund['sue'] = fund['sue']\
             .where(fund['sue'].notna() | (lag['permno'] != fund['permno']),
                    ((fund['ibq'] - lag['ibq']) /
                     (fund['prccq'] * fund['cshoq'])).abs())
+
         signals.write(fund.reset_index(drop=True), 'sue', overwrite=True)
 
     rebalbeg, rebalend = 19760101, LAST_DATE
@@ -1055,11 +1113,10 @@ if 'ibesq1_pstqtr' in testable:
                                    benchnames,
                                    overlap=0,
                                    outdir=outdir,
-                                   num=num+1,
                                    suffix=(leverage.get(label, 1) < 0)*'(-)')
-    plt_show()
 
 ## Summarize all results
+# sorted by Welch's t-value to test for difference in pre- and post-2002 mean
 if 'summarize' in testable:
     zoo = backtest.read().sort_values(['begret', 'permno'])
     r = []
@@ -1076,11 +1133,11 @@ if 'summarize' in testable:
             'Start': excess['ret'].index[0],
             'Sharpe Ratio': excess['annualized']['sharpe'],
             'Alpha': excess['annualized']['alpha'],
-            'Info Ratio': excess['annualized']['inforatio'],
+            'Appraisal Ratio': excess['annualized']['appraisal'],
             'Avg Ret': excess['ret']['excess'].mean(),
             'Vol': excess['ret']['excess'].std(ddof=0),
             'Welch-t': excess['annualized']['welch-t'],
-            'InfoRatio2002': post['annualized']['inforatio'],
+            'Appraisal2002': post['annualized']['appraisal'],
             'Ret2002': post['ret']['excess'].mean(),
             'Vol2002': post['ret']['excess'].std(ddof=0),            
             'Best' : excess['ret']['excess'].idxmax(),
@@ -1101,3 +1158,7 @@ if 'summarize' in testable:
         f.write(show(df.loc[:, 'Best':],
                      latex=True,
                      caption="Factor Performance Summary Part II"))
+    pd.set_option('display.max_rows', None)
+    show(df, **SHOW)
+
+
