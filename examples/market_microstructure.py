@@ -1,8 +1,8 @@
 """Market Microstructure: intraday liquidity from tick data
 
-- NYSE Daily TAQ tick data: Lee-Ready tick test
-- Intraday spreads: quoted, effective, price impact, realized
-- Intraday volatility: variance ratio, Parkinsons, Klass-Garman
+- NYSE Daily TAQ tick data
+- Intraday spreads: quoted, effective, price impact, realized; Lee-Ready tick test
+- Intraday volatility: variance ratio, Parkinsons (HL) and Klass-Garman (OHLC) methods
 
 Copyright 2023, Terence Lim
 
@@ -21,10 +21,15 @@ from finds.taq import opentaq, itertaq, bin_trades, bin_quotes, TAQ
 from finds.display import plot_time, row_formatted, show
 from finds.recipes import weighted_average, Volatility
 from conf import credentials, paths, VERBOSE
-
-%matplotlib qt
-VERBOSE = 1      # 0
-SHOW = dict(ndigits=4, latex=True)  # None
+VERBOSE = 0
+SHOW = dict(ndigits=4, latex=None)      # show DataFrame by just returning it
+try:  # delete thru next if jupyter notebook
+    get_ipython().magic(u"%matplotlib qt")  # startup magic if IPython shell
+    VERBOSE = 1
+    SHOW = dict(ndigits=4, latex=True)  # show DataFrame as latex
+except: # 
+    SHOW = dict(ndigits=4, latex=False) # show DataFrame as string
+# %matplotlib inline
 
 sql = SQL(**credentials['sql'], verbose=VERBOSE)
 user = SQL(**credentials['user'], verbose=VERBOSE)
@@ -38,65 +43,15 @@ open_t = pd.to_datetime('1900-01-01T9:30')    # exclude <=
 close_t = pd.to_datetime('1900-01-01T16:00')  # exclude >
 EPSILON = 1e-15
 
-def volatility_HL(high: DataFrame, low: DataFrame,
-                  last: DataFrame = None) -> DataFrame:
-    """Compute Parkinson volatility from high and low prices
-    
-    Args:
-        high: DataFrame of high prices (observations x stocks)
-        low: DataFrame of low prices (observations x stocks)
-        last: DataFrame of last prices, for forward filling if high low missing
+## Compute intraday liquidity measures
 
-    Returns:
-        Estimated volatility
-    """
-    if last is not None:
-        high = high.where(high.notna(), last.shift())
-        low = low.where(high.notna(), last.shift())
-    return np.sqrt((np.log(high / low)**2).mean(axis=0, skipna=True)
-                   / (4 * np.log(2)))
-
-    
-def volatility_OHLC(first: DataFrame, high: DataFrame, low: DataFrame,
-                    last: DataFrame, ffill: bool = False,
-                    zero_mean: bool = True) -> DataFrame:
-    """Compute Garman-Klass or Rogers-Satchell (non zero mean) OHLC volatility
-    
-    Args:
-        first: DataFrame of open prices (observations x stocks)
-        high: DataFrame of high prices (observations x stocks)
-        low: DataFrame of low prices (observations x stocks)
-        last: DataFrame of close prices (observations x stocks)
-
-    Returns:
-        Estimated volatility 
-    """
-    if ffill:
-        last = last.ffill()
-        high = high.where(high.notna(), last.shift())
-        low = low.where(low.notna(), last.shift())
-        first = low.where(first.notna(), last.shift())
-    if zero_mean:  # Garman-Klass (assuming zero mean drift)
-        v = ((np.log(high / low)**2) / 2
-             - (2*np.log(2) - 1) * (np.log(last / first)**2))\
-             .mean(axis=0, skipna=True)
-    else:          # Rogers-Satchell (non zero mean drift)
-        v = ((np.log(high / close) * np.log(high / close))
-             + (np.log(high / close) * np.log(high / close)))\
-             .mean(axis=0, skipna=True)
-    return np.sqrt(v)
-
-
-    
-
-# Loop through the sample TAQ data dates available from NYSE and collect info
+# loop over stocks in TAQ daily
 shareclass = []
 daily_all = []
 
 bins = {k: [] for k in ['effective', 'realized', 'impact',
                         'quoted', 'volume', 'offersize', 'bidsize',
                         'ret', 'retq', 'counts']}
-tic = time.time()
 intervals = ([(v, 's') for v in [1, 2, 5, 15, 30]]
              + [(v, 'm') for v in [1, 2, 5]])
 dates = [20191007, 20191008, 20180305, 20180306]
@@ -138,24 +93,42 @@ for d, date in enumerate(dates):
 
         # Compute and collect daily and bin statistics at all intervals
         daily = header.copy()   # to collect current stock's daily stats
+
+        # Compute effective spreads by large and small trade sizes
+        med_volume = mast['Round_Lot'] * (cq['Best_Bid_Size'].median()
+                                          + cq['Best_Offer_Size'].median()) / 2.
+        data = ct.loc[(ct.index > open_t) & (ct.index < close_t),
+                      ['Trade_Price', 'Prevailing_Mid', 'Trade_Volume']]
+        eff_spr = data['Trade_Price'].div(data['Prevailing_Mid']).sub(1).abs()
+        eff_large = eff_spr[data['Trade_Volume'].ge(med_volume).to_numpy()]
+        daily['large_trades'] = len(eff_large)
+        daily['large_volume'] = data.loc[data['Trade_Volume'].ge(med_volume),
+                                'Trade_Volume'].mean()
+        daily['large_spread'] = eff_large.mean()
+        eff_small = eff_spr[data['Trade_Volume'].lt(med_volume)]
+        daily['small_trades'] = len(eff_small)
+        daily['small_volume'] = data.loc[data['Trade_Volume'].lt(med_volume),
+                                'Trade_Volume'].mean()
+        daily['small_spread'] = eff_small.mean()
+
         v, u = intervals[-1]
         for (v, u) in intervals:
             bt = bin_trades(ct, v, u, open_t=open_t, close_t=close_t)
             bq = bin_quotes(cq, v, u, open_t=open_t, close_t=close_t)
             daily[f"tvar{v}{u}"] = bt['ret'].var(ddof=0) * len(bt)
-            daily[f"tvarHL{v}{u}"] = ((volatility_HL(bt['maxtrade'],
+            daily[f"tvarHL{v}{u}"] = ((Volatility.HL(bt['maxtrade'],
                                                     bt['mintrade'])**2)
                                       * len(bt))
-            daily[f"tvarOHLC{v}{u}"] = ((volatility_OHLC(bt['first'],
+            daily[f"tvarOHLC{v}{u}"] = ((Volatility.OHLC(bt['first'],
                                                          bt['maxtrade'],
                                                          bt['mintrade'],
                                                          bt['last'])**2)
                                         * len(bt))
             daily[f"qvar{v}{u}"] = bq['retq'].var(ddof=0) * len(bq)
-            daily[f"qvarHL{v}{u}"] = ((volatility_HL(bq['maxmid'],
+            daily[f"qvarHL{v}{u}"] = ((Volatility.HL(bq['maxmid'],
                                                      bq['minmid'])**2)
                                       * len(bq))
-            daily[f"qvarOHLC{v}{u}"] = ((volatility_OHLC(bq['firstmid'],
+            daily[f"qvarOHLC{v}{u}"] = ((Volatility.OHLC(bq['firstmid'],
                                                          bq['maxmid'],
                                                          bq['minmid'],
                                                          bq['mid'])**2)
@@ -173,7 +146,6 @@ for d, date in enumerate(dates):
         for s in ['volume', 'offersize', 'bidsize', 'ret', 'retq', 'counts']:
             bins[s].append({**header,
                             **df[s].to_dict()})
-        #print(date, d, len(daily), int(time.time()-tic), 'secs')
 
         # Collect daily means
         daily.update(df[['bidsize', 'offersize', 'quoted', 'mid']].mean())
@@ -185,40 +157,33 @@ for d, date in enumerate(dates):
         #break
     quotes.close()
     trades.close()
-    print(d, date, time.time() - tic)
     #break
 
+# combine into large dataframe
 daily_df = DataFrame(daily_all)
 bins_df = {k: DataFrame(bins[k]) for k in bins.keys()}
 
-if True:
-    import pickle
-    with open(paths['scratch'] / 'tick.daily', 'wb') as outfile:
-        pickle.dump(daily_df, outfile)
-    with open(paths['scratch'] / 'tick.bins', 'wb') as outfile:
-        pickle.dump(bins_df, outfile)
-    with open(paths['scratch'] / 'tick.shrcls', 'wb') as outfile:
-        pickle.dump(shareclass, outfile)
-if False:    
-    import pickle
-    with open(paths['scratch'] / 'tick.daily', 'rb') as f:
-        daily_df = pickle.load(f)
-    with open(paths['scratch'] / 'tick.bins', 'rb') as f:
-        bins_df = pickle.load(f)
+### Save and fetch intermediate extracted data    
+from finds.unstructured import Store
+store = Store(paths['scratch'])
+if False:
+    store.dump(daily_df, 'tick.daily')
+    store.dump(bins_df, 'tick.bins')
+    store.dump(shareclass, 'tick.shrcls')
+if True:    
+    daily_df = store.load('tick.daily')
+    bins_df = store.load('tick.bins')
 
 
-# Daily average of liquidity metrics in means, by size
+## Daily average of liquidity metrics, by size
 
-## Group by market cap (NYSE deciles 1-3, 4-6, 7-9, 10) and exchange listed
+# group by market cap (NYSE deciles 1-3, 4-6, 7-9, 10) and exchange listed
 daily_df['Size'] = pd.cut(daily_df['decile'],
                           [0, 3.5, 6.5, 9.5, 11],
                           labels=['large', 'medium', 'small', 'tiny'])
-daily_df['Exchange'] = pd.cut(daily_df['exchcd'],
-                              [0, 2.5, 4],
-                              labels=['NYSE','NASDAQ'])
-groupby = daily_df.groupby(['Size', 'Exchange'])
+groupby = daily_df.groupby(['Size'])
 
-## Collect results for each metric
+# collect results for each metric
 results = {}    # to collect results as dict of {column: Series}
 formats = {}    # and associated row formatter string
 results.update(groupby['mid']\
@@ -226,48 +191,66 @@ results.update(groupby['mid']\
                .rename('Number of Stock/Days').to_frame())
 formats.update({'Number of Stock/Days': '{:.0f}'})
 
-result = groupby[['mid', 'vwap']].median()   # .quantile(), and range
+result = groupby[['mid', 'vwap']].mean()   # .quantile(), and range
 result.columns = ['Midquote Price', "VWAP"]
 formats.update({k: '{:.2f}' for k in result.columns})
 results.update(result)
 
-result = groupby[['counts', 'volume']].median()
+result = groupby[['counts', 'volume']].mean()
 result.columns = ['Number of trades', "Volume (shares)"]
 formats.update({k: '{:.0f}' for k in result.columns})
 results.update(result)
 
-result = np.sqrt(groupby[['tvar15m', 'qvar15m', 'tvarHL15m', 'qvarHL15m',
-                          'tvarOHLC15m', 'qvarOHLC15m']].median())
+result = np.sqrt(groupby[['tvar5m', 'qvar5m', 'tvarHL5m', 'qvarHL5m',
+                          'tvarOHLC5m', 'qvarOHLC5m']].mean())
 result.columns = ['Volatility(trade price)', "Volatility(midquote)",
                   'Volatility(HL trade price)', "Volatility(HL midquote)",
                   'Volatility(OHLC trade price)', "Volatility(OHLC midquote)"]
 formats.update({k: '{:.4f}' for k in result.columns})
 results.update(result)
 
-result = groupby[['offersize', 'bidsize']].median()
+result = groupby[['offersize', 'bidsize']].mean()
 result.columns = [s.capitalize() + ' (lots)' for s in result.columns]
 formats.update({k: '{:.1f}' for k in result.columns})
 results.update(result)
 
 spr = ['quoted', 'effective', 'impact', 'realized']
-result = groupby[spr].median()
+result = groupby[spr].mean()
 result.columns = [s.capitalize() + ' $ spread' for s in spr]
 formats.update({k: '{:.4f}' for k in result.columns})
 results.update(result)
 
 rel = [s.capitalize() + ' (% price)' for s in spr]
 daily_df[rel] = daily_df[spr].div(daily_df['mid'], axis=0)  # scale spreads
-result = 100*groupby[rel].median()
+result = 100*groupby[rel].mean()
 formats.update({k: '{:.4f}' for k in result.columns})
 results.update(result)
 
-## display table of results
+# summarize large and small trade effective spreads
+spr = ['large_spread', 'small_spread']
+result = 100*groupby[spr].mean()
+result.columns = ['Large trade (% spread) ', 'Small trade (% spread) ']
+formats.update({k: '{:.4f}' for k in result.columns})
+results.update(result)
+
+spr = ['large_trades', 'small_trades']
+result = groupby[spr].mean()
+result.columns = ['Large trade (# trades) ', 'Small trade (# trades) ']
+formats.update({k: '{:.0f}' for k in result.columns})
+results.update(result)
+
+spr = ['large_volume', 'small_volume']
+result = groupby[spr].mean()
+result.columns = ['Large trade (avg volume) ', 'Small trade (avg volume) ']
+formats.update({k: '{:.0f}' for k in result.columns})
+results.update(result)
+
+# display table of results
 show(row_formatted(DataFrame(results).T, formats),
-     caption="Average Liquidity by Market Cap/Exchange Listed", **SHOW)
+     caption="Average Liquidity by Market Cap", **SHOW)
 
 
-
-# Summarize unchanged midquote and last trade price, and zero-volume bins
+## Summarize unchanged midquote and trade price, and zero-volume bins
 def plot_helper(result, xticks, keys, legend, xlabel, title, ylim=[],
                 figsize=(5,3), num=1, fontsize=8):
     """helper to plot bar graphs"""
@@ -289,8 +272,8 @@ def plot_helper(result, xticks, keys, legend, xlabel, title, ylim=[],
     plt.tight_layout()
     return ax
 
-xticks = [f"{v}{u}" for v, u in intervals]                # x-axis: bin lengths
-keys = [a + '\n' + b for a, b in groupby.indices.keys()]  # legend labels
+xticks = [f"{v}{u}" for v, u in intervals]   # x-axis: bin lengths
+keys = list(groupby.indices.keys())          # legend labels
 
 labels = [f"tunch{v}{u}" for v, u in intervals]
 result = groupby[labels].median()*100
@@ -299,7 +282,7 @@ ax = plot_helper(result.T,
                  xticks=xticks,
                  xlabel="Bin Length",
                  keys=keys,
-                 legend='Size/Exch',
+                 legend='Size',
                  num=1)
 plt.savefig(imgdir / 'tunch.jpg')
 
@@ -310,7 +293,7 @@ ax = plot_helper(result.T,
                  xticks=xticks,
                  xlabel="Bin Length",
                  keys=keys,
-                 legend='Size/Exch',
+                 legend='Size',
                  num=2)
 plt.savefig(imgdir / 'qunch.jpg')
 
@@ -321,7 +304,7 @@ ax = plot_helper(result.T,
                  xticks=xticks,
                  xlabel="Bin Length",
                  keys=keys,
-                 legend='Size/Exch',
+                 legend='Size',
                  num=3)
 plt.savefig(imgdir / 'tzero.jpg')
 
@@ -333,7 +316,7 @@ ax = plot_helper(result.T,
                  xticks=xticks,
                  xlabel="Bin Length",
                  keys=keys,
-                 legend='Size/Exch',
+                 legend='Size',
                  num=4)
 plt.savefig(imgdir / 'tvratio.jpg')
     
@@ -344,7 +327,7 @@ ax = plot_helper(result.T,
                  xticks=xticks,
                  xlabel="Bin Length",
                  keys=keys,
-                 legend='Size/Exch',
+                 legend='Size',
                  num=5)
 plt.savefig(imgdir / 'tstd.jpg')
 
@@ -355,12 +338,12 @@ ax = plot_helper(result.T,
                  xticks=xticks,
                  xlabel="Bin Length",
                  keys=keys,
-                 legend='Size/Exch',
+                 legend='Size',
                  num=6)
 plt.savefig(imgdir / 'qstd.jpg')
 
 
-# Compare methods of volatility estimates, by interval and market cap/exchange
+## Compare methods of volatility estimates, by interval and market cap
 for ifig, (split_label, split_df) in enumerate(groupby):
     vol_df = np.sqrt(split_df[[c for c in daily_df.columns if "qvar" in c]])
     result = []
@@ -385,26 +368,23 @@ for ifig, (split_label, split_df) in enumerate(groupby):
                      num=1+ifig,
                      ylim=[0.0 ,0.05],
                      legend='method')
-    plt.savefig(imgdir / 'tick_' + "_".join(split_label) + figext))
+    plt.savefig(imgdir / ('tick_' + "_".join(split_label) + '.jpg'))
 
 
-# Intraday spreads, depths and volumes
+## Plot intraday spreads, depths and volumes
 keys = ['effective', 'realized', 'impact', 'quoted', 
         'volume', 'counts', 'offersize', 'bidsize']
 for num, key in enumerate(keys):
     df = bins_df[key].drop(columns=['Round_Lot', 'Symbol'])
     df.index = list(zip(df['permno'], df['date']))
         
-    # Group by market cap and exchange
+    # Group by market cap
     df['Size'] = pd.cut(df['decile'],
                         [0, 3.5, 6.5, 9.5, 11],
                         labels=['large', 'medium', 'small', 'tiny'])
-    df['Exchange'] = pd.cut(df['exchcd'],
-                            [0, 2.5, 4],
-                            labels=['NYSE','NASDAQ'])
     df = df.drop(columns=['date', 'permno', 'decile', 'exchcd', 'siccd'])\
            .dropna()\
-           .groupby(['Size', 'Exchange'])\
+           .groupby(['Size'])\
            .median().T
     fig, ax = plt.subplots(1, 1, num=num+1, clear=True, figsize=(5, 3))
     plot_time(df.iloc[1:],
@@ -413,7 +393,7 @@ for num, key in enumerate(keys):
               fontsize=8,
               loc='upper center',
               legend1=None)
-    ax.legend([a + '\n' + b for a,b in df.columns], 
+    ax.legend(df.columns, 
               loc='upper left', bbox_to_anchor=(1.0, 1.0), 
               fontsize=8)
     plt.subplots_adjust(right=0.8)
