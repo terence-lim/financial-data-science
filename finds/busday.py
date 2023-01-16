@@ -32,10 +32,15 @@ from datetime import datetime
 from finds.database import SQL
 
 _VERBOSE = 1
-_MAXDATE = 20221231
+_MAXDATE = 20251231
 
 # List of anticipated NYSE holidays to remove
-_hols = ['20220530', '20220704', '20220905', '20221124','20221226']
+_hols = ['20230102', '20230116', '20230220', '20230407', '20230529',
+         '20230619', '20230704', '20230904', '20231123', '20231225',
+         '20240101', '20240115', '20240219', '20240329', '20240527',
+         '20240619', '20240704', '20240902', '20241128', '20241225',
+         '20250101', '20250129', '20250217', '20250418', '20250526', 
+         '20250619', '20250704', '20250901', '20251127', '20251225'] 
 
 def _map(func, dates, *args, **kwargs) -> List:
     """Helper classmethod to apply a func to each date in list
@@ -126,6 +131,7 @@ class BusDay:
 
     @staticmethod
     def today() -> int:
+        """Return today's int date"""
         return BusDay.to_date(datetime.now())
 
     @staticmethod

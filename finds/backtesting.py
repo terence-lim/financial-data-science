@@ -11,7 +11,6 @@ MIT License
 """
 import sys
 from os.path import dirname, abspath
-import time
 import numpy as np
 import scipy
 from matplotlib import dates as mdates
@@ -28,7 +27,7 @@ from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, \
 from typing import Dict, Any, Tuple, List
 from finds.structured import Structured, Stocks, Benchmarks
 from finds.database import SQL
-from finds.recipes import least_squares, fft_align, maximum_drawdown
+from finds.recipes import least_squares, FFT, maximum_drawdown
 from finds.display import plot_date, plot_bands
 
 _VERBOSE = 1
@@ -57,28 +56,31 @@ class EventStudy(Structured):
       bench: Benchmark dataset of index returns for market adjustment
       stocks: Stocks structured dataset containing stock returns
       max_date: last date to run event study
-      table: name of table in user database to append summary results to
+      table: physical name of table in user database to append summary results
     """
     def __init__(self, sql: SQL, bench: Benchmarks, stocks: Stocks,
                  max_date: int, table: str = 'events'):
-        """Initialize for event study calculations"""
-        tables = {'events':
+        """Initialize class instance for event study calculations"""
+        tables = {'events':        # define summmary table
                   sql.Table(table,
-                            Column('event', String(32), primary_key=True),
+                            Column('label', String(32), primary_key=True),
                             Column('model', String(32), primary_key=True),
                             Column('beg', Integer),
                             Column('end', Integer),
                             Column('rows', Integer),
                             Column('days', Integer),
+                            Column('rho', Float),
+                            Column('tau', Float),
                             Column('effective', Float),
                             Column('window', Float),
                             Column('window_t', Float),
                             Column('post', Float),
-                            Column('post_t', Float))}
+                            Column('post_t', Float),
+                            Column('created', Integer))}
         super().__init__(sql=sql,
                          bd=bench.bd,
                          tables=tables,
-                         identifier='event',
+                         identifier='label',
                          name='EventStudy')
         self.bench = bench
         self.stocks = stocks
@@ -86,12 +88,12 @@ class EventStudy(Structured):
         self.summary_ = {}   # to hold summary statistics
         self.plot_ = {}      # to hold plottable series
 
-    def __call__(self, event: str, df: DataFrame, left: int,
+    def __call__(self, label: str, df: DataFrame, left: int,
                  right: int, post: int, date_field: str) -> DataFrame:
-        """Retrieve event window market-adjusted returns where valid/available
+        """Construct event window market-adjusted returns where valid/available
 
         Args:
-          event: Unique label for this study
+          label: Unique label (used for graph labels and table name)
           df:  Input DataFrame of stock identifiers and event dates
           left: Start (inclusive) of announcement window around event date
           right: End (inclusive) of announcement window around event date
@@ -143,9 +145,13 @@ class EventStudy(Structured):
         self.right = right
         self.post = post
         self.rows = rets[['permno', 'date']]
-        self.event = str(event)
+        self.label = str(label)
         return self.rows
 
+    def _event_key(self, label: str) -> str:
+        """Construct name of table to read/write event returns, given label"""
+        return self['events'].key + '_' + str(self.label),
+    
     def write(self) -> int:
         """Store daily cumulative returns in new user table"""
         cols = list(range(self.post - self.left + 1))
@@ -155,7 +161,7 @@ class EventStudy(Structured):
                                      value_name=ar) for ar in ['car','bhar']]
         df = pd.concat([df[0], df[1].iloc[:, -1]], axis=1)
         df['num'] -= (self.right - self.left)
-        table = self.sql.Table(self['events'].key + '_' + str(self.event),
+        table = self.sql.Table(self._event_key(self.label),
                                Column('permno', Integer),
                                Column('date', Integer),
                                Column('num', Integer),
@@ -167,7 +173,7 @@ class EventStudy(Structured):
         """Fetch daily cumulative abnormal returns series from user table
 
         Args:
-            event: name suffix of table to save in
+            label: name suffix of table to retrieve from
             left: offset of left announcement window
             right: offet of right announcement window
             post: offset of right post-announcement window
@@ -175,7 +181,7 @@ class EventStudy(Structured):
         Returns:
             DataFrame of car and bhar daily cumulative returns
         """
-        df = self.read_dataframe(self['events'].key + '_' + str(self.event))
+        df = self.read_dataframe(self._event_key(self.label),)
         df['num'] += (right - left)
         self.car = df.pivot(index=['permno', 'date'],
                             columns=['num'],
@@ -193,11 +199,11 @@ class EventStudy(Structured):
     
     def fit(self, model: str = 'scar', rows: List[int] = [], 
             rho : float | None = None) -> Dict[str, Dict]:
-        """Compute summary statistics from cumulative ar or bhar
+        """Compute car or bhar, and summary statistics from subset of obs
 
         Args:
-            model: names of predefined model to compute summary statistics
-            rows: Subset of rows to evaluate; empty selects all rows
+            model: name of predefined model to compute summary statistics
+            rows: Subset of rows to evaluate; empty list selects all rows
             car: Whether to evaluate CAR (True) or BHAR (False)
             rho: assumed correlation of event returns.  If None, then compute
                  from max convolution of post-announcement returns
@@ -221,13 +227,11 @@ class EventStudy(Structured):
         Notes:
 
         - Kolari and Pynnonen (2010) eqn[3] cross-sectionally adjusted 
-          Patell or BMP with average correlation: 
-          multiply variance by 1 + (p*(n-1))
-        - Kolari, Pape, Pynnonen (2018) eqn[15] adjusted by average overlap 
-          and average covariance ratio (i.e. correlation)
+          Patell or BMP with avg correlation: multiply variance by 1 + (p*(n-1))
+        - Kolari, Pape, Pynnonen (2018) eqn[15] adjusted by average overlap (tau)
+          and average covariance ratio (i.e. correlation rho)
         """
         #assert model in self._models
-        tic = time.time()
         window = self.right - self.left + 1
         cols = ['date'] + list(range(self.post-self.left+1))
         is_car = model.endswith('car') 
@@ -247,7 +251,7 @@ class EventStudy(Structured):
 
         # Average Cumulative AR
         means = cumret.mean()
-        
+
         # 1. compute the average overlap (truncate at 0) of all pairs
         date_idx = self.bd.date_range(min(cumret.index), max(cumret.index))
         date_idx = Series(index=date_idx, data=np.arange(len(date_idx)))
@@ -258,20 +262,19 @@ class EventStudy(Structured):
              x[x < 0] = 0
              overlap.extend(x.tolist())
         tau = np.mean(overlap) / D
-        
+
         # 2. compute ratio of average covariance to variance as average max corr
         if rho is None:
             rets = np.log(1+cumret.where(cumret > -0.99, -0.99))\
                      .diff(axis=1)\
                      .iloc[:, window:]\
                      .fillna(0)
-            corr = fft_align(rets.values.T, corr=True)
+            corr, disp = FFT.align(rets.values.T)
             rho = np.mean(corr)
 
         # 3. apply simplification of eqn(15) of Kolari et al 2018
         effective = len(cumret) / (1 + (rho * tau * (len(cumret) - 1)))
 
-        #_print('Elapsed', time.time() - tic, 'secs')
         # - unscaled for economic, scaled for statistical
         # - ADJ-BMP MKT method is simple xc t-test of SCAR adjusted by avg corr
         # - table show actual means, but t-values of SCAR with and without corr
@@ -292,6 +295,8 @@ class EventStudy(Structured):
                             'post_t'    : post.mean() / post_sem,
                             'beg'       : b,
                             'end'       : e,
+                            'rho'       : rho,
+                            'tau'       : tau,
                             'effective' : int(effective),
                             'days'      : len(cumret),
                             'rows'      : n}}
@@ -314,33 +319,34 @@ class EventStudy(Structured):
         table = self['events']     # summary table to write to
         table.create(checkfirst=True)
         if overwrite:
-            delete = table.delete().where(table.c['event'] == self.event)
+            delete = table.delete().where(table.c['label'] == self.label)
             self.sql.run(delete)
         summ = DataFrame.from_dict(self.summary_, orient='index')\
                         .reset_index()\
                         .rename(columns={'index': 'model'})
-        summ['event'] = self.event
+        summ['label'] = self.label
+        summ['created'] = self.bd.today()
         self.sql.load_dataframe(table.key, summ)
         return summ
 
-    def read_summary(self, event: str = '', model: str = ''):
+    def read_summary(self, label: str = '', model: str = ''):
         """Load event study summary from database
 
         Args:
-            event: Name of event to retrieve; if blank, retrieve all events
+            label: Name of event to retrieve; if blank, retrieve all events
             model: Name of model to retrieve; if blank, retrieve all models
 
         Returns:
             DataFrame of rows written
         """
-        s = [f"{k}='{v}'" for k, v in [['event', event], ['model', model]] if v]
+        s = [f"{k}='{v}'" for k, v in [['label', label], ['model', model]] if v]
         where = bool(s) * ('where ' + ' and '.join(s))
         q = f"SELECT * from {self['events'].key} {where}"
         return self.sql.read_dataframe(q)
 
     def plot(self, model: str, drift: bool = False,
              ax: Any = None, loc: str = 'best', title: str = '',
-             c: str = 'C0', vline: List[float] = [],
+             c: str = 'C0', vline: List[float] = [], fontsize: int = 10,
              hline: List[float] = [], width: float = 1.96):
         """Plot cumulative abnormal returns, drift and confidence bands
 
@@ -354,6 +360,7 @@ class EventStudy(Structured):
             vline: List of x-axis points to plot vertical line
             hline: List of y-axis points to plot horizontal line
             width: Number of std errs for confidence bands
+            fontsize: Base font size
         """
         ax = ax or plt.gca()
         window = self.right - self.left + 1
@@ -372,12 +379,12 @@ class EventStudy(Structured):
                    hline=hline,
                    vline=vline,
                    title=title,
-                   c=c, width=width,
+                   c=c, width=width, fontsize=fontsize,
                    legend=["CAR" if p['car'] else "BHAR", f"{width} stderrs"],
                    xlabel=(f"{int(s['beg'])}-{int(s['end'])}"
                            + f" (n={int(s['rows'])},"
-                           + f" dates={int(s['days'])},"
-                           + f" effective={int(s['effective'])})"),
+                           + f" days={int(s['days'])},"
+                           + f" eff={int(s['effective'])})"),
                    ylabel="CAR" if p['car'] else "BHAR",
                    ax=ax)
         plt.tight_layout(pad=3)
@@ -710,7 +717,7 @@ class BackTest(Structured):
         - 'excess': annualized excess (of portfolio weight*riskfree) return
         - 'sharpe': annualized sharpe ratio
         - 'alpha': annualized alpha
-        - 'inforatio': annualized information ratio
+        - 'appraisal': annualized appraisal ratio
         - 'welch-t': t-stat for structural break after 2002
         - 'welch-p': p-value for structural break after 2002
         - 'turnover': annualized total turnover rate
@@ -741,7 +748,7 @@ class BackTest(Structured):
             'excess': mult * np.mean(p[self.label]),
             'sharpe': np.sqrt(mult)*p[self.label].mean() / p[self.label].std(),
             'alpha': mult * r.params[0],
-            'inforatio': np.sqrt(mult) * r.params[0] / np.std(r.resid),
+            'appraisal': np.sqrt(mult) * r.params[0] / np.std(r.resid),
             'welch-t': welch[0],
             'welch-p': welch[1],
             'turnover': np.mean(self.perf.loc[d, ['buys','sells']]\
@@ -755,7 +762,8 @@ class BackTest(Structured):
         return self.excess
 
     def plot(self, label: str = '', num: int = 1, flip: bool | None = False,
-             drawdown: bool = False, figsize: Tuple[float, float] = (10, 5)):
+             drawdown: bool = False, figsize: Tuple[float, float] = (10, 5),
+             marker: str | None = '', fontsize: int = 9):
         """Plot time series of excess vs benchmark returns
 
         Args:
@@ -783,14 +791,16 @@ class BackTest(Structured):
                                        figsize=figsize, num=num)
         plot_date(y1=excess.cumsum(),
                   label1='cumulative ret',
-                  marker=None,
+                  marker=marker,
                   ax=ax1,
+                  fontsize=fontsize,
                   points=(maximum_drawdown(self.perf['excess'])
                           if drawdown else None))
         plot_date(y1=perf[['longs','shorts']],
                   y2=(perf['buys'] + perf['sells']) / 4, 
                   ax=ax2,
-                  marker=None,
+                  marker=marker,
+                  fontsize=fontsize,
                   ls1='-',
                   ls2=':',
                   cn=excess.shape[1],

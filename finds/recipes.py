@@ -48,118 +48,127 @@ def check_cuda():
 #  FFT convolutions and correlations
 #
 ######################
-def _normalize(X: np.ndarray) -> np.ndarray:
-    """Demean columns and divide by norm"""
-    X = X - np.mean(X, axis=0)
-    X = X / np.linalg.norm(X, axis=0)
-    return X
+class FFT:
+    @staticmethod
+    def _normalize(X: np.ndarray) -> np.ndarray:
+        """Demean columns and divide by norm"""
+        X = X - np.mean(X, axis=0)
+        X = X / np.linalg.norm(X, axis=0)
+        return X
 
-def fft_correlation(X: np.ndarray, Y: np.ndarray | None) -> Series:
-    """Compute cross-correlation of two series, using Convolution Theorem
+    def correlation(X: np.ndarray, Y: np.ndarray | None) -> Series:
+        """Compute cross-correlations of two series, using Convolution Theorem
 
-    Notes:
+        Args:
+            X, Y: series of observations
 
-    - Cross-correlation[n] = \sum_m^N f[m] g[n + m]
-    - equals Convolution (f * g)[n] = \sum_m^N f[m] g[n - m]
+        Returns:
+            Series of cross-correlation values at every displacement lag
 
-    Examples:
+        Notes:
 
-    >>> statsmodels.tsa.stattools.acf(X) 
-    >>> fft_correlate(X, X)
-    """
-    N = len(X)
-    if Y is None:
-        Y = X
-    assert len(Y) == len(X)
+        - Cross-correlation[n] = \sum_m^N f[m] g[n + m]
+        - equals Convolution (f * g)[n] = \sum_m^N f[m] g[n - m]
+
+        Examples:
+
+        >>> statsmodels.tsa.stattools.acf(X) 
+        >>> fft_correlate(X, X)
+        """
+        N = len(X)
+        if Y is None:
+            Y = X
+        assert len(Y) == len(X)
     
-    # normalize and zero pad to length 2N
-    X = np.pad(_normalize(X.reshape(-1, 1)), [(0, N), (0,0)])
-    Y = np.flipud(np.pad(_normalize(Y.reshape(-1, 1)), [(0, N), (0,0)]))
+        # normalize and zero pad to length 2N
+        X = np.pad(FFT._normalize(X.reshape(-1, 1)), [(0, N), (0,0)])
+        Y = np.flipud(np.pad(FFT._normalize(Y.reshape(-1, 1)), [(0, N), (0,0)]))
 
-    # Convolution Theorem
-    conv = irfft(rfft(X, axis=0) * rfft(Y, axis=0), axis=0)
-
-    shift = (N // 2) + 1           # only first and last N/2 not due to padding
-    window = 2 * (N // 2) + 1      # make window length odd to center exactly
-    return Series(data=np.roll(conv, shift, axis=0)[:window].reshape(-1),
-                  index=np.arange(-(window//2), 1+(window//2)))
-
-
-def fft_align(X: np.ndarray, corr: bool = True) -> List:
-    """Find max cross-correlation, or delay, of all pairs of columns
-
-    Args:
-        X: array with series in columns
-        corr: whether to return correlation value (True), else the lags of delay
-
-    Returns:
-        List of maximum autocorrelations (or delay) between every pair of series
-
-    Notes:
-
-    - Apply convolution theorem to compute all cross-autocorrelations,
-    - For each pair of series, the lag with the largest correlation is 
-      assumed to be the delay which aligns the presentation of the two series
-
-    Examples:
-
-    >>> fft_align(np.hstack((X[:-1], X[1:])), corr=False)
-    [1]
-
-    """
-    N, M = X.shape
-    assert M > 1
-    shift = (N // 2) + 1
-    window = 2 * (N // 2) + 1
-    X = np.pad(_normalize(X), [(0, N), (0,0)])
-    Y = rfft(np.flipud(X), axis=0)
-    X = rfft(X, axis=0)
-    result = []
-    for col in range(M-1):
-        conv = irfft(X[:, [col]] * Y[:, col+1:], axis=0)
-        if corr:
-            result.extend(np.max(conv, axis=0))
-        else:
-            result.extend(((np.argmax(conv, axis=0) + shift) % N) - window)
-    return result
+        # Convolution Theorem
+        conv = irfft(rfft(X, axis=0) * rfft(Y, axis=0), axis=0)
+        
+        shift = (N // 2) + 1     # only first and last N/2 not due to padding
+        window = 2*(N // 2) + 1  # make window length odd to center exactly at 0
+        return Series(data=np.roll(conv, shift, axis=0)[:window].reshape(-1),
+                      index=np.arange(-(window//2), 1+(window//2)))
 
 
-def fft_neweywest(X: np.ndarray) -> List:
-    """Compute Newey-West weighted cross-correlation of all pairs of columns
+    @staticmethod
+    def align(X: np.ndarray) -> Tuple:
+        """Find max cross-correlation, or best lag, of all pairs of columns
+    
+        Args:
+            X: array with series in columns
 
-    Args:
-        X: array with series in columns
+        Returns:
+            Tuple of list of max cross-correlations between each pair of columns,
+            and list of corresponding best lags 
 
-    Returns:
-        List of Newey-west weighted cross-correlations
+        Notes:
 
-    Notes:
+        - Apply convolution theorem to compute cross-correlations at lags
+        - For each pair of series, the lag with largest correlation is assumed
+          to be the displacement which aligns the presentation of the two series
 
-    - First apply convolution theorem to compute all cross-autocorrelations,
-    - Then for each pair of series, compute the Newey-west weighted correlation
-    """
-    N, M = X.shape
-    assert M > 1
-    shift = (N // 2) + 1
-    window = 2 * (N // 2) + 1
-    L = window // 2
+        Examples:
 
-    # Newey-West weights, with peak (1.0) at center of window
-    NW = np.array([1 - abs(l)/(L+1) for l in range(-L, L+1, 1)]).reshape(1, -1)
+        >>> FFT.align(np.hstack((X[:-1], X[1:])), corr=False)
+        """
+        N, M = X.shape
+        assert M > 1
+        shift = (N // 2) + 1
+        window = 2 * (N // 2) + 1
+        X = np.pad(FFT._normalize(X), [(0, N), (0,0)])
+        Y = rfft(np.flipud(X), axis=0)   # FFT of flipped series
+        X = rfft(X, axis=0)              # FFT of original series
+        corr = []
+        disp = []
+        for col in range(M-1):
+            # inverse FFT of product of Fourier-transformed series
+            conv = irfft(X[:, [col]] * Y[:, col+1:], axis=0) 
+            corr.extend(np.max(conv, axis=0))
+            disp.extend(((np.argmax(conv, axis=0) + shift) % N) - window)
+        return corr, disp
 
-    # Convolution Theorem
-    X = np.pad(_normalize(X), [(0, N), (0,0)])
-    Y = rfft(np.flipud(X), axis=0)
-    X = rfft(X, axis=0)
 
-    # Accumulate results for each column against remaining columns 
-    result = []
-    for col in range(M-1):
-        conv = irfft(X[:, [col]] * Y[:, col+1:], axis=0)
-        corrs = np.roll(conv, shift, axis=0)[:window]
-        np.mean(np.max(corrs, axis=0))
-        result.extend()
-    return result
+    @staticmethod
+    def neweywest(X: np.ndarray) -> List:
+        """Compute Newey-West weighted cross-correlation of all pairs of columns
+
+        Args:
+            X: array with series in columns
+
+        Returns:
+            List of Newey-west weighted cross-correlations
+
+        Notes:
+
+        - First apply convolution theorem to compute all cross-autocorrelations,
+        - Then for each pair of series, compute Newey-west weighted correlation
+        """
+        N, M = X.shape
+        assert M > 1
+        shift = (N // 2) + 1
+        window = 2 * (N // 2) + 1
+        L = window // 2
+
+        # Newey-West weights, with peak (1.0) at center of window
+        NW = np.array([1 - abs(l)/(L+1) for l in range(-L, L+1, 1)])\
+               .reshape(1, -1)
+
+        # Convolution Theorem
+        X = np.pad(FFT._normalize(X), [(0, N), (0,0)])
+        Y = rfft(np.flipud(X), axis=0)
+        X = rfft(X, axis=0)
+
+        # Accumulate results for each column against remaining columns 
+        result = []
+        for col in range(M-1):
+            conv = irfft(X[:, [col]] * Y[:, col+1:], axis=0)
+            corrs = np.roll(conv, shift, axis=0)[:window]
+            np.mean(np.max(corrs, axis=0))
+            result.extend()
+        return result
 
 
 ######################
@@ -467,6 +476,57 @@ def lm(x: np.ndarray | DataFrame | Series, y: np.ndarray | DataFrame | Series,
 #
 ######################
 
+class Volatility:
+    """Class of static methods to compute intra-day volatility measures"""
+    
+    def HL(high: DataFrame, low: DataFrame,
+           last: DataFrame = None) -> DataFrame:
+        """Compute Parkinson volatility from high and low prices
+    
+        Args:
+          high: DataFrame of high prices (observations x stocks)
+          low: DataFrame of low prices (observations x stocks)
+          last: DataFrame of last prices, for forward filling if high low missing
+
+        Returns:
+          Estimated volatility
+        """
+        if last is not None:
+            high = high.where(high.notna(), last.shift())
+            low = low.where(high.notna(), last.shift())
+        return np.sqrt((np.log(high / low)**2).mean(axis=0, skipna=True)
+                       / (4 * np.log(2)))
+
+    def OHLC(first: DataFrame, high: DataFrame, low: DataFrame,
+             last: DataFrame, ffill: bool = False,
+             zero_mean: bool = True) -> DataFrame:
+        """Compute Garman-Klass or Rogers-Satchell (non zero mean) OHLC vol
+    
+        Args:
+          first: DataFrame of open prices (observations x stocks)
+          high: DataFrame of high prices (observations x stocks)
+          low: DataFrame of low prices (observations x stocks)
+          last: DataFrame of close prices (observations x stocks)
+
+        Returns:
+          Estimated volatility 
+        """
+        if ffill:
+            last = last.ffill()
+            high = high.where(high.notna(), last.shift())
+            low = low.where(low.notna(), last.shift())
+            first = low.where(first.notna(), last.shift())
+        if zero_mean:  # Garman-Klass (assuming zero mean drift)
+            v = ((np.log(high / low)**2) / 2
+                 - (2*np.log(2) - 1) * (np.log(last / first)**2))\
+                 .mean(axis=0, skipna=True)
+        else:          # Rogers-Satchell (non zero mean drift)
+            v = ((np.log(high / close) * np.log(high / close))
+                 + (np.log(high / close) * np.log(high / close)))\
+                 .mean(axis=0, skipna=True)
+        return np.sqrt(v)
+    
+
 def maximum_drawdown(x: Series, is_price_level: bool = False) -> Series:
     """Compute max drawdown (max loss from previous high) period and returns
 
@@ -649,8 +709,8 @@ class Interest:
 
         if not types.is_list_like(flows):    # flows can be different each period
             flows = [flows]                  # else assume same flow every period
-            if not types.is_list_like(spot): # spot rate can be different per flow
-                spot = [spot]                # else use same spot rate each period
+            if not types.is_list_like(spot): # spot can be different per flow
+                spot = [spot]                # else use same spot each period
         if len(flows) == 1:
             flows = list(flows) * len(spot)  # flows to be same length as spot
         if len(spot) == 1:

@@ -16,11 +16,11 @@ import requests
 import io
 import csv
 import time
-import os
 import json
 import gzip
 import pickle
 import random
+import os
 from nltk.tokenize import RegexpTokenizer
 from sklearn.model_selection import train_test_split
 from collections import Counter, namedtuple

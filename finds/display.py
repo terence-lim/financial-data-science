@@ -614,14 +614,15 @@ def row_formatted(df: DataFrame, formats: Dict = {}, default: str = '{}',
 
 
 def show(df: DataFrame, latex: bool | None = True, ndigits: int | None = None,
-         max_colwidth: int = 100, caption: str = '',
+         max_colwidth: int = 100, max_rows: int | None = 15, caption: str = '',
          **kwargs) -> DataFrame | None:
     """Helper to format DataFrame for output
 
     Args:
         df: DataFrame to display
         latex: True returns to_latex. False returns to_string. None returns df
-        max_colwidth: Pandas context to allow maximum width of column
+        max_colwidth: Pandas option to allow maximum columns to display
+        max_colwidth: Pandas option to allow maximum rows to display
         ndigits: Number of digits to round floats
         caption: Caption of latex table, or title with underline to print
         kwargs: Passed on to to_latex, e.g.
@@ -637,30 +638,31 @@ def show(df: DataFrame, latex: bool | None = True, ndigits: int | None = None,
           This is used with \\ref{} in the main .tex file.
         - position: LaTeX positional argument for tables, to be placed after
           \\begin{} in the output.
+        - index (bool, default True): Write row names (index)
 
     """
-    with pd.option_context("max_colwidth", max_colwidth):
-        if hasattr(df, 'to_frame'):
-            df = df.to_frame()
-        if ndigits is not None:
-            df = df.round(ndigits)
-        if latex:               # display amd return entire in latex
-            s = df.to_latex(caption=caption, **kwargs) 
-            print(s)
-            return s
-        elif latex is None:     # return as is (for notebook display)
-            if caption:
-                return df.rename_axis(caption)
-            else:
-                return df                       
+# with pd.option_context("max_colwidth", max_colwidth, 'max_rows', max_rows):
+    if hasattr(df, 'to_frame'):
+        df = df.to_frame()
+    if ndigits is not None:
+        df = df.round(ndigits)
+    if latex:               # display amd return entire in latex
+        s = df.to_latex(caption=caption, **kwargs) 
+        print(s)
+        return s
+    elif latex is None:     # return as is (for notebook display)
+        if caption:
+            return df.rename_axis(caption)
         else:
-            s = df.to_string(**kwargs)  # print and return entire frame as str
-            if caption:
-                print(caption)
-                print('-' * len(caption))
-            print(s)
-            print()
-            return s
+            return df                       
+    else:
+        s = df.to_string(**kwargs)  # print and return entire frame as str
+        if caption:
+            print(caption)
+            print('-' * len(caption))
+        print(s)
+        print()
+        return s
         
 """
 matplotlib examples: https://mode.com/example-gallery/python_horizontal_bar/

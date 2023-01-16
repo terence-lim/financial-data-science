@@ -1679,6 +1679,14 @@ class IBES(Structured):
     Args:
         sql: Connection to SQL database
         bd: Custom business day calendar object
+
+    Notes:
+
+    - TICKER: IBES Ticker
+    - STATPERS : IBES Statistical Period (monthly)
+    - OFTIC: Official Ticker
+    - FPEDATS: Forecast Period End Date
+    - SDATES: Identification start date
     """
 
     def __init__(self, sql: SQL, 
@@ -1687,9 +1695,24 @@ class IBES(Structured):
                        verbose=_VERBOSE):
         """Initialize a connection to IBES datasets"""
         tables = {
+            'history': sql.Table(
+                'history',
+                Column('ticker', String(6), primary_key=True),  # IBES Ticker
+                Column('oftic', String(8)),  # Official Ticker
+                Column('statpers', Integer, primary_key=True), # Stat Period
+                Column('measure', String(3), primary_key=True), # forecast type
+                Column('fy0a', Float),
+                Column('curcode', String(3)),
+                Column('fy0edats', Integer),
+                Column('price', Float),
+                Column('prdays', Integer),
+                Column('shout', Float),
+                Column('iadiv', Float),
+                Column('curr_price', String(3)),                
+            ),
             'summary': sql.Table(
                 'summary',
-                Column('ticker', String(6), primary_key=True),
+                Column('ticker', String(6), primary_key=True), 
                 Column('fpedats', Integer, primary_key=True),
                 Column('statpers', Integer, primary_key=True),
                 Column('measure', String(3), primary_key=True), #new key
@@ -2350,11 +2373,10 @@ if __name__ == "__main__":
 
 
     # Pre-generate weekly returns and save in Redis cache
-    middate = 19740102  # increased stocks coverage in CRSP in mid Dec 1972
     begweek = 19251231
     endweek = 20221230
-    def update_weekly():
-        wd = WeeklyDay(sql, bd(endweek).strftime('%A'))   # Generate weekly cal
+    def update_weekly(day='Thu'):
+        wd = WeeklyDay(sql, day)   # Generate weekly cal
         rebaldates = wd.date_range(begweek, endweek)
         r = wd.date_tuples(rebaldates)
         batchsize = 40
@@ -2401,10 +2423,13 @@ if __name__ == "__main__":
         ibes.load_csv('ident',
                       os.path.join(dir, 'ident.txt.gz'),
                       sep='\t')  # 85550
-        ibes.write_links()  #  (missing, count) = 14642  85550
+        ibes.write_links()  #  (missing, count) = 15340  88963
+        ibes.load_csv('history',
+                      os.path.join(dir, 'history.txt.gz'),
+                      sep='\t')
         ibes.load_csv('summary',
                       os.path.join(dir, 'summary.txt.gz'),
-                      sep='\t') # 8470688
+                      sep='\t') # 11776742
         #ibes.load_csv('adjust', downloads + 'adjustment.csv') #rows=24777
         #ibes.load_csv('surprise', downloads + 'surprise.csv')  #rows=528933
 
