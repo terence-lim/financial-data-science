@@ -1,8 +1,9 @@
 from typing import Dict, Mapping, Any
+from pathlib import Path
 
 # pip install pyqt5
-import matplotlib
-matplotlib.use('Qt5Agg')
+#import matplotlib
+#matplotlib.use('Qt5Agg')
 
 CRSP_DATE: int = 20220331
 VERBOSE: int = 1
@@ -33,6 +34,15 @@ credentials: Mapping[str, Mapping[str, Any]] = {
                   'secret':  '...'},
     'bea': {'userid': '...'},
     'fred': {'api_key': "..."}
+}
+
+paths: Mapping[str, Any] = {
+    'yahoo': Path('...'),
+    'images': Path('...'),
+    'taq': Path('...'),
+    'scratch': Path('...'),
+    'downloads': Path('...'),
+    '10X': Path('...'),
 }
 
 paths: Mapping[str, Any] = {
