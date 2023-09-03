@@ -1,9 +1,7 @@
-#!/usr/bin/env python
+from setuptools import setup, find_packages
 
-from setuptools import setup
-
-setup(name='finds',
-      version='1.0',
-      # list folders, not files
-      packages=['finds']
-      )
+setup(
+    name='finds',
+    version='1.0',
+    packages=find_packages()
+)
