@@ -9,12 +9,6 @@ __30+ Projects in Financial Data Science__, presented as Jupyter Notebooks, usin
 
 ## Topics
 
-<style>
-table th:first-of-type { width: 25%}
-table th:nth-of-type(2) { width: 25%}
-table th:nth-of-type(3) { width: 25%}
-table th:nth-of-type(4) { width: 25%}
-</style>
 
 | notebook | Financial | Data | Science |
 |:--|:--|:--|:--|
