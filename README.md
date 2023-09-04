@@ -1,9 +1,9 @@
-# PROJECTS
+# Financial Data Science
 
 
-__Financial Data Science__: This _FinDS_ package comprises Python modules 
-for maintaining large structured and unstructured financial data sets, and
-exploring quantitative and machine learning methods
+The _FinDS_ package comprises Python modules for maintaining large
+structured and unstructured financial data sets, and exploring
+quantitative and machine learning methods
 
 
 ## Resources
