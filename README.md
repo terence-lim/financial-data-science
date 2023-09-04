@@ -1,13 +1,23 @@
 # PROJECTS
 
-_UNDER CONSTRUCTION_
+
+__Financial Data Science__: This _FinDS_ package comprises Python modules 
+for maintaining large structured and unstructured financial data sets, and
+exploring quantitative and machine learning methods
 
 
-__30+ Projects in Financial Data Science__, presented as Jupyter Notebooks, using the _FinDS_ Python package
+## Resources
+
+1. [Online Jupyter-book](https://terence-lim.github.io/data-science-notebooks/), or [download pdf](https://terence-lim.github.io/notes/data-science-notebooks.pdf)
+
+2. [FinDS API reference](https://terence-lim.github.io/financial-data-science/)
+
+3. [FinDS repo](https://github.com/terence-lim/financial-data-science)
+
+4. [Jupyter notebooks repo](https://github.com/terence-lim/data-science-notebooks)
 
 
-
-## Topics
+## Examples
 
 
 | notebook | Financial | Data | Science |
@@ -46,18 +56,6 @@ __30+ Projects in Financial Data Science__, presented as Jupyter Notebooks, usin
 | recurrent_net | Macroeconomic forecasting | FRED-MD | Elman recurrent networks; <br> Kalman filter |
 | fomc_language | Fedspeak | FOMC meeting minutes | Language modelling; <br> Transformers |
 | reinforcement_learning | Spending policy | Stocks, bonds, bills, and inflation | Reinforcement learning |
-
-
-## Resources
-
-1. [Online Jupyter-book](https://terence-lim.github.io/data-science-notebooks/), or [download pdf](https://terence-lim.github.io/notes/data-science-notebooks.pdf)
-
-2. [FinDS API reference](https://terence-lim.github.io/financial-data-science/)
-
-3. [FinDS repo](https://github.com/terence-lim/financial-data-science)
-
-4. [Jupyter notebooks repo](https://github.com/terence-lim/data-science-notebooks)
-
 
 ## Contact
 
