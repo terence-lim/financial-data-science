@@ -8,9 +8,9 @@ quantitative and machine learning methods
 
 ## Resources
 
-1. [Online Jupyter-book](https://terence-lim.github.io/data-science-notebooks/), or [download pdf](https://terence-lim.github.io/notes/data-science-notebooks.pdf)
+1. [Online Jupyter-book](https://terence-lim.github.io/finds-notebooks/), or [download pdf](https://terence-lim.github.io/notes/financial-data-science.pdf)
 
-2. [FinDS API reference](https://terence-lim.github.io/financial-data-science/)
+2. [FinDS API reference](https://terence-lim.github.io/finds/)
 
 3. [FinDS repo](https://github.com/terence-lim/financial-data-science)
 
