@@ -22,15 +22,25 @@ from typing import Dict, Any, Tuple, List
 from finds.structured.stocks import Stocks
 from finds.structured.benchmarks import Benchmarks
 from finds.database.sql import SQL
-from finds.finance import maximum_drawdown
-from finds.plots import plot_date, plot_bands
-from .backtesting import compound_ret
+from finds.recipes.finance import maximum_drawdown
+from finds.utils.plots import plot_date, plot_bands
+from finds.utils.utils import to_type
 
 _VERBOSE = 1
 
-def to_type(v, t=str):
-    """Convert each element in nested list to target type"""
-    return [to_type(u, t) for u in v] if types.is_list_like(v) else t(v)
+def compound_ret(rets: Series, intervals: Tuple | List[Tuple]) -> List[float]:
+    """Compounds series of returns between (list of) date tuples (inclusive)"""
+    if len(intervals)==0:
+        return []
+    elif len(intervals)==1:
+        return [compound_ret(rets, intervals[0])]
+    elif len(intervals)==2 and isinstance(intervals[0], int):  # a single tuple
+        d = rets.index
+        return np.prod(rets[(d >= intervals[0]) & (d <= intervals[1])] + 1) - 1
+    else:      # list of date tuples: recursively evaluate each tuple
+        return [compound_ret(rets, interval) for interval in intervals]
+
+
 
 class BackTest:
     """Base class for computing portfolio backtest returns
@@ -78,8 +88,8 @@ class BackTest:
         self._verbose = verbose
         self.bench = bench
         self.max_date = max_date
-        self.rf = bench.get_series([rf], 'ret', end=max_date)[rf]
-        rf = bench.get_series([rf + "(mo)"], 'ret', end=max_date)  # monthly
+        self.rf = bench.get_series(permnos=[rf], field='ret', end=max_date)[rf]
+        rf = bench.get_series(permnos=[rf + "(mo)"], field='ret', end=max_date)
         self.monthly_ = {(bench.bd.begmo(d), bench.bd.endmo(d)): float(v)
                          for d, v in rf.iloc[:,0].items()}
         
@@ -88,10 +98,8 @@ class BackTest:
         self.excess = None   # with excess returns after attribution
         self.label  = None   # label name
 
-    def __call__(self, stocks: Stocks,
-                       holdings: Dict[int, Series],
-                       label: str,
-                       overlap: int = 0) -> DataFrame:
+    def __call__(self, stocks: Stocks, holdings: Dict[int, Series],
+                 label: str, overlap: int = 0) -> DataFrame:
         """Compute holding returns and rebalance statistics
         
         Args:
@@ -141,7 +149,7 @@ class BackTest:
                 curr[weights.index] += weights / len(smooth)
 
             # compute portfolio return this month
-            ret = sum(stocks.get_ret(begret, endret, delist=True)\
+            ret = sum(stocks.get_ret(begret, endret)\
                       .reindex(curr.index, fill_value=0) * curr)
             
             # compute turnover
@@ -212,10 +220,8 @@ class BackTest:
                                      f" AND permno = {self.label}"))\
                        .rename(columns={'endret': 'date'})
 
-    def fit(self, benchnames: List[str],
-                  beg: int = 0,
-                  end: int = 0,
-                  haclags: int = 1) -> DataFrame:
+    def fit(self, benchnames: List[str], beg: int = 0,
+            end: int = 0, haclags: int = 1) -> DataFrame:
         """Compute performance attribution against benchmarks 
 
         Args:
@@ -245,7 +251,7 @@ class BackTest:
         p = self.perf.loc[d, 'excess'].rename(self.label).to_frame()
 
         # collect benchmark returns
-        df = self.bench.get_series(benchnames, 'ret', end=self.max_date)
+        df = self.bench.get_series(benchnames, field='ret', end=self.max_date)
         retdates = to_type(self.perf.loc[d, ['begret','endret']].values, int)
         for b in benchnames:
             p[b] = compound_ret(df[b], retdates)

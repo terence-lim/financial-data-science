@@ -1,6 +1,6 @@
-"""Compustat annual, quarterly, key developments, principal customers
+"""Compustat annual, quarterly and key developments
 
-Copyright 2022, Terence Lim
+Copyright 2022-2024, Terence Lim
 
 MIT License
 """
@@ -14,21 +14,18 @@ from sqlalchemy import Table, Column, Index
 from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, BigInteger
 from finds.database.sql import SQL
 from finds.database.redisdb import RedisDB
-from finds.busday import BusDay
-from finds.structured import Structured
+from finds.structured.busday import BusDay
+from finds.structured.structured import Structured
 _VERBOSE = 1
 
 class PSTAT(Structured):
     """Provide interface to Compustat structured data sets
 
     Args:
-        sql: Connection to mysql database
-        bd: Custom business days object
-
-    Attributes:
-        _role: Reference Series mapping keydev role id to description
-        _event: Reference Series mapping keydev event id to description
-
+      sql: Connection to mysql database
+      bd: Custom business days object
+      name: Name of dataset is "PSTAT"
+      identifier: Stocks identifier field name is "gvkey"
     Notes:
 
     - Screen on (INDFMT= 'INDL', DATAFMT='STD', POPSRC='D', and CONSOL='C') 
@@ -47,7 +44,9 @@ class PSTAT(Structured):
         8: 'Participant',
         9: 'TradingItemId',
         10: 'Auditor',
-        11: 'Sponsor' }, name='role')
+        11: 'Sponsor',
+        14: 'Host',
+    }, name='role')
 
     _event = Series({   # Key Development event id labels
         1: 'Seeking to Sell/Divest',            # may be "not sell"
@@ -213,13 +212,27 @@ class PSTAT(Structured):
         231: "Buyback Tranche Update",
         232: "Buyback Transaction Announcements",
         233: "Buyback Transaction Cancellations",
-        234: "Buyback Transaction Closings"}, name='event')
+        234: "Buyback Transaction Closings"
+    }, name='event')
     
-    def __init__(self, sql: SQL, 
-                       bd: BusDay, 
-                       name: str = 'PSTAT', 
-                       verbose = _VERBOSE):
-        """Initialize connection to Compustat datasets"""
+    @property
+    def role(self):
+        """Maps keydev role id to description"""
+        return self._role
+
+    @property
+    def event(self):
+        """Maps keydev event id to description"""
+        return self._event
+
+    
+    def __init__(self,
+                 sql : SQL, 
+                 bd : BusDay, 
+                 name : str = 'PSTAT',
+                 identifier : str = 'gvkey',
+                 verbose : int = _VERBOSE):
+        """Initialize Compustat tables"""
         tables = {
             'links': sql.Table(
                 'links',
@@ -327,10 +340,8 @@ class PSTAT(Structured):
                 Column('companyid', Integer, default=0),
                 Column('companyname', String(100)),
                 Column('keydeveventtypeid', SmallInteger, primary_key=True),
-                Column('keydevstatusid', SmallInteger, default=0),
                 Column('keydevtoobjectroletypeid', SmallInteger, primary_key=True),
                 Column('announcedate', Integer, primary_key=True),
-                Column('enterdate', Integer, default=0),
                 Column('gvkey', Integer, primary_key=True),
             ),
             'customer': sql.Table(
@@ -351,7 +362,7 @@ class PSTAT(Structured):
                 Column('ctic', String(5)),   # Customer Ticker Symbol
             ),
         }
-        super().__init__(sql, bd, tables, identifier='gvkey', name=name,
+        super().__init__(sql, bd, tables, identifier=identifier, name=name,
                          verbose=verbose)
 
     def build_lookup(self, source: str, target: str, date_field='linkdt', 
@@ -366,8 +377,8 @@ class PSTAT(Structured):
         """Return list of permnos mapped to gvkeys as of a date
 
         Args:
-            keys: Input list of gvkeys to lookup
-            date: Prevailing date of link        
+          keys: Input list of gvkeys to lookup
+          date: Prevailing date of link        
         """
 
         return super().get_permnos(keys, date, link_perm='lpermno', 
@@ -380,26 +391,26 @@ class PSTAT(Structured):
         """Query a pstat table, and return with linked crsp permno
 
         Args:
-            dataset: pstat dataset to query
-            fields : Names of fields to return
-            date_field: Name of date field in pstat table to query
-            link_date: Name of link date field in 'links' table
-            link_perm: Name of permno field in 'links' table
-            where : Sql where clause, as sql string (optional)
-            limit : Maximum number of records to return (optional)
+          dataset: pstat dataset to query
+          fields : Names of fields to return
+          date_field: Name of date field in pstat table to query
+          link_date: Name of link date field in 'links' table
+          link_perm: Name of permno field in 'links' table
+          where : Sql where clause, as sql string (optional)
+          limit : Maximum number of records to return (optional)
 
         Returns:
-            DataFrame containing result of query
+          DataFrame containing result of query
 
         Examples:
 
         >>> df = pstat.get_linked(dataset='annual', date_field='datadate',
-                   fields=['ceq','pstkrv','pstkl','pstk'],
-                   where='ceq > 0 and datadate>=19930104 and datadate<=20991231')
+                 fields=['ceq','pstkrv','pstkl','pstk'],
+                 where='ceq > 0 and datadate>=19930104 and datadate<=20991231')
         >>> df = keydev.get_linked(dataset='keydev', date_field='announcedate',
-                   fields=['companyname', 'keydeveventtypeid',
-                   'keydevtoobjectroletypeid'],
-                   where='', limit=''):
+                 fields=['companyname', 'keydeveventtypeid',
+                 'keydevtoobjectroletypeid'],
+                 where='', limit=''):
 
         Notes:
 
@@ -415,7 +426,6 @@ class PSTAT(Structured):
             where lpermno is not null and keydev.gvkey > 0 and links.gvkey > 0
             and announcedate >= 20180301
             limit 100;
-
         """
 
         return super().get_linked(dataset=dataset, date_field=date_field,
@@ -424,51 +434,52 @@ class PSTAT(Structured):
 
 
 if __name__ == "__main__":
-    from pathlib import Path
-    from secret import credentials
+    from secret import credentials, paths
     VERBOSE = 1
+
     sql = SQL(**credentials['sql'], verbose=VERBOSE)
     user = SQL(**credentials['user'], verbose=VERBOSE)
     rdb = RedisDB(**credentials['redis'])
     bd = BusDay(sql)
     pstat = PSTAT(sql, bd)
+    downloads = paths['data'] / 'PSTAT'
 
-    # load Compustat
-    downloads =  Path('/home/terence/Downloads/stocks2023/PSTAT/')
-
-if False:
+    """
     # load links
-    df = pstat.load_csv('links', downloads / Path('links.txt.gz'), sep='\t',    
-                        drop={'lpermno': ['0', 0], 'linkprim': ['N', 'J']},
-                        replace={'linkdt': (['C', 'E', 'B'], 0),
-                                 'linkenddt': (['C', 'E', 'B'], 0)})
+    df = pstat.load_csv(
+        'links', downloads / 'links.txt.gz', sep='\t',    
+        drop={'lpermno': ['0', 0],
+              'linkprim': ['N', 'J']},
+        keep={'linktype': ['LC', 'LU']},  # researched and unresearched links"
+        replace={'linkdt': (['C', 'E', 'B'], 0),
+                 'linkenddt': (['C', 'E', 'B'], 0)})
     print(len(df), 33036)
     lag = df.shift()
     f = (lag.gvkey == df.gvkey) & (lag.lpermno != df.lpermno)
     print('permnos in links changed in ', sum(f), 'of', len(df), 1063)
 
     # load annual
-    df = pstat.load_csv('annual', downloads/Path('annual.txt.gz'), sep='\t')
+    df = pstat.load_csv('annual', downloads / 'annual.txt.gz', sep='\t')
     print(len(df), 464753)
     print(df.isna().mean().sort_values().tail(5))
     
     # load quarterly
-    df = pstat.load_csv('quarterly', downloads/Path('quarterly.txt.gz'), sep='\t')
+    df = pstat.load_csv('quarterly', downloads / 'quarterly.txt.gz', sep='\t')
     print(len(df), 1637274)
     print(df.isna().mean().sort_values().tail(5))
-
+    
     # load keydevs
-    for s in sorted(downloads.glob('keydev*.txt.gz')):
+    for filename in sorted(downloads.glob('keydev*.txt.gz')):
         tic = time.time()   
-        df = pstat.load_csv('keydev', downloads / Path(s),sep='\t',
+        df = pstat.load_csv('keydev', downloads / filename, sep='\t',
                             drop={'gvkey': [0, '0'],
                                   'announcedate': [0, '0'],
                                   'keydevid': [0, '0']})
-        print(len(df), s, time.time() - tic)
+        print(len(df), filename, time.time() - tic)
     print(sql.run('select count(*) from keydev'), 12256909)
+    """
 
-    # load customer segments
-    customer = '/home/terence/Downloads/stocks2020/PSTAT/segments.csv.gz'
-    df = pstat.load_csv('customer', customer, sep=',')
+    # load principal customers
+    df = pstat.load_csv('customer', downloads / 'supplychain.csv.gz', sep=',')
     print(len(df), 107114)
         

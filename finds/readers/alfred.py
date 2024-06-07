@@ -1,4 +1,4 @@
-"""Class and methods to access ALFRED/FRED apis, and FRED-MD/FRED-QD
+"""Class to access ALFRED/FRED apis, and FRED-MD/FRED-QD
 
 - FRED, ALFRED: St Louis Fed api's, with revision vintages
 - FRED-MD, FRED-QD: See McCracken website at St Louis Fed
@@ -33,7 +33,7 @@ _VERBOSE = 1
 
 
 #
-# Helper functions: convert date formats, scrape multpl.com
+# Helper functions: convert date formats
 #
 def _int2date(date: int) -> str:
     """helper method to convert int date to FRED api string format"""
@@ -65,10 +65,9 @@ class Alfred:
     """Base class for Alfred/Fred access, and manipulating retrieved data series
 
     Args:
-      api_key: API key string registered with FRED
-      start: default starting date of series
-      end: default ending date of series
-      savefile: name of local file to auto-save retrieved series
+      api_key : API key string registered with FRED
+      savefile: Name of local file to auto-save retrieved series
+      convert_date: Whether to convert date to int
       verbose: whether to display messages
 
     Attributes:
@@ -77,7 +76,7 @@ class Alfred:
         _alfred_url(): Formatter to construct vintage FRED api query
         _category_url(): Formatter to construct FRED category api query
     """
-    _header = {    # starter Dict of series descriptions
+    _header = {    # starter Dict of series descriptions for FRED-MD
         k : {'id': k, 'title': v} for k,v in
         [['CPF3MTB3M', '3-Month Commercial Paper Minus 3-Month Treasury Bill'],
          ['CLAIMS', 'Initial Claims'],
@@ -95,17 +94,14 @@ class Alfred:
          ['S&P: indust', "S&P's Common Stock Price Index: Industrials"]]}
 
 
-    def __init__(self,
-                 api_key: str,
-                 start: int = 17760704,
-                 end: int = 99991231,
-                 savefile: str = '',
+    def __init__(self, api_key: str, savefile: str = '', convert_date: bool=True,
                  verbose=_VERBOSE):
         """Create object, with api_key, for FRED access and data manipulation"""
         self.api_key = api_key
-        self._start = start
-        self._end = end
+        self._start = 17760704
+        self._end = 99991231
         self.savefile = str(savefile)
+        self._convert_date = convert_date
         self._cache = dict()
         self._header = Alfred._header.copy()
         self._verbose = verbose
@@ -123,14 +119,15 @@ class Alfred:
         """Retrieve from cache, else call FRED api, and apply transforms
 
         Args:
-            series_id: Label of series to retrieve
-            start, end: Start and end period dates (inclusive) to keep
-            label: New label to rename returned series
-            release: release number (1 is first, 0 for latest), or 
-                     latest up to maximum date offset; 
-            vintage: Latest realtime_start date of observations to keep
-            freq: Resample and replace date index with at periodic frequency;
-                   in {'M', 'A'. 'Q', 'D', 'Y'}, else empty '' to auto select
+          series_id : Label of series to retrieve
+          start, end : Start and end period dates (inclusive) to keep
+          label : New label to rename returned series
+          release : release number (1 first, 0 latest), or latest up to date offset
+          vintage : Latest realtime_start date of observations to keep
+          realtime : Whether to return realtime_start and realtime_end
+          freq : Resample and replace date index with at periodic frequency;
+                 in {'M', 'A'. 'Q', 'D', 'Y'}, else empty '' to auto select
+          kwargs : transformations key-value pairs
             diff: Number of difference operations to apply
             log: Number of log operations to apply
             pct_change: Number of pct_change to apply
@@ -139,6 +136,8 @@ class Alfred:
             transformed values; name is set to label if provided else series_id
         """
         assert isinstance(series_id, str)
+
+        # retrieve from cache or call api
         if (series_id not in self._cache and not self.get_series(series_id)):
             return None
         if not freq:
@@ -149,14 +148,16 @@ class Alfred:
                                      vintage=vintage,
                                      start=start or self._start,
                                      end=end or self._end,
-                                     freq=freq)
+                                     freq=freq,
+                                     convert_date=self._convert_date)
         if realtime:
             s = Alfred.transform(df['value'], **kwargs).to_frame()
             s['realtime_start'] = df['realtime_start'].values
             s['realtime_end'] = df['realtime_end'].values
             return s.rename(columns={'value': label or series_id})
         return Alfred.transform(df['value'], **kwargs)\
-                     .rename(label or series_id)
+                     .rename(label or series_id)\
+                     .sort_index()
 
     tcode = {1: {'diff': 0, 'log': 0},
              2: {'diff': 1, 'log': 0},
@@ -242,11 +243,16 @@ class Alfred:
 
     def date_spans(self, series_id: str = 'USREC',
                    threshold: int = 0) -> List[Tuple[Timestamp, Timestamp]]:
-        """Return recession span dates as tuples of Timestamp"""
+        """Return date spans as tuples of Timestamp
+        
+        Args:
+          series_id: Name of series
+          threshold: Values of series strictly above are included in date span
+        """
         usrec = self(series_id)
         usrec.index = pd.DatetimeIndex(usrec.index.astype(str), freq='infer')
-        g = (usrec > threshold) \
-            | (usrec.shift(-1, fill_value=threshold) > threshold)
+        g = ((usrec > threshold) |
+             (usrec.shift(-1, fill_value=threshold) > threshold))
         g = (g != g.shift(fill_value=False)).cumsum()[g].to_frame()
         g = g.reset_index().groupby(series_id)['date'].agg(['first','last'])
         vspans = list(g.itertuples(index=False, name=None))
@@ -278,6 +284,12 @@ class Alfred:
                 return f"*** {series_id} ***"
         return self._header[series_id].get(column, f"*** {series_id} ***")
 
+    def categories(self, series_id: str | List[str]):
+        """Returns categories parent_id's of series"""
+        if is_list_like(series_id):
+            return pd.concat([self.categories(s) for s in series_id], axis=0)
+        return self.request_series_categories(series_id)
+            
     def observations(self, series_id: str, date: int,
                      freq: str = '') -> DataFrame:
         """Return all release of observations for a series and date
@@ -291,23 +303,23 @@ class Alfred:
         df['date'] = pd.to_datetime(df['date'])
         date = pd.to_datetime(date, format="%Y%m%d")
         df = df.dropna().reset_index(drop=True)
-        if freq:
-            if freq.upper()[0] in ['A']:
+        match freq[0].upper():
+            case 'A':
                 df['date'] += YearEnd(0)
                 end = date + YearEnd(0)
-            if freq.upper()[0] in ['S']:
+            case 'S':
                 df['date'] += QuarterEnd(1)
                 end = date + QuarterEnd(1)
-            if freq.upper()[0] in ['Q']:
+            case 'Q':
                 df['date'] += QuarterEnd(0)
                 end = date + QuarterEnd(0)
-            if freq.upper()[0] in ['M']:
+            case 'M':
                 df['date'] += MonthEnd(0)
                 end = date + MonthEnd(0)
-            if freq.upper()[0] in ['B']:
+            case 'B':
                 df['date'] += pd.DateOffset(days=13)
                 end = date + pd.DateOffset(days=13)
-            if freq.upper()[0] in ['W']:
+            case 'W':
                 df['date'] += pd.DateOffset(days=6)
                 end = date + pd.DateOffset(days=6)
         df['date'] = df['date'].dt.strftime('%Y%m%d').astype(int)
@@ -319,24 +331,23 @@ class Alfred:
         return df.set_axis(1 + np.arange(len(df))).rename_axis(index='release')
 
     
-    #
-    # Interface methods to call API wrappers
-    #
     @staticmethod
     def construct_series(observations: DataFrame,
                          vintage: int = 99991231,
                          release: int | pd.DateOffset = 0,
                          start: int = 0,
                          end: int = 99991231,
-                         freq: str = '') -> Series:
+                         freq: str = '',
+                         convert_date: bool = True) -> Series:
         """Helper to construct series from given full observations dataframe
 
         Args:
-            observations: DataFrame from FRED 'series/observations' api call
-            release: sequence num (0 for latest), or latest to max date offset
-            vintage: Latest realtime_start date (inclusive) allowed
-            start, end: Start and end period dates (inclusive) to keep
-            freq: in {'M', 'A'. 'Q', 'D', 'Y'}, else empty '' to auto select
+          observations : DataFrame from FRED 'series/observations' api call
+          release : Sequence num (0 for latest), or latest to max date offset
+          vintage : Latest realtime_start date (inclusive) allowed
+          start, end : Start and end period dates (inclusive) to keep
+          freq : in {'M', 'A'. 'Q', 'D', 'Y'}, else empty '' to auto select
+          convert_date : Whether to convert date format to int
 
         Returns:
             value as of each period date, optionally indexed by realtime_start
@@ -385,13 +396,18 @@ class Alfred:
             df['release'] = (df['date'] + release).dt.strftime('%Y-%m-%d')
             df = df[df['realtime_start'] <= df['release']]\
                 .drop_duplicates('date', keep='last')
-        
-        df['date'] = df['date'].dt.strftime('%Y%m%d').astype(int)
-        df['realtime_start'] = _date2int(df['realtime_start'])
-        df['realtime_end'] = _date2int(df['realtime_end'])
-        df = df.set_index('date').sort_index().drop(columns=['release'])
-        return df[(df.index <= min(end, vintage)) & (df.index >= start)]
 
+        index = df['date'].dt.strftime('%Y%m%d').astype(int)            
+        if convert_date:   # convert dates to int date format
+            df['date'] = index
+            df['realtime_start'] = _date2int(df['realtime_start'])
+            df['realtime_end'] = _date2int(df['realtime_end'])
+        df = df[(index <= min(end, vintage)) & (index >= start)]
+        return df.set_index('date').drop(columns=['release']).sort_index()
+
+    #
+    # Interface methods to call API wrappers
+    #
     def get_series(self, series_id: str | List[str], api_key: str ='',
                    start: int = 0, end: int = 0) -> int:
         """Retrieve metadata and full observations of a series with FRED api
@@ -416,18 +432,19 @@ class Alfred:
                                                              api_key=api_key,
                                                              start=start,
                                                              end=end,
-                                                             alfred_mode=True,
+                                                             archive=True,
                                                              verbose=self._verbose
             ),
             'series': series}
         return len(self._cache[series_id]['observations'])
 
     def get_category(self, category_id: str, api_key: str = ''):
-        """Retrieve category data by calling related API
+        """Retrieve category information by calling related API
         
         Args:
-            category_id: id of category to retrieve
-            api_key: credentials to FRED
+          category_id : id of category to retrieve
+          api_key : credentials to FRED
+          verbose : verbose flag
 
         Notes:
 
@@ -473,8 +490,10 @@ class Alfred:
                     "file_type=json{args}").format
 
     def request_series(self, series_id: str, api_key: str = '', start: int = 0,
-                       end : int = 0, verbose: int = _VERBOSE) -> DataFrame:
+                       end : int = 0, verbose: int = -1) -> DataFrame:
         """Requests 'series' API for series metadata"""
+        if verbose < 0:
+            verbose = self._verbose
         url = self._alfred_url(api="series",
                                series_id=series_id,
                                start=_int2date(start or self._start),
@@ -495,11 +514,30 @@ class Alfred:
         df.index.name = str(datetime.now())
         return df
 
+    def request_series_categories(self, series_id: str, api_key: str = '',
+                                  verbose: int = -1) -> DataFrame:
+        """Request `series/categories` API for series category ids"""
+        if verbose < 0:
+            verbose = self._verbose
+        url = self._fred_url(api="series/categories",
+                             series_id=series_id,
+                             api_key=api_key or self.api_key)
+        r = requests_get(url, verbose=verbose)
+        if r is None:
+            return DataFrame()
+
+        contents = json.loads(r.content)
+        df = DataFrame(contents['categories'][-1], index=[series_id])
+        return df.sort_index()
+    
+
     def request_series_observations(self, series_id: str, api_key: str = '',
                                     start: int = 0, end: int = 0,
-                                    alfred_mode: bool = False,
-                                    verbose: int = _VERBOSE) -> DataFrame:
-        """Request 'series/observations' API for full observations data"""
+                                    archive: bool = False,
+                                    verbose: int = -1) -> DataFrame:
+        """Request `series/observations` API for full observations data"""
+        if verbose < 0:
+            verbose = self._verbose
         url = self._alfred_url(api="series/observations",
                                series_id=series_id,
                                start=_int2date(start or self._start),
@@ -518,16 +556,17 @@ class Alfred:
 
         contents = json.loads(r.content)
         df = DataFrame(contents['observations'])
-        if alfred_mode:  # convert fred to alfred by backfilling realtime_start
+        if archive:  # convert fred to alfred by backfilling realtime_start
             f = (df['realtime_start'].eq(contents['realtime_start']) &
                  df['realtime_end'].eq(contents['realtime_end'])).values
             df.loc[f, 'realtime_start'] = df.loc[f, 'date']
-        return df
+        return df.sort_index()  # observations may not have been sorted by date!
 
     def request_category(self, category_id: str, api: str = "category",
-                         api_key: str = '', verbose: int = _VERBOSE,
-                         **kwargs) -> Dict:
-        """Request 'category' and related API for category data"""
+                         api_key: str = '', verbose: int = -1, **kwargs) -> Dict:
+        """Request 'category' related API for category data"""
+        if verbose < 0:
+            verbose = self._verbose
         args = "&".join([f"{k}={v}" for k,v in kwargs.items()])
         url = self._category_url(api=api,
                                  category_id=category_id,
@@ -603,7 +642,7 @@ class Alfred:
         url = f"https://www.multpl.com/{page}/table/by-month"
         soup = BeautifulSoup(requests_get(url).content, 'html.parser')
         tables = soup.findChildren('table')
-        df = pd.read_html(tables[0].decode())[0]
+        df = pd.read_html(io.StringIO(tables[0].decode()))[0]
         df.iloc[:,0] = _to_date(df.iloc[:,0], format='%b %d, %Y')
         df['date'] = _to_monthend(df.iloc[:, 0])
         df = df.sort_values('Date').groupby('date').last().iloc[:,-1]
@@ -694,8 +733,8 @@ def fred_md(vintage: int | str = 0, url: str = '',
             vintage = 'monthly/' + csvfile
     else:
         vintage = vintage or 'monthly/current.csv'
-    if _VERBOSE:
-        print(vintage)
+    if verbose:
+        print('FRED-MD vintage:', vintage)
     url = url or url_
     if url.endswith('.zip'):
         if url.startswith('http'):
@@ -707,15 +746,15 @@ def fred_md(vintage: int | str = 0, url: str = '',
     df.columns = df.columns.str.rstrip('x')
     meta = dict()
     for _, row in df.iloc[:5].iterrows():
-        if '/' not in row[0]:    # this row has metadata, e.g. transform codes
-            label = re.sub("[^a-z]", '', row[0].lower()) # simplify label str
-            meta[label] = row[1:].astype(int).to_dict()  # as dict of int codes
+        if '/' not in row.iloc[0]:    # this row has metadata, e.g. transform codes
+            label = re.sub("[^a-z]", '', row.iloc[0].lower()) # simplify label str
+            meta[label] = row.iloc[1:].astype(int).to_dict()  # as dict of int codes
     df = df[df.iloc[:, 0].str.find('/') > 0]      # keep rows with valid date
     df.index = _to_date(df.iloc[:, 0], format='%m/%d/%Y')
     df.index = _to_monthend(df.index)
     return df.iloc[:, 1:], DataFrame(meta)
 
-def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = 0):
+def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = _VERBOSE):
     """Retrieve and parse current or vintage csv from McCracken FRED-MD site
 
     Args:
@@ -735,16 +774,16 @@ def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = 0):
         vintage = f"quarterly/{vintage // 100}-{vintage % 100:02d}.csv"
     else:
         vintage = 'quarterly/current.csv'
-    if _VERBOSE:
-        print(vintage)
+    if verbose:
+        print('FRED-QD vintage:', vintage)
     df = pd.read_csv(urljoin(url, vintage), header=0)
     df.columns = df.columns.str.rstrip('x')
     meta = dict()
     for _, row in df.iloc[:5].iterrows():
-        if '/' not in row[0]:    # this row has metadata, e.g. transform codes
-            label = re.sub("[^a-z]", '', row[0].lower()) # simplify label str
-            meta[label] = row[1:].astype(int).to_dict()  # as dict of int codes
-    df = df[df.iloc[:, 0].str.find('/') > 0]      # keep rows with valid date
+        if '/' not in row.iloc[0]:    # this row has metadata, e.g. transform codes
+            label = re.sub("[^a-z]", '', row.iloc[0].lower())  # simplify label str
+            meta[label] = row[1:].astype(int).to_dict()      # as dict of int codes
+    df = df[df.iloc[:, 0].str.find('/') > 0]            # keep rows with valid date
     df.index = _to_date(df.iloc[:, 0], format='%m/%d/%Y')
     df.index = _to_monthend(df.index)
     return df.iloc[:, 1:], DataFrame(meta)

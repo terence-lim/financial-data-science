@@ -19,13 +19,14 @@ import zipfile
 from typing import Dict, List, Any
 from sqlalchemy import Integer, String, Column
 from finds.database.sql import SQL
-from .readers import requests_get
-from .ffreader import FFReader
-from .bea import BEA
+from finds.readers.readers import requests_get
+from finds.readers.ffreader import FFReader
+from finds.readers.bea import BEA
 
-_VERBOSE = 1
+_VERBOSE = 0
 
 class Crosswalk:
+    """Reader for naics - sic crosswalk"""
 
     @staticmethod
     def sectoring(code: str, name: str, desc: str,
@@ -90,7 +91,7 @@ class Sectoring:
     
     
     def __init__(self, sql: SQL, scheme: str, fillna: Any = None,
-                 new: bool = False, source: str = ""):
+                 source: str = ""):
         self.scheme = scheme.lower()
         self.sql = sql
         self.fillna = fillna
@@ -99,7 +100,6 @@ class Sectoring:
                                Column('name', String(16), primary_key=True),
                                Column('scheme', String(8), primary_key=True),
                                Column('description', String(128)))
-        self.sql.create_all()
         if self.scheme.startswith('sic') and len(self.scheme) > 3:
             digits = int(scheme[3])
             n = 4 - digits
@@ -108,8 +108,6 @@ class Sectoring:
             self.sectors['description'] = [f"{s}{'0'*n}-{s}{'9'*n}"
                                            for s in self.sectors['name']]
             self.sectors['scheme'] = f"sic{digits}"
-        elif new:
-            self.load(source=source)
         else:
             q = f"SELECT * FROM {self.table.key} WHERE scheme='{self.scheme}'"
             self.sectors = self.sql.read_dataframe(q).set_index('code')
@@ -118,6 +116,12 @@ class Sectoring:
             self.sectors['name'] = self.sectors['name'].astype(int)
         except:
             pass
+
+    def __len__(self):
+        return len(self.sectors)
+
+    def __str__(self):
+        return f"{self.scheme} Sectoring"
        
     def __getitem__(self, code: List | str | int) -> List | Any:
         """Lookup sectoring group given raw input code/s"""
@@ -127,40 +131,42 @@ class Sectoring:
         return self.sectors['name'].iloc[found-1] if found > 0 else self.fillna
 
     def load(self, source: str = '') -> Series | None:
-        """Reload sectoring map from source url or file"""
+        """Load sectoring map from source url or file to SQL"""
 
         def _load(df: DataFrame | None) -> Series | None:
             """Helper to upload dataframe with code in index, name. desc to SQL"""
             if df is not None:     # columns=['name', 'description']
-                self.sectors = df
+                self.sql.create_all()
+                self.sectors = df[['name', 'description']]
                 self.sectors['scheme'] = self.scheme
-                delete = self.table.delete()\
-                                   .where(self.table.c['scheme'] == self.scheme)
+                delete = self.table.delete().where(
+                    self.table.c['scheme'] == self.scheme)
                 self.sql.run(delete)
                 self.sql.load_dataframe(table=self.table.key,
                                         df=self.sectors,
                                         index_label='code')
-                return self.sectors['name'].unique()
-            return None
-        
+
         if self.scheme == 'naics':
-            return _load(Crosswalk.sectoring(code='SIC Code',
-                                             name='NAICS Code',
-                                             desc='NAICS Description',
-                                             source=source))
+            _load(Crosswalk.sectoring(code='SIC Code',
+                                      name='NAICS Code',
+                                      desc='NAICS Description',
+                                      source=source))
         elif self.scheme == 'sic':
-            return _load(Crosswalk.sectoring(code='NAICS Code',
-                                             name='SIC Code',
-                                             desc='SIC Description',
-                                             source=source))
+            _load(Crosswalk.sectoring(code='NAICS Code',
+                                      name='SIC Code',
+                                      desc='SIC Description',
+                                      source=source))
         elif self.scheme.startswith('codes'):
-            return _load(FFReader.sectoring(scheme=self.scheme,
-                                            source=source))
+            _load(FFReader.sectoring(scheme=self.scheme, source=source))
         elif self.scheme.startswith('bea'):
-            return _load(BEA.sectoring(year=int(self.scheme[3:]),
-                                       source=source))
+            _load(BEA.sectoring(year=int(self.scheme[3:]), source=source))
         else:
-            return None
+            pass
+        try:
+            self.sectors['name'] = self.sectors['name'].astype(int)
+        except:
+            pass
+        return self
 
 
 
@@ -170,28 +176,37 @@ if __name__ == "__main__":
     from finds.database import SQL, RedisDB
     from secret import credentials, paths
 
-    downloads = paths['scratch']
-    sql = SQL(**credentials['sql'])
+    sql = SQL(**credentials['sql'], verbose=_VERBOSE)
 
+    #
+    # Load sectoring schemes from web to SQL
+    #
     codes = {}
+
+    """
     scheme = 'sic2'
     codes[scheme] = Sectoring(sql, scheme=scheme)
     
     scheme = 'sic3'
     codes[scheme] = Sectoring(sql, scheme=scheme)
 
-    new = True
-    for scheme in [5, 10, 12, 17, 30, 38, 48, 49]:  # FamaFrench
-        scheme = f"codes{scheme}"
-        codes[scheme] = Sectoring(sql, scheme=scheme, new=new)
-
-    scheme = 'SIC'  # SIC from NAICS Crosswalk
-    codes[scheme] = Sectoring(sql, scheme=scheme, new=new)
-    
-    scheme = 'NAICS'  # NAICS from SIC Crosswalk
-    codes[scheme] = Sectoring(sql, scheme=scheme, new=new)
+    for code in [5, 10, 12, 17, 30, 38, 48, 49]:  # FamaFrench
+        scheme = f"codes{code}"
+        codes[scheme] = Sectoring(sql, scheme=scheme).load()
+        print(scheme, len(codes[scheme]))
         
-    for scheme in [1947, 1963, 1997]:   # BEA sectoring scheme
-        scheme = f"bea{scheme}"
-        codes[scheme] = Sectoring(sql, scheme=scheme, new=new)
+    scheme = 'SIC'  # SIC from NAICS Crosswalk
+    codes[scheme] = Sectoring(sql, scheme=scheme).load()
+    print(scheme, len(codes[scheme]))
+    
+    """
+    scheme = 'NAICS'  # NAICS from SIC Crosswalk
+    codes[scheme] = Sectoring(sql, scheme=scheme).load()
+    print(scheme, len(codes[scheme]))
+       
+
+    for year in [1947, 1963, 1997]:   # BEA sectoring scheme
+        scheme = f"bea{year}"
+        codes[scheme] = Sectoring(sql, scheme=scheme).load()
+        print(scheme, len(codes[scheme]))
 

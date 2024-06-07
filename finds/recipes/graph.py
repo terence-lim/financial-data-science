@@ -1,8 +1,28 @@
 """Graph network convenience wrappers
 
-- networkx (link prediction, community detection, centrality)
+- iterate over Graph edges and attributes:
 
-Copyright 2022, Terence Lim
+for edge_tuple, attributes_dict in G.edges.items()
+
+- iterate over Graph nodes and attributes:
+
+for node, attributes_dict in G.nodes.items()
+
+- neighbors of a Node:
+
+nx.all_neighgors
+nx.neighbors
+list(g[1004])
+G.degree[1004]
+
+- populate a graph:
+
+G = nx.Graph(social_pairs)
+G = nx.DiGraph(social_pairs)
+G.add_nodes_from(vertices)
+G.add_edges_from(edges)
+
+Copyright 2022-2024, Terence Lim
 
 MIT License
 """
@@ -22,7 +42,7 @@ def _print(tic, *args, verbose=_VERBOSE):
     if verbose > 0:
         print(round(time.time() - tic, 0), 'secs:', *args)
 
-def graph_info(G, fast=False):
+def graph_info(G, fast=True):
     """Return summary of graph properties
 
     Args:
@@ -33,27 +53,9 @@ def graph_info(G, fast=False):
     """
     out = dict()
 
-    if not fast:
-        # Census
-        if nx.is_directed(G):
-            triads = nx.triadic_census(G)
-            for k,v in triads.items():
-                out['triad_' + k] = v
-
-        # Induced subgraph of largest connected component
-        if nx.is_directed(G):
-            connected = nx.is_strongly_connected(G)
-            #component = max(nx.strongly_connected_components(G), key=len)
-        else:
-            connected = nx.is_connected(G)            
-            #component = max(nx.connected_components(G), key=len)
-        if connected:
-            out['diameter_largest_component'] = nx.diameter(G)
-            out['radius_largest_component'] = nx.radius(G)
-            #out['center_largest_component'] = nx.center(G)
-        # Clustering
-        out['transitivity'] = nx.transitivity(G)
-        out['average_clustering'] = nx.average_clustering(G)
+    # Clustering
+    out['transitivity'] = nx.transitivity(G)
+    out['average_clustering'] = nx.average_clustering(G)
 
     # Components
     if nx.is_directed(G):
@@ -72,6 +74,8 @@ def graph_info(G, fast=False):
         out['connected_components'] = nx.number_connected_components(G)
         out['size_largest_component'] = \
                     len(max(nx.connected_components(G), key=len))
+
+    # Attributes
     out['directed'] = nx.is_directed(G)
     out['weighted'] = nx.is_weighted(G)
     if nx.is_weighted(G):
@@ -105,6 +109,7 @@ def graph_draw(G: nx.Graph,
                node_size: float | Dict | List = 20.,
                node_color: str | Dict | List = '#1f78b4',
                labels: List | Dict = None,
+               seed: int | None = None,
                **kwargs):
     """Convenience wrapper over nx.draw_network
 
@@ -163,6 +168,7 @@ def graph_draw(G: nx.Graph,
             pos = nx.spring_layout(G,
                                    fixed=fixed,
                                    pos=p,
+                                   seed=seed,
                                    k=k/np.sqrt(nx.number_of_nodes(G)))
         
     nx.draw(G, pos=pos, font_size=font_size, labels=labels, 
@@ -225,20 +231,21 @@ def nodes_centrality(G, weight='weight', cost=False, alpha=0.99):
     return out
 
 
-def community_detection(G: nx.Graph, methods: List[str] = [],
+def community_detection(G: nx.Graph, methods: List[str] = [], 
                         weight: str | None = None, resolution: float = 1.,
+                        seed: float | None = None,
                         verbose: int = _VERBOSE) -> Dict[str, List[List]]:
     """Run built-in community detection algorithms on an undirected graph
 
     Args:
-        G: Undirected networkx Graph
-        methods: Community detection algorithms to run, 
-                 in {'label', 'louvain', 'greedy'}
-        weight: Name of edge attribute for weights
-        resolution: Stopping rule
+      G: Undirected networkx Graph
+      methods: Algorithms to run, in {'label', 'louvain', 'greedy'}
+      weight: Name of edge attribute for weights
+      resolution: If less than 1, favors large communities.
+      seed
 
     Returns:
-        Dictionary, keyed by algorithm, of communities lists
+        Dictionary, keyed by algorithm, of community lists
     """
     tic = time.time()
     results = {}
@@ -248,7 +255,7 @@ def community_detection(G: nx.Graph, methods: List[str] = [],
 
     if not methods or 'louvain' in methods:
         results['louvain'] = nx_comm.louvain_communities(
-            G, weight=weight, resolution=resolution)
+            G, weight=weight, resolution=resolution, seed=seed)
         _print(tic, 'louvain')
 
     if not methods or 'greedy' in methods:
@@ -263,12 +270,12 @@ def community_quality(G: nx.Graph, communities: List[List],
     """Run built-in community performance metrics
 
     Args:
-        G: Undirected networkx Graph
-        communties: Communities list of lists
-        method: List of metrics in {'modularity', 'quality'}
+      G: Undirected networkx Graph
+      communties: Communities list of lists
+      methods: Metrics to compute, in {'modularity', 'quality'}
 
     Returns:
-        Dictionary, keyed by metric label, of metric values
+      Dictionary, keyed by metric label, of metric values
     """
     results = {'communities': len(communities)}
     if not methods or 'modularity' in methods:
@@ -278,14 +285,17 @@ def community_quality(G: nx.Graph, communities: List[List],
             nx_comm.partition_quality(G, communities)
     return results
 
-def link_prediction(G, verbose=_VERBOSE):
-    """Run built-in link prediction algorihms
+def link_prediction(G, verbose=_VERBOSE) -> Dict[str, List]:
+    """Run link prediction algorihms
 
     Returns:
-        Dictionary, keyed by algorithm label, of List of edge-score 3-tuples
+        edge-and-score for all nonexistent edges in graph, by algorithm
     """
+
     def links(links):
+        """Return list of edge-score 3-tuples sorted by highest score"""
         return sorted(links, key=lambda x: x[2], reverse=True)
+
     #[link for link in links if link[2] > 0],
 
     tic = time.time()
@@ -306,21 +316,3 @@ def link_prediction(G, verbose=_VERBOSE):
             'adamic_adar': adamic,
             'preferential_attachment': preferential}
 
-"""
-- iterate over Graph edges and attributes:
-for edge_tuple, attributes_dict in G.edges.items()
-
-- iterate over Graph nodes and attributes:
-for node, attributes_dict in G.nodes.items()
-
-- neighbors of a Node:
-nx.all_neighgors
-nx.neighbors
-list(g[1004])
-G.degree[1004]
-
-G = nx.Graph(social_pairs)
-G = nx.DiGraph(social_pairs)
-G.add_nodes_from(vertices)
-G.add_edges_from(edges)
-"""

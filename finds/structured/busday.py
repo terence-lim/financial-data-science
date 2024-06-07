@@ -24,20 +24,20 @@ _hols = [20230102, 20230116, 20230220, 20230407, 20230529,
          20240619, 20240704, 20240902, 20241128, 20241225,
          20250101, 20250129, 20250217, 20250418, 20250526, 
          20250619, 20250704, 20250901, 20251127, 20251225] 
-_MAXDATE = (max(_hols) // 10000) * 10000 + 1231
+_MAXDATE = (max(_hols) // 10000) * 10000 + 1231   # last year with known hols
 
 def _map(func, dates, *args, **kwargs) -> List:
-    """Helper classmethod to apply a func to each date in list
+    """Helper function to apply a func to each date in list
 
     Args:
-        func: function to apply
-        dates: int dates to apply func on
-        *args: list of optional arguments 
-        **kwargs: list of keyword arguments
+      func: function to apply
+      dates: int dates to apply func on
+      *args: list of optional arguments 
+      **kwargs: list of keyword arguments
 
     Notes:
 
-        Func is applied to unique dates, then values copies in order
+      Func is applied to unique dates, then values copies in order
 
     Examples:
 
@@ -53,19 +53,21 @@ class BusDay:
     """Implement custom business-day and weekly dates calendar
 
     Args:
-        sql: SQL connection instance to store dates
-        start: Start date calendar
-        end: End date of calendar
-        hols: List of expected future holidays
-        end: Ending day of week for weekly calendar: 0-6 or 'Mon'-'Sun'
-        new: Recreate from French library datareader, else retrieve from SQL
+      sql: SQL connection instance to store dates
+      hols: List of expected future holidays
+      start: Start date of calendar
+      end: End date of calendar
+      endweek: Ending day of week for weekly calendar: 0-6 or 'Mon'-'Sun'
+      new: Load trading days from French library (True), else local database
 
     Attributes:
-        weeks : DataFrame of weeks in rows, index is weeknum and 
-                columns for beg, end dates and ismonthend indicator
+      weeks : DataFrame of weeks in rows, index is weeknum and 
+              columns for beg, end dates and ismonthend indicator
 
     Notes:
-        Non-trading holidays inferred from Ken French and NYSE websites
+
+    - Non-trading holidays inferred from Ken French and NYSE websites
+    - Earliest French daily factors is 19260701, except STRev is 19260126
     """
     def __init__(self, 
                  sql: SQL, 
@@ -81,14 +83,14 @@ class BusDay:
         self.table = sql.Table('busdates',
                                Column('date', Integer, primary_key=True))
         self.sql.create_all()
-        if new: # reload 'F-F_Research_Data_Factors_daily' using pandas reader
+        if new:   # load 'F-F_Research_Data_Factors_daily' using pandas reader
             f = pdr.data.DataReader(name='F-F_ST_Reversal_Factor_daily',
                                     data_source='famafrench',
                                     start=1900, end=2050)[0]\
                         .index.sort_values().unique()
             df = DataFrame({'date': BusDay.to_date(f.astype(str), '%Y-%m-%d')})
             sql.load_dataframe('busdates', df)
-        else:
+        else:     # else load from local database
             df = sql.read_dataframe('SELECT * FROM busdates')
 
         # 1. Initially, actual dates = actual FamaFrench busdays
@@ -101,38 +103,40 @@ class BusDay:
         dates = dates.append(pd.date_range(last, 
                                            end=pd.to_datetime(str(end)),
                                            freq='B')[1:])
-        # 3. But remove current list of anticipated NYSE holidays
+
+        # 3. But remove list of anticipated NYSE holidays
         hols = pd.to_datetime(hols, format='%Y%m%d')
         dates = sorted(set(dates).difference(set(hols)))
         
-        # 4. List of all potential busdays from pandas 6-day calendar
+        # 4. Now list of all potential busdays from pandas 6-day calendar
         freq = pd.offsets.CDay(calendar=np.busdaycalendar('1111110'), 
                                normalize=True)
         alldates = set(pd.date_range(dates[0], dates[-1], freq=freq))
 
-        # 5. Finalize actual holidays = all potential dates less actual dates
+        # 5. Set actual holidays = all potential dates less actual dates
         hols = np.array(list(alldates.difference(dates)), 
                         dtype='datetime64[D]')
         hols = sorted(set(hols).union([np.datetime64('1926-01-01')]))
 
-        # 6. Set custom cal and offsets from 6-day week less actual holidays
+        # 6. Finalize custom cal and offsets as 6-day week less actual holidays
         self._busdaycal = np.busdaycalendar(weekmask='1111110', holidays=hols)
         self._customcal = pd.offsets.CDay(calendar=self._busdaycal)
         self._begmocal = pd.offsets.CBMonthBegin(calendar=self._busdaycal)
         self._endmocal = pd.offsets.CBMonthEnd(calendar=self._busdaycal)
 
 
-        """Derive weekly trading calendar, ending on specified day of week"""
+        """Derive weekly trading calendar, ending on given day of week"""
         dates = pd.date_range(self.datetime(19251231),
-                              self.datetime(_MAXDATE),
+                              self.datetime(end),
                               freq=self._customcal)
         
-        # parse specified day-of-week, and generate weekly calender end dates
+        # parse specified day-of-week
         if isinstance(endweek, int):
             endweek = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][endweek % 7]
         if not endweek.startswith('W-'):
             endweek = 'W-' + endweek.upper()[:3]
 
+        # generate weekly calender end dates
         weekly_end = pd.date_range(self.datetime(start),
                                    self.datetime(end),
                                    freq=endweek)
@@ -151,7 +155,7 @@ class BusDay:
         self.weeks['ismonthend'] = m != m.shift(-1)  # last week fully in month
         self.weeks.index.name = 'numwk'
         self.freq = endweek
-        
+
     def datetime(self,
                  date: Any | Iterable[Any],
                  month: int | None = None,
@@ -159,12 +163,12 @@ class BusDay:
         """Convert int date or pandas timestamp to pydatetime type
 
         Args:
-            date: Input date or year or pandas Timestamp or datetime64
-            month: If None, then month is inferred from input date
-            day: If None, then day is inferred from input date
+          date: Input date or year or pandas Timestamp or datetime64
+          month: If None, then month is inferred from input date
+          day: If None, then day is inferred from input date
 
         Returns:
-            datetime object or list-like with same shape as input date
+          datetime object or list-like with same shape as input date
 
         Notes:
 
@@ -203,36 +207,35 @@ class BusDay:
         """Return valid business date with optional offset or roll treatment
 
         Args:
-            dates: Input dates in YYYYMMDD int format
-            offsets: Number of business days to offset
-            end: End index of offset window, None to return a single date
-            roll: How to treat dates that are not a valid day, in 
-                  {'raise', 'forward', 'following', 'backward', 'preceding'}
+          dates: Input dates in YYYYMMDD int format
+          offsets: Number of business days to offset
+          end: End index of offset window, None to return a single date
+          roll: How to treat dates that are not a valid day, in 
+                {'raise', 'forward', 'following', 'backward', 'preceding'}
         """
         if end:  # return all dates in window [left, right] around {date}
             if is_list_like(dates):
                 return _map(self.offset, dates, offsets, end, roll=roll)
             return [self.offset(dates, offsets=d, roll=roll)
                     for d in np.arange(offsets, end + 1)]
-        try:
-            return int(pd.to_datetime(np.busday_offset(
-                dates=np.array([self.datetime(dates)], dtype='datetime64[D]'),
-                offsets=offsets,
-                roll=roll,
-                busdaycal=self._busdaycal)).strftime('%Y%m%d')[0])
-        except:
+        if is_list_like(dates):
             return _map(self.offset, dates, offsets, end, roll)
+        date = np.busday_offset(dates=np.array([self.datetime(dates)],
+                                               dtype='datetime64[D]'),
+                                offsets=offsets,
+                                roll=roll,
+                                busdaycal=self._busdaycal)
+        return int(pd.to_datetime(date).strftime('%Y%m%d')[0])
 
     def date_range(self, start: int, end: int, 
                    freq: str | int = 'daily') -> List[int]:
         """Return business dates at desired freq between beg and end dates
 
         Args:
-            start: Inclusive start of date range
-            end: Inclusive end of date range
-            freq: If int, then annual ending on month-end business date,
-                  else in {'d'-aily, 'b'-egmo, 'e'-ndmo, 'w'-eekly}
-                  
+          start: Inclusive start of date range
+          end: Inclusive end of date range
+          freq: If int, then annual ending on month-end business date, else in
+                {('d')aily, ('b')egmo, ('e')ndmo, ('w')eekly, ('q')uarterly 
         """
         try:
             month = int(freq)           # annually as of calendar month end
@@ -240,25 +243,40 @@ class BusDay:
                 [self.datetime(self.year(d), month, 99) 
                  for d in range(self.year(start), self.year(end) + 1)])
         except:
-            freq = freq.lower()
-            if freq.startswith('w'):   # custom weekly 
-                return self.weeks['end']\
-                           .iloc[self._numwk(start) : self._numwk(end) + 1]\
-                           .to_list()
-            elif freq.startswith("d"):    # custom business daily
-                dates = pd.date_range(start=self.datetime(start), 
-                                      end=self.datetime(end),
-                                      freq=self._customcal)
-            elif freq.startswith("b"):  # custom business month begin
-                dates = pd.date_range(start=self.datetime(start, day=1),
-                                      end=str(self.endmo(end)),
-                                      freq=self._begmocal)
-            elif freq.startswith("e"):  # custom business month end
-                dates = pd.date_range(start=self.datetime(start, day=1),
-                                      end=str(self.endmo(end)),
-                                      freq=self._endmocal)
-            else:                       # naive daily calendar
-                dates = pd.DatetimeIndex([str(start), str(end)])
+            match freq[:1].lower():
+                case 'a':   # same as 12
+                    dates = pd.DatetimeIndex(
+                        [self.datetime(self.year(d), month, 99) 
+                         for d in range(self.year(start), self.year(end) + 1)])
+                case 'w':   # custom weekly 
+                    return self.weeks['end']\
+                               .iloc[self._numwk(start) : self._numwk(end) + 1]\
+                               .to_list()
+                case "d":    # custom business daily
+                    dates = pd.date_range(start=self.datetime(date=start), 
+                                          end=self.datetime(end),
+                                          freq=self._customcal)
+                case "b":  # custom business month begin
+                    dates = pd.date_range(start=self.datetime(date=start, day=1),
+                                          end=str(self.endmo(end)),
+                                          freq=self._begmocal)
+                case 'e':  # custom business month end
+                    dates = pd.date_range(start=self.datetime(date=start, day=1),
+                                          end=str(self.endmo(end)),
+                                          freq=self._endmocal)
+                case 'm':  # custom business month end
+                    dates = pd.date_range(start=self.datetime(date=start, day=1),
+                                          end=str(self.endmo(end)),
+                                          freq=self._endmocal)
+                case "q":  # custom business quarter end
+                    start = BusDay.to_quarterend(start)
+                    dates = pd.date_range(start=self.datetime(date=start, day=1),
+                                          end=str(self.endmo(end)),
+                                          freq=self._endmocal)[::3]
+                case 'd':
+                    dates = pd.DatetimeIndex([str(start), str(end)])
+                case _:
+                    raise Exception("invalid freq")
         return list(dates.strftime('%Y%m%d').astype(int))
 
     def date_tuples(self, dates: List[int]) -> List[Tuple[int, int]]:
@@ -266,11 +284,6 @@ class BusDay:
         dates = sorted(dates)
         return [(self.offset(beg, offsets=1), self.offset(end, offsets=0))
                 for beg, end in zip(dates[:-1], dates[1:])]
-
-    @staticmethod
-    def today() -> int:
-        """Return today's int date"""
-        return BusDay.to_date(datetime.now())
 
     @staticmethod
     def to_datetime(arg: Any,
@@ -335,6 +348,28 @@ class BusDay:
         return int(dt.strftime('%Y%m%d'))
 
     @staticmethod
+    def to_quarterend(dates: int | Iterable[int]) -> int | List[int]:
+        """Return calendar monthend date given an int date or list
+            
+        Args:
+            dates: input YYYYMMDD (or first 4-, 6-digits) int date, or list
+
+        Returns:
+            Output dates converted to quarterend of calendar    
+        """
+
+        if is_list_like(dates):
+            return [BusDay.to_quarterend(d) for d in dates]
+        if dates <= 9999:
+            dt = Busday.to_quarterend(dates*10000 + 1201)
+        elif dates <= 999999:
+            dt = BusDay.to_quarterend(dates*100 + 1)
+        else:
+            month = ((BusDay.month(dates) + 2) // 3) * 3  # round up to quarter
+            dt = datetime(year=dates // 10000, month=month, day=1) + MonthEnd(0)
+        return int(dt.strftime('%Y%m%d'))
+
+    @staticmethod
     def year(date: int | Iterable[int]) -> int | List[int]:
         """Helper to extract int years from input date or list"""
         if is_list_like(date):
@@ -359,6 +394,18 @@ class BusDay:
             return _map(BusDay.day, date)
         return date % 100    # date may be missing year or month
 
+    @staticmethod
+    def today() -> int:
+        """Return today's int date"""
+        return BusDay.to_date(datetime.now())    
+
+    def endqr(self, date: int | List[int], quarters: int = 0) -> int | List[int]:
+        """Return (list of) business month end date, optional months offset"""
+        return (_map(self.endmo, date, quarters) if is_list_like(date) else
+                int((self.datetime(date, ((BusDay.month(date) + 2)//3)*3, day=1)
+                     + (0 * self._endmocal) 
+                     + (quarters * 3 * self._endmocal)).strftime('%Y%m%d')))
+    
     def endmo(self, date: int | List[int], months: int = 0) -> int | List[int]:
         """Return (list of) business month end date, optional months offset"""
         return (_map(self.endmo, date, months) if is_list_like(date) else
@@ -420,12 +467,16 @@ class BusDay:
         june = self.endmo(self.endyr(dates), months=-6) 
         return self.endmo(june, months =-12 * (dates < june))
 
-    
 
 if __name__ == "__main__":
     from finds.database import SQL
     from secret import credentials
     VERBOSE = 1
+
+    sql = SQL(**credentials['sql'], verbose=VERBOSE)
+
+    # Create business date calendar from French research data library
+    bd = BusDay(sql, new=True, verbose=VERBOSE)
 
 
     def test_to_monthend():
@@ -465,9 +516,5 @@ if __name__ == "__main__":
     test_daily()
     test_weekly()
 
+    print(bd.date_range(19251231, 19260131))
 
-# if False:   # Recreate from French library
-    sql = SQL(**credentials['sql'], verbose=VERBOSE)
-    bd = BusDay(sql, new=True, verbose=VERBOSE)
-
-    

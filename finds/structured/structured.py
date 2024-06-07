@@ -8,7 +8,7 @@ Notes:
 
 - Optionally cache SQL query results to Redis store
 
-Copyright 2022, Terence Lim
+Copyright 2022-2024, Terence Lim
 
 MIT License
 """
@@ -20,83 +20,26 @@ from sqlalchemy import Table, Column, Index
 from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, BigInteger
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
-from finds.database.sql import SQL
+from finds.database.sql import SQL, as_dtypes
 from finds.database.redisdb import RedisDB
-from finds.busday import BusDay
+from .busday import BusDay
 
 _VERBOSE = 0
-
-def as_dtypes(df: DataFrame, 
-              columns: Dict, 
-              drop_duplicates: List[str] = [], 
-              sort_values: List[str] = [], 
-              keep: str ='first',
-              replace : Dict[str, Tuple[Any, Any]] = {}) -> DataFrame:
-    """Convert DataFrame dtypes to the given sqlalchemy Column types
-
-    Args:
-        df: Input DataFrame to apply new data types from target columns
-        columns: Target sqlalchemy column types as dict of {column: type}
-        sort_values: List of column names to sort by
-        drop_duplicates: list of fields if all duplicated to drop rows
-        keep : 'first' or 'last' row to keep if drop duplicates
-        replace : dict of {column label: tuple(old, replacement) values}
-
-    Returns:
-        DataFrame with columns and rows transformed
-
-    Notes:
-
-    - Columns of DataFrame are dropped if not specified in columns input
-    - If input is None, then return empty DataFrame with given column types
-    - Blank values in boolean and int fields are set to False/0.
-    - Invalid/blank values in double field are coerced to NaN.
-    - Invalid values in int field are coerced to 0
-    """
-
-    if df is None:
-        df = DataFrame(columns=list(columns))
-    df.columns = df.columns.map(str.lower).map(str.rstrip) # clean column names
-    df = df.reindex(columns=list(columns))  # reorder and only keep columns
-    if len(sort_values):
-        df.sort_values(sort_values)
-    if len(drop_duplicates):
-        df.drop_duplicates(subset=drop_duplicates, keep=keep, inplace=True)
-    for col, v in columns.items():
-        try:
-            if col in replace:
-                df[col] = df[col].replace(*replace[col])
-            if isinstance(v, Integer) or isinstance(v, SmallInteger):
-                df[col] = df[col].replace("(?<=\d)-","", regex=True) # crsp dates
-                df[col] = df[col].replace('', 0).astype(int)
-            elif isinstance(v, Boolean):
-                df[col] = df[col].replace('', False).astype(bool)
-            elif isinstance(v, Float):
-                df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-            elif isinstance(v, String):
-                df[col] = df[col].astype(str).str.encode('ascii', 'ignore')\
-                                                 .str.decode('ascii')
-            else:
-                raise Exception('(as_dtypes) Unknown type for column: ' + col)
-        except:
-            raise Exception('(as_dtypes) bad data in column: ' + col)
-    return df
-
 
 class Structured(object):
     """Base class for interface to structured datasets, stored in SQL
 
     Args:
-        sql: Connection instance to mysql database
-        bd: Custom business calendar instance
-        tables: Sqlalchemy Tables and names defined for this datasets group
-        identifier: Name of field of unique identifier key
-        name: Display name for this datasets group
-        rdb: Connector to Redis cache store, if desired
+      sql: Connection instance to mysql database
+      bd: Custom business calendar instance
+      tables: Sqlalchemy Tables and names defined for this datasets group
+      identifier: Name of field of unique identifier key
+      name: Display name for this datasets group
+      rdb: Connector to Redis cache store, if desired
 
     Attributes:
-        identifier: Field name of identifier key by this datasets group
-        name: Display name for this datasets group
+      identifier: Field name of identifier key by this dataset group
+      name: Display name for this dataset group
     """
 
     def __init__(self,
@@ -145,14 +88,14 @@ class Structured(object):
         """Load dataframe to SQLAlchemy table object using associated schema
 
         Args:
-            df: DataFrame to load from
-            table: Destination Table object
-            to_replace: Original value or list of values to replace
-            value: Value to replace with
-            overwrite: Whether to overwrite or append
+          df: DataFrame to load from
+          table: Destination Table object
+          to_replace: Original value or list of values to replace
+          value: Value to replace with
+          overwrite: Whether to overwrite or append
 
         Returns:
-            Number of rows loaded
+          Number of rows loaded
 
         Notes:
 
@@ -182,11 +125,11 @@ class Structured(object):
         """Read signal values from sql and return as data frame
 
         Args:
-            table: Table to read from
-            where: Where clause str for sql select
+          table: Table to read from
+          where: Where clause str for sql select
 
         Returns:
-            DataFrame of query
+          DataFrame of query results
         """
         where = bool(where)*'WHERE ' + where
         return self.sql.read_dataframe(f"SELECT * FROM {table} {where}")
@@ -194,7 +137,8 @@ class Structured(object):
     def load_csv(self,
                  dataset: str, 
                  csvfile: str, 
-                 drop: Dict[str, List[Any]] = {}, 
+                 drop: Dict[str, List[Any]] = {},
+                 keep: Dict[str, List[Any]] = {},                  
                  replace: Dict[str, Tuple[Any, Any]] = {}, 
                  sep: str = ',', 
                  encoding: str = 'latin-1', 
@@ -205,14 +149,15 @@ class Structured(object):
         """Insert ignore into SQL table from csvfile, and return as DataFrame
 
         Args:
-            dataset: dataset name
-            csvfile: csv file name
-            drop: {column: value} specifies rows with value in column
-            replace: {column: [old,new]} specifies values to replace in column
-            sep, encoding, header, low_memory, na_filter: args for pd.read_csv
+          dataset: dataset name
+          csvfile: csv file name
+          keep: {column: values} keep rows whose columns have any of values
+          drop: {column: values} drop rows with any given value in column
+          replace: {column: [old,new]} specifies values to replace in column
+          sep, encoding, header, low_memory, na_filter: args for pd.read_csv
 
         Returns:
-            DataFrame containing loaded data
+          DataFrame containing loaded data
 
         Notes:
 
@@ -229,20 +174,32 @@ class Structured(object):
         df.columns = df.columns.map(str.lower).map(str.rstrip)
         self._print('(read_csv)', len(df), csvfile)
 
-        # clean up column dtypes and rows
-        for col, vals in drop.items():  # drop rows where col has value val
+        # drop rows where col has value val        
+        for col, vals in drop.items():
             rows = df.index[df[col].isin(vals)]
             self._print('Dropping', len(rows), 'rows with', col, 'in', vals)
             df.drop(index=rows, inplace=True)
+
+        # clean up column dtypes and rows
         df = as_dtypes(
             df=df,
             columns={k.lower(): v.type for k, v in table.columns.items()},
             drop_duplicates=[p.key.lower() for p in table.primary_key],
             replace=replace)
-        for col, vals in drop.items():  # drop rows where col has value in val
-            df.drop(index=df.index[df[col].isin(vals)], inplace=True)
         self._print("(load_csv)", len(df), table)
 
+        # drop again in case dtypes got changed
+        for col, vals in drop.items():
+            rows = df.index[df[col].isin(vals)]
+            df.drop(index=rows, inplace=True)
+        
+        # keep rows where col has value vals
+        rows = df.index
+        for col, vals in keep.items():
+            rows = rows[df.loc[rows, col].isin(vals).values]
+        self._print('Keeping', len(rows), 'of', len(df), 'rows with', keep)
+        df = df.loc[rows]
+            
         # Create sql table and load from DataFrame
         #table.create(checkfirst=True)
         self.sql.create_all()
@@ -251,8 +208,15 @@ class Structured(object):
 
     def build_lookup(self, source: str, target: str,
                      date_field: str,  dataset: str, fillna: Any) -> Any:
-        """Helper to build lookup of target from source identifiers"""
-        table = self[dataset]    # Table object for dataset
+        """Helper to build lookup of target from source identifiers
+        Args:
+          source: Name of source identifier key
+          target: Name of target identifier key to return
+          date_field: Name of date field in database table
+          dataset: Internal name of table containing identifier mappings
+          fillna: Value to return if not found
+        """
+        table = self[dataset]    # physical name of table
         assert table is not None
         assert source in table.c
         assert target in table.c
@@ -272,14 +236,14 @@ class Structured(object):
         """Returns matching permnos as of a prevailing date from 'links' table
 
         Args:
-            keys: Input list of identifiers to lookup
-            date: Prevailing date of link
-            link_perm: Name of permno field in 'links' table
-            link_date: Name of link date field in 'links' table
-            permno: Name of field to output permnos to
+          keys: Input list of identifiers to lookup
+          date: Prevailing date of link
+          link_perm: Name of permno field in 'links' table
+          link_date: Name of link date field in 'links' table
+          permno: Name of field to output permnos to
 
         Returns:
-            List of Linked permnos, as of prevailing date; missing set to 0
+          List of Linked permnos, as of prevailing date; missing set to 0
         """
         assert self['links'] is not None
         key = self.identifier
@@ -318,16 +282,16 @@ class Structured(object):
         """Query a dataset, and join 'links' table to return data with permno
 
         Args:
-            dataset: Name internal Table to query data from
-            fields: Data fields to retrieve
-            date_field: Name of date field in data table
-            link_date: Name of link date field in 'links' table
-            link_perm: Name of permno field in 'links' table
-            where: Where clause (optional)
-            limit: Maximum rows to return (optional)
+          dataset: Name internal Table to query data from
+          fields: Data fields to retrieve
+          date_field: Name of date field in data table
+          link_date: Name of link date field in 'links' table
+          link_perm: Name of permno field in 'links' table
+          where: Where clause (optional)
+          limit: Maximum rows to return (optional)
 
         Returns:
-            DataFrame containing result of query
+          DataFrame containing result of query
         """
 
         if where:
@@ -367,12 +331,12 @@ class Lookup:
     """Loads dated identifier mappings to memory, to lookup by date
 
         Args:
-            sql: SQL connection instance
-            source: Name of source identifier key
-            target: Name of target identifier key to return
-            date_field: Name of date field in database table
-            table: Physical SQL table name containing identifier mappings
-            fillna: Value to return if not found
+          sql: SQL connection instance
+          source: Name of source identifier key
+          target: Name of target identifier key to return
+          date_field: Name of date field in database table
+          table: Physical SQL table name containing identifier mappings
+          fillna: Value to return if not found
     """
     def __init__(self, sql: SQL, source: str, target: str, 
                  date_field: str, table: str, fillna: Any):

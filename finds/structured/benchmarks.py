@@ -11,17 +11,14 @@ from sqlalchemy import Table, Column, Index
 from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, BigInteger
 from finds.database.sql import SQL
 from finds.database.redisdb import RedisDB
-from finds.busday import BusDay
-from .stocks import Stocks
+from finds.structured.busday import BusDay
+from finds.structured.stocks import Stocks
 _VERBOSE = 1
 
 class Benchmarks(Stocks):
     """Provide Structured Stocks interface to benchmark and index returns"""
 
-    def __init__(self,
-                 sql: SQL, 
-                 bd: BusDay, 
-                 verbose: int = _VERBOSE):
+    def __init__(self, sql: SQL, bd: BusDay, verbose: int = _VERBOSE):
         """Initialize connection to a benchmark index returns dataset"""
         tables = {
             'daily': sql.Table('benchmarks',
@@ -36,10 +33,7 @@ class Benchmarks(Stocks):
         super().__init__(sql, bd, tables, identifier='permno',
                          name='benchmarks', verbose=verbose)
     
-    def load_series(self,
-                    df: DataFrame, 
-                    name: str = '', 
-                    item: str = '', 
+    def load_series(self, df: DataFrame, name: str, item: str = '', 
                     monthly: bool = False) -> DataFrame:
         """Loads a Series containing benchmark returns to sql
 
@@ -64,22 +58,18 @@ class Benchmarks(Stocks):
         permno = df.name
         df = df.rename('ret').to_frame()
         df['permno'] = permno
-        self.sql.run(self['daily'].delete()\
-                     .where(self['daily'].c['permno'] == permno))
+        self.sql.run(self['daily'].delete().where(self['daily'].c['permno'] == permno))
         self.sql.load_dataframe(self['daily'].key, df=df, index_label='date')
         
         #self['ident'].create(checkfirst=True)
-        self.sql.run(self['ident'].delete()\
-                     .where(self['ident'].c['permno'] == permno))
-        ident = DataFrame.from_dict({0: {'permno': permno,
-                                         'name': name,
-                                         'item':item}},
+        self.sql.run(self['ident'].delete().where(self['ident'].c['permno'] == permno))
+        ident = DataFrame.from_dict({0: {'permno': permno, 'name': name, 'item':item}},
                                     orient='index')
         self.sql.load_dataframe(self['ident'].key, df=ident)
         return ident
 
 if __name__ == "__main__":
-    from env.conf import credentials
+    from secret import credentials
     from finds.readers import FFReader
     VERBOSE = 1
 
@@ -89,16 +79,21 @@ if __name__ == "__main__":
     bd = BusDay(sql)
     bench = Benchmarks(sql, bd)
 
+    downloads = paths['data'] / 'CRSP'
+    df = pd.read_csv(downloads / 'sp500.txt.gz', header=0, sep='\t').set_index('caldt')
+    for col in df.columns:
+        print(bench.load_series(df[col], name=col))
+    
     # load benchmarks (mostly FamaFrench)
-    for datasets, date_formatter in zip([FFReader.monthly, FFReader.daily],
-                                        [bd.endmo, bd.offset]):
+    for datasets, date_formatter in zip(
+            [FFReader.monthly, FFReader.daily],[bd.endmo, bd.offset]):
         for name, item, suffix in datasets:
             df = FFReader.fetch(name=name, 
                                 item=item,
                                 suffix=suffix,
                                 date_formatter=date_formatter)
-            #for col in df.columns:
-            #    print(bench.load_series(df[col], name=name, item=str(item)))
+            for col in df.columns:
+                print(bench.load_series(df[col], name=name, item=str(item)))
             print(DataFrame(**sql.run('select * from ' + bench['ident'].key)))
 
     print(bench.get_series('CMA', 'ret'))

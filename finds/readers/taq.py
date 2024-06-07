@@ -14,7 +14,7 @@ import indexed_gzip as igzip
 import gzip, io, pickle, time, re, os
 import matplotlib.pyplot as plt
 from typing import List, Any
-from finds.plots import plot_time
+from finds.utils.plots import plot_time
 _VERBOSE = 1
 
 def taq_from_csv(chunk: str, columns: List[str] = []) -> DataFrame:
@@ -447,7 +447,7 @@ def bin_quotes(cq: DataFrame, value: int = 15, unit: str = 'm',
     >>> agg(Series.sum, min_count=1)
     >>> result[result.index > open_t], result[result.index <= close_t]
     """
-    units = {'h':'H', 'm':'min', 's':'S', 'ms':'ms', 'us':'us', 'ns':'N'}
+    units = {'h':'H', 'm':'min', 's':'s', 'ms':'ms', 'us':'us', 'ns':'N'}
     if unit not in units:
         raise Exception(str(unit) + ' must be in ' + str(units.keys()))
     rule = dict(rule=str(value)+units[unit], closed='left', label='right')
@@ -458,8 +458,7 @@ def bin_quotes(cq: DataFrame, value: int = 15, unit: str = 'm',
     intervals = pd.to_datetime(sorted(set(intervals).union(cq.index)))
 
     # compute forward duration of each (supplemented) cq row
-    q = cq.reindex(intervals,
-                   method='pad')  # forward fill quotes to intervals
+    q = cq.reindex(intervals, method='pad')  # forward fill quotes to intervals
     q['weight'] = q.index.to_series()\
                          .diff()\
                          .fillna(np.timedelta64(0))\
@@ -483,7 +482,7 @@ def bin_quotes(cq: DataFrame, value: int = 15, unit: str = 'm',
     result['bidsize'] = weighted(q['Best_Bid_Size'])
     
     mid = ((q['Best_Offer_Price'] + q['Best_Bid_Price']) / 2).resample(**rule)
-    result['mid'] = mid.last().fillna(method='pad')
+    result['mid'] = mid.last().ffill()  # fillna(method='pad')
     result['firstmid'] = mid.first()
     result['maxmid'] = mid.max()
     result['minmid'] = mid.min()
@@ -529,19 +528,22 @@ def bin_trades(ct: DataFrame, value: int = 5, unit: str = 'm',
     >>> agg(Series.sum, min_count=1)
     >>> result[result.index > open_t], result[result.index <= close_t]
     """
-    units = {'h':'H', 'm':'min', 's':'S', 'ms':'ms', 'us':'us', 'ns':'N'}
+    units = {'h':'H', 'm':'min', 's':'s', 'ms':'ms', 'us':'us', 'ns':'N'}
     if unit not in units:
         raise Exception(str(unit) + ' must be in ' + str(units.keys()))
     rule = dict(rule=str(value) + units[unit],
                 closed='left',
                 label='right')
     
-    # extend ct.index timestamps to open_t and close_t if necessary
+    # hack to extend ct.index timestamps to open_t and close_t if necessary
     timedelta = np.timedelta64(value, unit.lower())
-    p = [t for t in [open_t, close_t]
-         if t < ct.index[0] or t > ct.index[-1]]
-    t = pd.concat((ct, DataFrame(index=p,
-                                 columns=ct.columns))).sort_index()
+    t = ct.loc[~ct.index.duplicated(keep='first')]
+    t = t.to_dict(orient='index')  # pd.concat warns cannot empty or all-nan
+    if open_t < ct.index[0]:
+        t[open_t] = dict.fromkeys(ct.columns, None)
+    if close_t > ct.index[0]:
+        t[close_t] = dict.fromkeys(ct.columns, None)
+    t = DataFrame.from_dict(t, orient='index').sort_index() 
     t.index.name = ct.index.name
 
     result = DataFrame(t['Trade_Volume']\
@@ -551,7 +553,7 @@ def bin_trades(ct: DataFrame, value: int = 5, unit: str = 'm',
     result['counts'] = t['Trade_Price']\
                        .resample(**rule).count()
     price = t['Trade_Price'].resample(**rule)
-    result['last'] = price.last().fillna(method='pad')
+    result['last'] = price.last().ffill() # fillna(method='pad')
     result['first'] = price.first()
     result['maxtrade'] = price.max()
     result['mintrade'] = price.min()

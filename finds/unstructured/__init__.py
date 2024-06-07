@@ -1,3 +1,6 @@
 from .unstructured import Unstructured
-#from .store import Store
-#from .textual import Textual
+from .vocab import Vocab
+from .edgar import Edgar
+
+
+

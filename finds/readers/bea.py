@@ -1,10 +1,16 @@
-"""Wrapper over BEA web api and data
+"""Wrapper over BEA web api and data source files
 
 - Bureau of Economic Analysis: Input-Output Use Tables
+
+BEA released initial results of the comprehensive update of the
+National Economic Accounts (NEAs), which include the National Income
+and Product Accounts (NIPAs) and the Industry Economic Accounts
+(IEAs), on September 28, 2023.
 
 Copyright 2022, Terence Lim
 
 MIT License
+
 """
 from typing import Dict, List, Any
 import io
@@ -17,7 +23,7 @@ from pandas.api import types
 from sqlalchemy import Integer, String, Column
 from pandas.api import types
 from finds.database.redisdb import RedisDB
-from .readers import requests_get
+from finds.readers.readers import requests_get
 _VERBOSE = 1
 
 class BEA:
@@ -28,8 +34,7 @@ class BEA:
         userid: Register with BEA to get key for their web api
 
     Attributes:
-        bea_vintages:  Reference dict to group BEA tables by vintage year
-        bea_industry: Reference Series maps BEA industry to custom descriptions
+        short_desc: Reference Series maps BEA industry to custom descriptions
         params: Some common parameter sets for BEA web api
         
     Examples:
@@ -40,106 +45,109 @@ class BEA:
     >>> df = bea.get(**BEA.items['ioUse'], year=2018)
     """
 
-    _bea_url = 'https://apps.bea.gov/industry/xls/io-annual/'    
+    _xls_url = 'https://apps.bea.gov/industry/xls/io-annual/'    
 
-    bea_industry_ = Series({    # custom abbreviations of BEA industries
-        '11': 'Agriculture',
-        '111CA': 'Farms',
-        '113FF': 'Forestry,fishing',
-        '21': 'Mining',
-        '211': 'Oil, gas',
-        '212': 'Mining',
-        '213': 'Support mining',
-        '22': 'Utilities',
-        '23': 'Construction',
-        '31G': 'Manufacturing',
-        '33DG': 'Durable goods',
-        '321': 'Wood',
-        '327': 'Nonmetallic',
-        '331': 'Metals',
-        '332': 'Fabricated metal',
-        '333': 'Machinery',
-        '334': 'Computer',
-        '335': 'Electrical',
-        '3361MV': 'Motor vehicles',
-        '3364OT': 'Transport equip',
-        '337': 'Furniture',
-        '339': 'Manufacturing',
-        '31ND': 'Nondurable goods',
-        '311FT': 'Food',
-        '313TT': 'Textile',
-        '315AL': 'Apparel',
-        '322': 'Paper',
-        '323': 'Printing',
-        '324': 'Petroleum, coal',
-        '325': 'Chemical',
-        '326': 'Plastics, rubber',
-        '42': 'Wholesale',
-        '44RT': 'Retail',
-        '441': 'Motor dealers',
-        '445': 'Food stores',
-        '452': 'General stores',
-        '4A0': 'Other retail',
-        '48' : 'Transportation',
-        '48TW': 'Transport, warehouse',
-        '481': 'Air transport',
-        '482': 'Rail transport',
-        '483': 'Water transport',
-        '484': 'Truck transport',
-        '485': 'Transit ground',
-        '486': 'Pipeline transport',
-        '487OS': 'Other transport',
-        '493': 'Warehousing, storage',
-        '51': 'Information',
-        '511': 'Publishing',
-        '512': 'Motion picture',
-        '513': 'Broadcasting',
-        '514': 'Data processing',
-        '52': 'Finance,insurance',
-        '521CI': 'Banks',
-        '523': 'Securities',
-        '524': 'Insurance',
-        '525': 'Funds, trusts',
-        '53': 'Real estate',
-        '531': 'Real estate',
-        'HS': 'Housing',
-        'ORE': 'Other real estate',
-        '532RL': 'Rental',
-        '54': 'Professional services',
-        '5411': 'Legal services',
-        '5415': 'Computer services',
-        '5412OP': 'Misc services',
-        '55': 'Management',
-        '56': 'Administrative and waste management',
-        '561': 'Administrative',
-        '562': 'Waste management',
-        '6': 'Educational services',
-        '61': 'Educational',
-        '62': 'Healthcare',
-        '621': 'Ambulatory',
-        '622HO': 'Hospitals, nursing',
-        '622': 'Hospitals',
-        '623': 'Nursing',
-        '624': 'Social',
-        '7': 'Arts, entertainment, recreation, accommodation, food svcs',
-        '71': 'Arts, entertainment, recreation',
-        '711AS': 'Performing arts',
-        '713': 'Recreation',
-        '72': 'Accommodation. food svcs',
-        '721': 'Accommodation',
-        '722': 'Food services',
-        '81': 'Other services',
-        'G': 'Government',
-        'GF': 'Federal',
-        'GFG': 'General government',
-        'GFGD': 'Defense',
-        'GFGN': 'Nondefense',
-        'GFE': 'Federal enterprises',
-        'GSL': 'State local',
-        'GSLG': 'State local general',
-        'GSLE': 'State local enterprises'})
+    # custom short labels BEA industries
+    short_desc = Series({'11': 'Agriculture',
+                         '111CA': 'Farms',
+                         '113FF': 'Forestry,fishing',
+                         '21': 'Mining',
+                         '211': 'Oil, gas',
+                         '212': 'Mining',
+                         '213': 'Support mining',
+                         '22': 'Utilities',
+                         '23': 'Construction',
+                         '31G': 'Manufacturing',
+                         '33DG': 'Durable goods',
+                         '321': 'Wood',
+                         '327': 'Nonmetallic',
+                         '331': 'Metals',
+                         '332': 'Fabricated metal',
+                         '333': 'Machinery',
+                         '334': 'Computer',
+                         '335': 'Electrical',
+                         '3361MV': 'Motor vehicles',
+                         '3364OT': 'Transport equip',
+                         '337': 'Furniture',
+                         '339': 'Manufacturing',
+                         '31ND': 'Nondurable goods',
+                         '311FT': 'Food',
+                         '313TT': 'Textile',
+                         '315AL': 'Apparel',
+                         '322': 'Paper',
+                         '323': 'Printing',
+                         '324': 'Petroleum, coal',
+                         '325': 'Chemical',
+                         '326': 'Plastics, rubber',
+                         '42': 'Wholesale',
+                         '44RT': 'Retail',
+                         '441': 'Motor dealers',
+                         '445': 'Food stores',
+                         '452': 'General stores',
+                         '4A0': 'Other retail',
+                         '48' : 'Transportation',
+                         '48TW': 'Transport, warehouse',
+                         '481': 'Air transport',
+                         '482': 'Rail transport',
+                         '483': 'Water transport',
+                         '484': 'Truck transport',
+                         '485': 'Transit ground',
+                         '486': 'Pipeline transport',
+                         '487OS': 'Other transport',
+                         '493': 'Warehousing, storage',
+                         '51': 'Information',
+                         '511': 'Publishing',
+                         '512': 'Motion picture',
+                         '513': 'Broadcasting',
+                         '514': 'Data processing',
+                         '52': 'Finance,insurance',
+                         '521CI': 'Banks',
+                         '523': 'Securities',
+                         '524': 'Insurance',
+                         '525': 'Funds, trusts',
+                         '53': 'Real estate',
+                         '531': 'Real estate',
+                         'HS': 'Housing',
+                         'ORE': 'Other real estate',
+                         '532RL': 'Rental',
+                         '54': 'Professional services',
+                         '5411': 'Legal services',
+                         '5415': 'Computer services',
+                         '5412OP': 'Misc services',
+                         '55': 'Management',
+                         '56': 'Administrative and waste management',
+                         '561': 'Administrative',
+                         '562': 'Waste management',
+                         '6': 'Educational services',
+                         '61': 'Educational',
+                         '62': 'Healthcare',
+                         '621': 'Ambulatory',
+                         '622HO': 'Hospitals, nursing',
+                         '622': 'Hospitals',
+                         '623': 'Nursing',
+                         '624': 'Social',
+                         '7': 'Arts, entertain, rec, accommodation, food svcs',
+                         '71': 'Arts, entertain, rec',
+                         '711AS': 'Performing arts',
+                         '713': 'Recreation',
+                         '72': 'Accommodation. food svcs',
+                         '721': 'Accommodation',
+                         '722': 'Food services',
+                         '81': 'Other services',
+                         'G': 'Government',
+                         'GF': 'Federal',
+                         'GFG': 'General government',
+                         'GFGD': 'Defense',
+                         'GFGN': 'Nondefense',
+                         'GFE': 'Federal enterprises',
+                         'GSL': 'State local',
+                         'GSLG': 'State local general',
+                         'GSLE': 'State local enterprises'},
+                        name='label')
     
-    bea_vintages_ = {  # group BEA IO-Use table coarser by vintage year
+
+    # group BEA IO-Use table coarser by vintage year    
+    _bea_vintages = {
         9999: {'531': ['HS','ORE']},   
         1963: {'48': ['481','482','483','484','485','486','487OS'],
                '51': ['511','512','513','514'],
@@ -152,12 +160,12 @@ class BEA:
                'GFG': ['GFGD', 'GFGN'],
                '622HO': ['622','623']}}
     
-    
+    # parameters for favorite BEA web api    
     params = {'gdpindustry': {'datasetname': 'GDPbyIndustry', 
                               'index': 'key',
                               'parametername': 'Industry'},
               'ioUse': {'datasetname': 'inputoutput',
-                        'tableid': 259}} # commonly parameters for BEA web api
+                        'tableid': 259}}
 
     def __init__(self, rdb: RedisDB | None, userid: str, verbose: int =_VERBOSE):
         """Open connection to BEA web api"""
@@ -174,10 +182,10 @@ class BEA:
             source: Source url or local file
 
         Notes:
-
         - https://www.bea.gov/industry/input-output-accounts-data
         - https://apps.bea.gov/industry/xls/io-annual/
-        - Use_SUT_Framework_2007_2012_DET.xlsx 
+          - IOUse_Before_Redefinitions_PRO_1947-1962_Summary.xlsx
+          - Use_SUT_Framework_2007_2012_DET.xlsx 
         - Replace "HS" "ORE" with "531"
         """
         if not source:
@@ -187,7 +195,7 @@ class BEA:
                 1947: 'IoUse_Before_Redefinitions_PRO_1947-1962_Summary.xlsx'}
             if year not in filename:
                 raise Exception('bea year not in ' + str(list(filename.keys())))
-            source = BEA._bea_url + filename[year]
+            source = BEA._xls_url + filename[year]
 
         # get the xls and parse the NAICS Codes sheet
         x = pd.ExcelFile(source)
@@ -198,7 +206,7 @@ class BEA:
         labels = {str(df.iloc[i,0]) : df.iloc[i,1] for i in beg}
 
         # Kludge: some labels missing, so fill from custom abbreviations
-        labels.update({k: v for k,v in BEA.bea_industry_.items()
+        labels.update({k: v for k,v in BEA.short_desc.items()
                        if k not in labels})
 
         # Now extract beg and end row of groups and labels from columns 1,2
@@ -211,36 +219,49 @@ class BEA:
         # also, parse leading digits of summary name if at least len 2 (pad 0's)
         result = []
         for imin, imax in zip(beg, end):
-            s = [str(c).split('-')[0]
-                 for c in df.iloc[imin:imax, 6] if str(c)[0].isdigit()]
-            s = [[re.sub("[^0-9]","",a).ljust(6,'0') for a in c.split(',')]
-                 for c in s if c not in ['491']]   # postal industry
-            new_codes = [int(c) for inner in s for c in inner]
+            code_title = [(str(col6).split('-')[0], col4)
+                          for col6, col4 in zip(df.iloc[imin:imax, 6],
+                                                df.iloc[imin:imax, 4])
+                          if str(col6)[0].isdigit()]
+            
+            # '491' is postal industry
+            naics_title = [[(re.sub("[^0-9]", "", code).ljust(6, '0'), title)
+                            for code in codes.split(',')]
+                           for codes, title in code_title if codes not in ['491']]
+
+            new_codes = [[int(code), title]
+                         for codes in naics_title for code, title in codes]
+
+            # include summary code by right-padding up to six 0s
             name = str(df.iloc[imin, 1])
             m = re.match('\d+', name)
             if m and len(m.group()) >= 2:
-                new_codes.append(int(m.group().ljust(6, '0')))
-            new_df = DataFrame(sorted(new_codes), columns=['code'])
+                new_codes.append([int(m.group().ljust(6, '0')), df.iloc[imin, 2]])
+
+            new_df = DataFrame.from_records(new_codes, columns=['code', 'title'])\
+                              .sort_values(['code'])
             new_df['name'] = name
             new_df['description'] = df.iloc[imin, 2]
             result.append(new_df.drop_duplicates())
-        result = pd.concat(result,
-                           axis=0,
-                           ignore_index=True)
+        result = pd.concat(result, axis=0, ignore_index=True)
 
         # replace earlier vintage years with coarser industries
-        for vintage, codes in BEA.bea_vintages_.items():
+        for vintage, codes in BEA._bea_vintages.items():
             if year < vintage:
                 for k,v in codes.items():
                     result.loc[result['name'].isin(v),
                                ['name','description']] = [k, labels[k]]
 
         # clean-up data frame and its index for return
-        return result.drop_duplicates(['code']).set_index('code').sort_index()
+        return result.drop_duplicates(['code'])\
+                     .set_index('code')\
+                     .sort_index()\
+                     .rename_axis(columns=str(year))
+    
 
     def get(self, datasetname: str = "", parametername: str = "",
             cache_mode: str = "rw", **kwargs) -> DataFrame:
-        """Wrapper to execute common BEA web api calls
+        """Execute common BEA web api calls
 
         Args:
             datasetname: Name of dataset to retrieve, e.g. 'ioUse'
@@ -278,22 +299,28 @@ class BEA:
                         if isinstance(v, list):
                             v = ",".join(v)
                         url += "&" + str(k) + "=" + str(v)
-        if self.verbose: print(url, str(kwargs))
+        if self.verbose:
+            print(url, str(kwargs))
 
         if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(url):
-            if self.verbose: print('(BEA get rdb)', url)
+            if self.verbose:
+                print('(BEA get rdb)', url)
             return self.rdb.load(url)
         response = requests_get(url)
         f = io.BytesIO(response.content)
         data = json.loads(f.read().decode('utf-8'))
-        if not datasetname:
-            df = DataFrame(data['BEAAPI']['Results']['Dataset'])
-        elif parametername:
-            df = DataFrame(data['BEAAPI']['Results']['ParamValue'])
-        elif len(kwargs) == 0:
-            df = DataFrame(data['BEAAPI']['Results']['Parameter'])
-        else:
-            df = DataFrame(data['BEAAPI']['Results'][0]['Data'])
+        try:
+            if not datasetname:
+                df = DataFrame(data['BEAAPI']['Results']['Dataset'])
+            elif parametername:
+                df = DataFrame(data['BEAAPI']['Results']['ParamValue'])
+            elif len(kwargs) == 0:
+                df = DataFrame(data['BEAAPI']['Results']['Parameter'])
+            else:
+                df = DataFrame(data['BEAAPI']['Results'][0]['Data'])
+        except:
+            print('***', datasetname, parametername, '***', data)
+            raise Exception
         df.columns = df.columns.map(str.lower).map(str.rstrip)
         if 'index' in kwargs:
             df = df.set_index(kwargs['index'])
@@ -315,17 +342,21 @@ class BEA:
         filename = {  # early years' ioUse tables
             1963: 'IoUse_Before_Redefinitions_PRO_1963-1996_Summary.xlsx',
             1947: 'IoUse_Before_Redefinitions_PRO_1947-1962_Summary.xlsx'}
-        url = (source or BEA._bea_url)
+        url = (source or BEA._xls_url)
         url += ('' if url.endswith('/') else '/')
-        url += filename[1963 if year >= 1963 else 1947] + '_' + str(year)
-        if self.verbose: print(url)
+        url += filename[1963 if year >= 1963 else 1947]
+        if self.verbose:
+            print(url)
 
         if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(url):
-            if self.verbose: print('(BEA get rdb)', url)
+            if self.verbose:
+                print('(BEA get rdb)', url)
             return self.rdb.load(url)
         
-        x = pd.ExcelFile(filename)   # x.sheet_names
-        df = x.parse(str(year))      # parse the sheet for the desired year
+        x = pd.ExcelFile(url)    # x.sheet_names
+        if self.verbose:
+            print(x.sheet_names)
+        df = x.parse(str(year))  # parse the sheet for the desired year
 
         # seek cells with "Code" in top left, and startswith "T0" at corners
         top, = np.where(df.iloc[:, 0].astype(str).str.startswith('Code'))
@@ -394,32 +425,35 @@ class BEA:
         # merge industries for vintage year, using historical sectoring scheme
         if not vintage:
             vintage = year   # no vintage specified, so use same year
-        for key, codes in self.bea_vintages_.items():  # step thru vintages
+        for key, codes in self._bea_vintages.items():  # step thru vintages
             if vintage < key:         # if required vintage predates scheme year
                 for k,v in codes.items():
-                    if self.verbose: print(k, '<--', v)
+                    if self.verbose:
+                        print(k, '<--', v)
                     oldRows = df[df['rowcode'].isin(v)].drop(columns='rowcode')
                     keep = [c for c in oldRows.columns if c != 'datavalue']
                     newRows = oldRows.groupby(by=keep, as_index=False).sum()
                     newRows['rowcode'] = k
-                    df = pd.concat([df, newRows],
-                                   ignore_index=True,
-                                   sort=True)
+                    if len(newRows):
+                        df = pd.concat([df, newRows],
+                                       ignore_index=True,
+                                       sort=True)
                     oldCols = df[df['colcode'].isin(v)].drop(columns='colcode')
                     keep = [c for c in oldCols.columns if c != 'datavalue']
                     newCols = oldCols.groupby(by=keep, as_index=False).sum()
                     newCols['colcode'] = k
-                    df = pd.concat([df, newCols],
-                                   ignore_index=True,
-                                   axis = 0,
-                                   sort=True)
+                    if len(newCols):
+                        df = pd.concat([df, newCols],
+                                       ignore_index=True,
+                                       axis = 0,
+                                       sort=True)
                     df = df[~df['colcode'].isin(v)]
                     df = df[~df['rowcode'].isin(v)]
         keep = ('F','G')
         drop = ('T','U','V','Other')
         df = df[~df['colcode'].str.startswith(drop)
                 & ~df['rowcode'].str.startswith(drop)]        
-        return df
+        return df.rename_axis(index=str(vintage), columns=str(year))
 
     
 
@@ -429,54 +463,48 @@ if __name__ == "__main__":
 
     downloads = paths['scratch']
     sql = SQL(**credentials['sql'])
-    rdb = None   #RedisDB(**credentials['redis'])
+    rdb = RedisDB(**credentials['redis'])
     bea = BEA(rdb, **credentials['bea'])
 
     # Get sectoring table
     df = BEA.sectoring(1997)
-    
-    raise Exception
+
     
     # Read GDPbyIndustry descriptions
     df = bea.get(datasetname='GDPbyIndustry', parametername='Industry')
     print(df)
+
     df = bea.get(datasetname='GDPbyIndustry', parametername='Industry',
                  index='key')
     print(df)
     
 
-    raise Exception
-
     # Read ioUse table, and regroup by vintage year scheme
-    years = list(range(2021, 1946, -1))
+    #
+    # Feb 1, 2024: Make tables, use tables, and import matrices, Annual, 2017-2022
+    # => tables between 1998 and 2016 inclusive are not available
+    #
+    cache_mode = 'r'  # read-only to verify in rdb
+    # cache_mode = 'w'  # write-only to reload from BEA website and save to rdb
+    years = list(range(2022, 1946, -1))
     ioUses = {}
     for vintage in [1997, 1963, 1947]:
         for year in [y for y in years if y >= vintage]:
-            df = bea.read_ioUse(year, vintage=vintage)
+            df = bea.read_ioUse(year, vintage=vintage, cache_mode=cache_mode)
             ioUses[(vintage, year)] = df
+            print(f"Vintage {vintage}, Year {year}: {len(df)} records")
 
-    """
-    for scheme in [1947, 1963, 1997]:   # BEA sectoring scheme        
-        # from BEA:  code -> long description
-        desc = bea.get(**BEA.params['gdpindustry'])['desc']
-        labels = {BEA.bea_industry_[c]:
-                  (desc[c] if c in desc.index else BEA.bea_industry_[c])
-                  for c in BEA.bea_industry_.index}   # code -> short label
+    # get desc: code -> long description
+    desc = bea.get(**BEA.params['gdpindustry'], cache_mode='r')['desc']
 
-    rdb = RedisDB(**credentials['redis'])  # None
-    bea = BEA(rdb, **credentials['bea'])
+    # show desc codes without short_desc
+    missing = set(desc.index).difference(BEA.short_desc.index)
+    print(desc[list(missing)].rename('Missing short desc').to_frame().to_string())
 
-    # from BEA:  code -> long description
-    desc = bea.get(**BEA._params['gdpindustry'])['desc']
-    labels = {BEA.bea_industry_[c]:
-              (desc[c] if c in desc.index else BEA.bea_industry_[c])
-              for c in BEA.bea_industry_.index}   # code -> short label
+    # build labels: short label -> long description
+    labels = {BEA.short_desc[c]:
+              (desc[c] if c in desc.index else BEA.short_desc[c])
+              for c in BEA.short_desc.index}   # code -> short label
 
-    years = list(range(1947, 2021))
-    ioUses = {}
-    for vintage in [1997, 1963, 1947]:
-        for year in [y for y in years if y >= vintage]:
-            df = bea.read_ioUse(year, vintage=vintage)
-            ioUses[(vintage, year)] = df
-    print(f"Sectoring vintage year {vintage}: {len(ioUses)} records")
-    """
+    # show vintage sectoring scheme
+    BEA.sectoring(1947)

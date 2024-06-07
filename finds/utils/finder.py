@@ -52,11 +52,11 @@ class Finder:
         >>> find('ALPHABET', 'cname')
         >>> find(18144)
         >>> find(328795, 'gvkey')
-        >>> find('0011', 'ticker', 'ident')
+        >>> find('0011', 'ticker', 'idsum')
         >>> find('aapl')
         >>> find('03783310')
-        >>> find('03783310','cusip','links')
-        >>> find('03783310','cusip','ident')
+        >>> find('03783310','cusip', 'links')
+        >>> find('03783310','cusip', 'idsum')
         >>> find('45483', 'permco', 'names')
         """
 
@@ -74,25 +74,27 @@ class Finder:
             elif label.isnumeric():
                 identifier = 'gvkey'
                 label = int(label)
-            elif len(label) == 8 or len(label) == 9:
+            elif len(label) in [8, 9] and any(c.isdigit() for c in label):
                 identifier = 'ncusip'
                 label = label[:8]
-            else:
+            elif len(label) < 6:
                 identifier = 'tsymbol'
-                
+            else:
+                identifier = 'comnam'
+
         if not table:   # guess table if not specified
-            if identifier in ['permno', 'ncusip', 'tsymbol', 'comnam']:
+            if identifier in ['permno', 'ncusip', 'tsymbol', 'comnam', 'permco']:
                 table = 'names'
             elif identifier in ['gvkey', 'conm', 'cik']:
                 table = 'links'
             else:
-                table = 'ident'
+                table = 'idsum'
                 
         like = '='
         if identifier in ['comnam', 'conm', 'cname']:
             label = '%' + label.upper() + '%'
             like = 'LIKE'  # for identifiers of str type, match with wildcard
-        elif identifier in ['permno', 'gvkey', 'cik']:
+        elif identifier in ['permno', 'gvkey', 'cik', 'permco']:
             label = int(label)
         elif identifier in ['ncusip', 'cusip']:
             label = label[:8]
@@ -102,7 +104,7 @@ class Finder:
         return DataFrame(**result) if result is not None else None
 
 if __name__ == "__main__":
-    from env.conf import credentials
+    from secret import credentials
     VERBOSE = 1
     sql = SQL(**credentials['sql'], verbose=VERBOSE)
     find = Finder(sql)

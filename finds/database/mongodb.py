@@ -4,8 +4,49 @@ Copyright 2022, Terence Lim
 
 MIT License
 """
+from typing import List, Dict
 from pymongo import MongoClient
 from .database import Database
+
+def parse_where(where: Dict | str | List) -> Dict:
+    """Helper to parse dict or list-like where clause to pymongo command str
+
+    Args:
+        where: keyword name may have operator suffix:
+
+        - name_eq:     be equal to the value
+        - name_ne:     be equal to the value
+        - name_lt:     less than the value
+        - name_le:     less than or equal to the value
+        - name_gt:     greater than the value
+        - name_ge:     greater than or equal to the value
+        - name_in:     be included in the value
+        - name_notin:  not be included in the value
+
+    Returns:
+        Dictionary of conditions in pymongo format
+    """
+    result = dict()
+    if isinstance(where, dict):    # where dict of {key: condition}'s =>
+        for k,v in where.items():    # parse condition to test key value:
+            if isinstance(v, dict):     # if dict: 
+                result[k] = v
+            elif isinstance(v, set):    # if set: key isin set
+                result[k] = {'$in' : list(v)}
+            elif types.is_list_like(v): # if tuple:
+                assert(v[0] <= v[1])      # inclusive bounds on key value
+                result[k] = {'$gte': v[0], '$lte': v[1]}
+            else:                       # if scalar: key value equals
+                result[k] = {'$eq': v}
+    elif isinstance(where, str):     # where string => test if key name exists
+        result = {where : {'$exists' : True}}
+    elif where:                      # where list-like => test if all keys exist
+        try:
+            result = {k : {'$exists' : True} for k in where}
+        except:
+            raise Exception('[where] must be a dict, array-like or str')
+    return result
+                        
 
 class MongoDB(Database):
     """Interface to pymongo
@@ -80,8 +121,8 @@ class MongoDB(Database):
 
     /etc/mongod.conf - configuration file for MongoDB:
 
-      dbPath -  where the database files stored (/var/lib/mongodb)
-      systemLog - logging options (/var/log/mongodb/mongod.log)
+    - dbPath:  where the database files stored (/var/lib/mongodb)
+    - systemLog: logging options (/var/log/mongodb/mongod.log)
     """
 
     def __init__(self, host: str = 'localhost', port: int = 27017, **kwargs):

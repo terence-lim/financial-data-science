@@ -21,12 +21,12 @@ import statsmodels.formula.api as smf
 from patsy.builtins import Q
 from sqlalchemy import Integer, String, Float, Boolean, Column
 from typing import Dict, Any, Tuple, List
-from finds.structured import Structured
+from finds.structured.structured import Structured
 from finds.structured.stocks import Stocks
 from finds.structured.benchmarks import Benchmarks
 from finds.database.sql import SQL
-from finds.filters import FFT
-from finds.plots import plot_date, plot_bands
+from finds.recipes.filters import fft_align
+from finds.utils.plots import plot_date, plot_bands
 
 _VERBOSE = 1
 
@@ -175,29 +175,29 @@ class EventStudy(Structured):
         self.post = post
         return len(df)
 
-    _models = ['bhar', 'car', 'sbhar', 'scar',
-               'adj-sbhar', 'adj-scar', 'conv-sbhar', 'conv-scar']
+    _models = ['sbhar', 'scar']
+    # 'bhar', 'car', 'adj-sbhar', 'adj-scar', 'conv-sbhar', 'conv-scar']
     
     def fit(self, model: str = 'scar', rows: List[int] = [], 
             rho : float | None = None) -> Dict[str, Dict]:
-        """Compute car or bhar, and summary statistics from subset of obs
+        """Compute car, or bhar, and summary statistics of selected rows
 
         Args:
-            model: name of predefined model to compute summary statistics
-            rows: Subset of rows to evaluate; empty list selects all rows
-            car: Whether to evaluate CAR (True) or BHAR (False)
-            rho: assumed correlation of event returns.  If None, then compute
-                 from max convolution of post-announcement returns
+          model : name of predefined model to compute summary statistics
+          rows : Subset of rows to evaluate; empty list selects all rows
+          car : Whether to evaluate CAR (True) or BHAR (False)
+          rho : Average cross correlation of event returns.  If None, then 
+                 compute from max convolution of post-announcement returns
 
         Returns:
-            Dict of summary statistics of full and subsamples
+          Dict of summary statistics of full and subsamples
 
-            - 'window', 'window-tvalue' are CAR at end of event window
-            - 'post', 'post-tvalue' are CAR from event end till post-drift end
-            - 'car', 'car-stderr' are daily CAR from beginning of announcement
-            - 'rows' is number of input rows
-            - 'days' is number of unique dates (same announce dates are grouped)
-            - 'effective' is the number of days after correlation effects
+          - 'window', 'window-tvalue' are CAR at end of event window
+          - 'post', 'post-tvalue' are CAR from event end till post-drift end
+          - 'car', 'car-stderr' are daily CAR from beginning of announcement
+          - 'rows' is number of input rows
+          - 'days' is number of unique dates (same announce dates are grouped)
+          - 'effective' is the number of days after correlation effects
 
         TODO names of models:
 
@@ -210,24 +210,24 @@ class EventStudy(Structured):
         - Kolari and Pynnonen (2010) eqn[3] cross-sectionally adjusted 
           Patell or BMP with avg correlation: multiply variance by 1 + (p*(n-1))
         - Kolari, Pape, Pynnonen (2018) eqn[15] adjusted by average overlap (tau)
-          and average covariance ratio (i.e. correlation rho)
+          and average covariance ratio (correlation rho)
         """
         #assert model in self._models
         window = self.right - self.left + 1
         cols = ['date'] + list(range(self.post-self.left+1))
-        is_car = model.endswith('car') 
+        is_car = model.endswith('car')
         rets = (self.car if is_car else self.bhar)[cols]
         cumret = (rets.iloc[rows] if len(rows) else rets).copy()
         n = int(len(cumret))
         b = int(min(cumret['date']))
         e = int(max(cumret['date']))
-        L = self.post - self.left
-        D = self.post - self.right
+        L = self.post - self.left    # total period including announcement and post
+        D = self.post - self.right   # length of post-announcement period
 
         # if announce date not a trading day, set to (after close of) previous
         cumret['date'] = self.bd.offset(cumret['date'])
 
-        # portfolio method for same announcement date
+        # portfolio method for same announcement dates
         cumret = cumret.groupby('date').mean()
 
         # Average Cumulative AR
@@ -239,10 +239,10 @@ class EventStudy(Structured):
         date_idx = np.sort(date_idx[cumret.index].values)
         overlap = []
         for k, v in enumerate(date_idx[:-1]):
-             x = D - (date_idx[k+1:] - v)
-             x[x < 0] = 0
+             x = D - (date_idx[k+1:] - v)  # difference in dates less than D
+             x[x < 0] = 0                  # truncate "negative" overlaps
              overlap.extend(x.tolist())
-        tau = np.mean(overlap) / D
+        tau = np.mean(overlap) / D   # average of overlap days, divided by max length
 
         # 2. compute ratio of average covariance to variance as average max corr
         if rho is None:
@@ -250,16 +250,11 @@ class EventStudy(Structured):
                      .diff(axis=1)\
                      .iloc[:, window:]\
                      .fillna(0)
-            corr, disp = FFT.align(rets.values.T)
+            corr, disp, cols = fft_align(rets.values.T)
             rho = np.mean(corr)
 
         # 3. apply simplification of eqn(15) of Kolari et al 2018
         effective = len(cumret) / (1 + (rho * tau * (len(cumret) - 1)))
-
-        # - unscaled for economic, scaled for statistical
-        # - ADJ-BMP MKT method is simple xc t-test of SCAR adjusted by avg corr
-        # - table show actual means, but t-values of SCAR with and without corr
-        # - plot shows SCAR with corr bands
 
         stderr = cumret.std() / np.sqrt(effective)
         posterr = (cumret.iloc[:, window:]\

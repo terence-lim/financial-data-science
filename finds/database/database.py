@@ -1,6 +1,6 @@
 """Base class for database engines
 
-Copyright 2022, Terence Lim
+Copyright 2022-2024, Terence Lim
 
 MIT License
 """

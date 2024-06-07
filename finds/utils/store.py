@@ -10,20 +10,18 @@ import json
 import gzip
 import pickle
 from pathlib import Path
-from typing import Dict, Iterable, List, Any, Tuple, Iterator
-from collections import namedtuple
+from typing import Dict, Iterable, List, Any, Iterator
 _VERBOSE = 0
 
 #
-# Helper to store key-value attributes as namedtuple
+# Helper to store named objects to disk
 #
 class Store:
-    """Store key-value attributes as namedtuple
+    """Wrapper to serialize and deserialize named objects to disk
 
     Args:
         path: Local folder to store in
         filetype: 'pickle' or 'gzip' or 'json'
-        name: Optional name of NamedTuple
         verbose: Debug messages
 
     Examples:
@@ -31,8 +29,8 @@ class Store:
     >>> store.dump(mydict, 'varname')
     >>> mydict = store.load('varname')
 
-    >>> store['tuplename'] = dict(a=1, b=2)
-    >>> mytuple = store['tuplename']
+    >>> store['dictname'] = dict(a=1, b=2)
+    >>> mydict = store['dictname']
     """
 
     @staticmethod
@@ -81,74 +79,57 @@ class Store:
         if verbose:
             print("Store in", folder, "as", self.ext_)
             
-    def pathname(self, key: str) -> str:
-        """Return full path name for key name"""
-        return str(self.folder_ / (key + '.' + self.ext_))
+    def pathname(self, name: str) -> str:
+        """Return full path name for object name"""
+        return str(self.folder_ / (name + '.' + self.ext_))
 
-    def __contains__(self, key: str) -> bool:
-        """Check if object named as key exists in store"""
-        return Path(self.pathname(key)).exists()
+    def __contains__(self, name: str) -> bool:
+        """Check if object name exists in store"""
+        return Path(self.pathname(name)).exists()
 
-    def __call__(self, *args, **kwargs) -> namedtuple:
-        """Convert keyword arguments to namedtuple
-
-        Args:
-           args : key name
-           kwargs : data items as keyword argument pairs
-        """
-        NamedTuple = namedtuple(re.sub('[^0-9a-zA-Z]+', '_', args[0]),
-                                list(kwargs.keys()))
-        return NamedTuple(**kwargs)
-
-    def dump(self, obj: Any, key: str):
-        """Dumps object, named as key, to file"""
+    def dump(self, obj: Any, name: str):
+        """Helper to dump object, named as name, to file"""
         if self.verbose_:
-            print("Store is dumping", key, "to", self.folder_)
+            print("Store is dumping", name, "to", self.folder_)
         _dump = dict(p=Store.pickle_dump, j=Store.json_dump, g=Store.gzip_dump)
-        _dump[self.ext_[0]](obj, self.pathname(key))        
+        _dump[self.ext_[0]](obj, self.pathname(name))        
     
-    def __setitem__(self, key: str, items: Dict | namedtuple):
-        """Dumps args dict or namedtuple object, named as key, to file
+    def __setitem__(self, name: str, item: Any):
+        """Dumps items to disk, as name
 
         Args:
-          key : key name
-          items : dict or namedtuple of items keywords and values
+          name : name to give to object
+          items : dict of items keywords and values
 
         Examples:
 
-        >>> store['point1'] = dict(x=1, y=2)
+        >>> store['point1'] = (x, y)
         """
-        if issubclass(type(items), tuple):
-            items = items._asdict()
-        assert isinstance(items, dict), "items must be dict or namedtuple"
-        self.dump(items, key=key)
+        self.dump(item, name=name)
 
-    def load(self, key: str):
-        """Loads object, named by key, from store"""
+    def load(self, name: str):
+        """Helper to oad object, named by name, from store"""
         if self.verbose_:
-            print("Store is loading", key, "from", self.folder_)
+            print("Store is loading", name, "from", self.folder_)
         _load = dict(p=Store.pickle_load, j=Store.json_load, g=Store.gzip_load)
-        return _load[self.ext_[0]](self.pathname(key))
+        return _load[self.ext_[0]](self.pathname(name))
 
-    def __getitem__(self, key: str) -> namedtuple:
-        """Loads object, named by key, from store as namedtuple
+    def __getitem__(self, name: str) -> Any:
+        """Loads object, named by name, from store
 
         Args:
-          key : key name
-
-        Returns:
-          namedtuple retrieved by input key name
+          name : name of object
         """
-        return self(key, **self.load(key))
+        return self.load(name)
 
     def __iter__(self) -> Iterator:
-        """Iterates over all objects' key names in store's folder"""
+        """Iterates over all object name in store's folder"""
         for filename in self.folder_.glob('*.' + self.ext_):
             yield filename.stem
 
 if __name__ == "__main__":
     store = Store('/home/terence/Downloads/store', 'pkl')
-    store.dump(dict(key='1', value='2'), key='test1')
+    store.dump(dict(key='1', value='2'), name='test1')
     print(store.load('test1'))
     store['test2'] = dict(key='1', value='2')
     print(store['test2'])

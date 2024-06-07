@@ -11,51 +11,63 @@ import pandas as pd
 from pandas import DataFrame, Series
 from bs4 import BeautifulSoup
 from typing import Dict
-_VERBOSE = 1
 
 class FOMCReader:
     """Class to retrieve FOMC minutes"""
     
-    fed_url = 'https://www.federalreserve.gov/'  # Else catalog from main site
-    
-    @staticmethod
-    def fetch(url: str = '') -> str | Dict[int, str]:
-        """Retrieve FOMC minutes or catalog from Fed website
+    _url = 'https://www.federalreserve.gov/'  # root url
+
+    def __init__(self, url: str = _url):
+        """Initializer retrieves dates available from website
 
         Args:
-            url: Optional webpage url to retrieve text from
-
-        Returns:
-            text of minutes, or dict of all dates and urls from Fed site
+          url: root url of Federal Reserve website
         """
-
-        if url:                # Retrieve FOMC minutes from input url
-            raw = BeautifulSoup(markup=requests.get(url).content,
-                                features='html.parser')
-            minutes = "\n\n".join([p.get_text().strip()
-                                   for p in raw.findAll('p')])
-            return re.sub('\n+','\n', re.sub('[\r\t]',' ', minutes))
-
-        dateOf = lambda s: int(re.sub('\D', '', s)[-8:]) 
         
-        # latest five years' minutes can be linked from a main page
-        new_url = FOMCReader.fed_url + 'monetarypolicy/fomccalendars.htm'
+        def dateOf(s):
+            """parse date from link string"""
+            return int(re.sub('\D', '', s)[-8:]) 
+        
+        # latest five years' minutes can be found from a main page
+        new_url = url + 'monetarypolicy/fomccalendars.htm'
         raw = BeautifulSoup(markup=requests.get(new_url).content,
                             features='html.parser')
         hrefs = raw.find_all(name='a',
                              href=re.compile('\S+minutes\S+.htm$', re.I))
-        links = [FOMCReader.fed_url + m.attrs['href'] for m in hrefs]
+        links = [url + m.attrs['href'] for m in hrefs]
 
         # earlier years' minutes are linked from annual pages with this format
-        old_url = FOMCReader.fed_url + 'monetarypolicy/fomchistorical%d.htm'
+        old_url = url + 'monetarypolicy/fomchistorical%d.htm'
         for year in range(1993, min([dateOf(m) for m in links]) // 10000):
             raw = BeautifulSoup(markup=requests.get(old_url % year).content,
                                 features='html.parser')
             hrefs = raw.find_all(name='a',
                                  href=re.compile('\S+minutes\S+.htm$', re.I))
-            links += [FOMCReader.fed_url
-                      + m.attrs['href'].replace(FOMCReader.fed_url,'')
-                      for m in hrefs]
-        return {dateOf(link) : link for link in links}
+            links += [url + m.attrs['href'].replace(url,'') for m in hrefs]
+
+        self.dates = {dateOf(link) : link for link in links}
+
+    def __len__(self):
+        return len(self.dates)
+
+    def __iter__(self):
+        return iter(self.dates)
+                 
+    def __getitem__(self, date) -> str:
+        """Retrieve FOMC minutes text from Fed website
+
+        Args:
+          date: meeting date
+
+        Returns:
+          text of minutes for meeting date
+        """
+        url = self.dates[date]
+        raw = BeautifulSoup(markup=requests.get(url).content,
+                            features='html.parser')
+        minutes = "\n\n".join([p.get_text().strip()
+                               for p in raw.findAll('p')])
+        return re.sub('\n+','\n', re.sub('[\r\t]',' ', minutes))
+
 
 

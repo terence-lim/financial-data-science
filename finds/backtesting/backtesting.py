@@ -10,6 +10,8 @@ import pandas as pd
 from pandas import DataFrame, Series
 from finds.structured.stocks import Stocks
 from finds.structured.signals import Signals
+from finds.recipes.filters import fractile_split
+from .backtest import compound_ret
 
 # construct spread portfolio weights
 def univariate_sorts(stocks: Stocks,
@@ -66,9 +68,9 @@ def univariate_sorts(stocks: Stocks,
                 continue
 
             # split signal into desired fractiles            
-            df['fractile'] = fractiles(df[label],
-                                       pct=pct,
-                                       keys=df[label][df['nyse']])
+            df['fractile'] = fractile_split(df[label],
+                                            pct=pct,
+                                            keys=df[label][df['nyse']])
             subs = {'H' : (df['fractile'] == 1),
                     'M' : (df['fractile'] == 2),
                     'L' : (df['fractile'] == 3)}
@@ -132,8 +134,9 @@ def bivariate_sorts(stocks: Stocks,
     """
     rebaldates = stocks.bd.date_range(rebalbeg, rebalend, 'endmo')
     holdings = {label: dict(), 'smb': dict()}  # to return two sets of holdings
-    sizes = {h : dict() for h in ['HB','HS','MB','MS','LB','LS']}
-    for rebaldate in rebaldates:  #[:-1]
+    # sizes = {h : dict() for h in ['HB','HS','MB','MS','LB','LS']}
+
+    for rebaldate in rebaldates:
 
         # check if this is a rebalance month
         if not months or (rebaldate//100)%100 in months or not holdings[label]:
@@ -158,10 +161,10 @@ def bivariate_sorts(stocks: Stocks,
                 continue
 
             # split signal into desired fractiles, and assign to subportfolios
-            df['fractile'] = fractiles(df[label],
-                                       pct=pct,
-                                       keys=df[label][df['nyse']],
-                                       ascending=False)
+            df['fractile'] = fractile_split(df[label],
+                                            pct=pct,
+                                            keys=df[label][df['nyse']],
+                                            ascending=False)
             subs = {'HB' : (df['fractile'] == 1) & (df['decile'] <= 5),
                     'MB' : (df['fractile'] == 2) & (df['decile'] <= 5),
                     'LB' : (df['fractile'] == 3) & (df['decile'] <= 5),
@@ -169,16 +172,18 @@ def bivariate_sorts(stocks: Stocks,
                     'MS' : (df['fractile'] == 2) & (df['decile'] > 5),
                     'LS' : (df['fractile'] == 3) & (df['decile'] > 5)}
             weights = {label: dict(), 'smb': dict()}
+            
             for subname, weight in zip(['HB','HS','LB','LS'],
                                        [0.5, 0.5, -0.5, -0.5]):
                 cap = df.loc[subs[subname], 'cap']
                 weights[label][subname] = leverage * weight * cap / cap.sum()
-                sizes[subname][rebaldate] = sum(subs[subname])
+                # sizes[subname][rebaldate] = sum(subs[subname])
+                
             for subname, weight in zip(['HB','HS','MB','MS','LB','LS'],
                                        [-0.5, 0.5, -0.5, 0.5, -0.5, 0.5]):
                 cap = df.loc[subs[subname], 'cap']
                 weights['smb'][subname] = leverage * weight * cap / cap.sum()
-                sizes[subname][rebaldate] = sum(subs[subname])
+                # sizes[subname][rebaldate] = sum(subs[subname])
             #print("(famafrench_sorts)", rebaldate, len(df))
             
         else:  # else not a rebalance month, so adjust holdings by retx
@@ -188,46 +193,13 @@ def bivariate_sorts(stocks: Stocks,
             for port, subports in weights.items():
                 for subport, old in subports.items():
                     new = old * retx.reindex(old.index, fill_value=1)
-                    weights[port][subport] = new / (abs(np.sum(new))
-                                                    * len(subports) / 2)
+                    weights[port][subport] = (
+                        new / (abs(np.sum(new)) * len(subports) / 2)
+                    )
 
         # combine this month's subportfolios
         for h in holdings:
             holdings[h][rebaldate] = pd.concat(list(weights[h].values()))
-    return holdings[label], holdings['smb'], sizes
+    return holdings[label], holdings['smb']
 
     
-def compound_ret(rets: Series, intervals: Tuple | List[Tuple]) -> List[float]:
-    """Compounds series of returns between (list of) date tuples (inclusive)"""
-    if len(intervals)==0:
-        return []
-    elif len(intervals)==1:
-        return [compound_ret(rets, intervals[0])]
-    elif len(intervals)==2 and isinstance(intervals[0], int):  # a single tuple
-        d = rets.index
-        return np.prod(rets[(d >= intervals[0]) & (d <= intervals[1])] + 1) - 1
-    else:      # list of date tuples: recursively evaluate each tuple
-        return [compound_ret(rets, interval) for interval in intervals]
-
-
-def fractiles(values: Iterable, pct: Iterable, keys: Iterable | None = None, 
-              ascending: bool = False) -> List[int]:
-    """Sort and assign values into fractiles
-
-    Args:
-        values: input array to assign to fractiles
-        pct: list of percentiles between 0 and 100
-        keys: key values to determine breakpoints, use values if None
-        ascending: if True, assign to fractiles in ascending order
-    
-    Returns:
-        list of fractile assignments
-    """
-    if keys is None:
-        keys = values
-    keys = np.array(keys)[~np.isnan(keys)]  # drop nan
-    bp = list(np.percentile(keys, sorted(pct))) + [np.inf]
-    if ascending:
-        return 1 + np.searchsorted(bp, values, side='left')
-    else:
-        return 1 + len(pct) - np.searchsorted(bp, values, side='left')

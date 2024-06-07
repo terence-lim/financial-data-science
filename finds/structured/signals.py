@@ -10,9 +10,8 @@ import pandas as pd
 from pandas import DataFrame, Series
 from pandas.api.types import is_list_like, is_integer_dtype
 from sqlalchemy import Table, Column, Index, Integer, Float
-from finds.database.sql import SQL
+from finds.database.sql import SQL, as_dtypes
 from .stocks import Stocks
-from .structured import as_dtypes
 _VERBOSE = 1
 
 class Signals(Stocks):
@@ -35,7 +34,7 @@ class Signals(Stocks):
 
         Args:
             label: Name of signal to retrieve
-            date : Rebalance date
+            date : As of this date back through (non-inclusive) start date
             start : Non-inclusive start of date range; -1 means exact date
             rebaldate: Name of rebalance date column
 
@@ -105,8 +104,8 @@ class Signals(Stocks):
         """Read signal values from sql and return as data frame
 
         Args:
-            label: Name of signal
-            where: Where clause for sql select
+            label : Name of signal
+            where : Where clause for sql select
 
         Returns:
             DataFrame of query with columns = ['permno', 'rebaldate', label]
@@ -119,32 +118,35 @@ class Signals(Stocks):
 
 
 class SignalsFrame(Signals):
-    """Cache dataframe of signals values, provide Signals-like interface"""
+    """Cache dataframe of signals values, provide Signals-like interface
 
-    def __init__(self, df: DataFrame, identifier: str = 'permno'):
+    Args:
+        df : DataFrame input with permno and rebaldate as columns
+        identifer : column name of permno identifiers
+        rebaldate : column name of rebalance dates
+    """
+
+    def __init__(self, df: DataFrame, identifier: str = 'permno',
+                 rebaldate: str = 'rebaldate'):
         """Initialize instance from input dataframe"""
         self.data = df
         self.identifier = identifier
+        self.rebaldate = rebaldate
 
-    def __call__(self,
-                 label: str, 
-                 date: int, 
-                 start: int = -1, 
-                 rebaldate: str = 'rebaldate') -> DataFrame:
+    def __call__(self, label: str,  date: int, start: int = -1) -> DataFrame:
         """Select from rebaldates that fall between start and date, keep latest
 
         Args:
             label: Name of column to return
-            date: As of this date or possibly earlier
+            date: As of this date back through (non-inclusive) start date
             start: Non-inclusive start date. Set to 0 for all, -1 for exact 
-            rebaldate: Column name containing rebaldate
         """
         if start < 0:
             start = date - 1
-        df = self.data.loc[self.data[rebaldate].le(date)
-                           & self.data[rebaldate].gt(start),
-                           [self.identifier, rebaldate, label]]
-        df = df.sort_values([self.identifier, rebaldate], na_position='first')\
+        df = self.data.loc[self.data[self.rebaldate].le(date)
+                           & self.data[self.rebaldate].gt(start),
+                           [self.identifier, self.rebaldate, label]]
+        df = df.sort_values([self.identifier, self.rebaldate], na_position='first')\
                .drop_duplicates([self.identifier], keep='last')\
                .dropna()
         return df.set_index(self.identifier)

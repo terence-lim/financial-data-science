@@ -23,24 +23,66 @@ import statsmodels.api as sm
 from statsmodels.graphics.gofplots import ProbPlot
 from pandas.plotting import register_matplotlib_converters
 register_matplotlib_converters()  # for date formatting in plots
-plt.style.use('seaborn-dark')  # plt.style.use('ggplot')
+#plt.style.use('seaborn-dark')  # plt.style.use('ggplot')
 
 # fig.subplots_adjust(hspace=0.3)  # spacing between subplots
 # plt.locator_params(axis='x', nbins=len(delist)/2)  # number f xtick labels
 # get_ipython().magic(u"%matplotlib qt")
 # fig, axes = plt.subplots(ncols=3, nrows=5, layout='constrained')
 
-def set_xtickbins(ax: Any, nbins: int, rotation: int = 0):
-    """Set locations for non-numeric xticks
+
+import matplotlib as mpl
+def ColorMap(n, colormap='brg'):
+    """Return sampled colors from spectrum of a color map
+    Args:
+      n : number of discrete colors
+      colormap : matplotlib colormaps, e.g. tab20, viridis, Blues, cool
+
+    Returns:
+      n x 4 2D-array of RGBA values
+    """
+    return mpl.colormaps[colormap](np.linspace(0, 1, n))
+
+
+def subplots(nfigs: int = 1, ncols: int = 1, nrows: int = 1,
+             squeeze: bool = False, **kwargs) -> List[plt.Axes]:
+    """Wrapper over plt.subplots to create subplots across multiple figures
+
+    Args:
+      nfigs: Number of figures
+      ncols: Number of columns per figure
+      nrows: Number of rows per figure
+      squeeze: ignored, will always return 1D flattened list of axes unless only 1
+      **kwargs: other keyword arguments passed on to plt.subplots
+
+    Returns:
+      Tuple of (List of figures, List of axes)
+    """
+    figs, axes = [], []
+    for ifig in range(nfigs):
+        fig, axs = plt.subplots(ncols=ncols, nrows=nrows, squeeze=False, **kwargs)
+        figs.append(fig)
+        axes.extend([a for ax in axs for a in ax])
+    return (figs, axes)
+
+
+def set_xticks(ax: plt.Axes, nbins: int = 0, nskip: int = 0, **kwargs):
+    """Set locations for xticks
 
     Args:
         ax: Matplotlib axes object from plt.subplots() or plt.gca()
-        nbins: number of bins for major ticks
+        nbins: Number of bins for major ticks, or
+        nskip: Number of ticks to skip (ignore if nbins > 0)
+        **kwargs: Arguments for tick_params(), e.g. labelsize, colors, rotation
     """
     xticks = ax.get_xticks()
-    ax.set_xticks(xticks[::len(xticks) // nbins]) # set new tick positions
-    ax.tick_params(axis='x', rotation=rotation) # set tick rotation
-    ax.margins(x=0) # set tight margins
+    if nbins:
+        ax.set_xticks(ticks=xticks[::len(xticks) // nbins]) 
+    else:
+        ax.set_xticks(ticks=xticks[::(nskip+1)]) 
+    ax.tick_params(axis='x', **kwargs)
+    ax.margins(x=0)  # set tight margins
+
 
 ##############################
 #
@@ -142,44 +184,72 @@ def plot_date(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
             bx.set_ylabel(ylabel2, fontsize=fontsize+2)
         bx.yaxis.set_tick_params(labelsize=fontsize)
     for hline in hlines:
-        plt.axhline(hline,
-                    linestyle='-.',
-                    color='y')
+        ax.axhline(hline,
+                   linestyle='-.',
+                   color='y')
     for vline in vlines:
-        plt.axvline(pd.to_datetime(vline, format='%Y%m%d'),
-                    ls='-.',
-                    color='y')
+        ax.axvline(pd.to_datetime(vline, format='%Y%m%d'),
+                   ls='-.',
+                   color='y')
     for vspan in vspans:
-        plt.axvspan(*([pd.to_datetime(v, format='%Y%m%d') for v in vspan]),
-                    alpha=0.5,
-                    color='grey')
+        ax.axvspan(*([pd.to_datetime(v, format='%Y%m%d') for v in vspan]),
+                   alpha=0.5,
+                   color='grey')
     ax.set_title(title, fontsize=fontsize+4)
     if nbins:
-        plt.locator_params(axis='x', nbins=nbins)  # numeric ticks
-        set_xtickbins(ax, nbins)  # non-numeric ticks
-    plt.tight_layout()
+        # ax.locator_params(axis='x', nbins=nbins)  # numeric ticks
+        set_xticks(ax, nbins)  # non-numeric ticks
+    #plt.tight_layout()
+    return ax
 
+def plot_groupbar(df: DataFrame, ax: Any = None, labels: DataFrame | None = None):
+    """Plot a grouped bar chart
+
+    Args:
+      df : DataFrame to plot
+      ax : Axis object
+      labels : optional DataFrame of annotations 
+    """
+    ax = ax or plt.gca()
+    x = np.arange(len(df))             # the x-axis locations
+    width = 1 / (len(df.columns) + 1)  # the width of the bars
+    multiplier = 0
+    for label in df.columns:
+        y = df[label]
+        offset = width * multiplier
+        rects = ax.bar(x=x+offset, height=y, width=width, label=label)
+        ax.bar_label(rects, labels=labels[label], padding=3, rotation=0,
+                     fontsize='x-small')
+        multiplier += 1
+    ax.set_xticks(x + width, df.index)
+    return ax
+
+#
+# TODO:
+# - drop x, mean should be y (a series)
+# - stderr is either list-like or a value (then multiply ones)
+#
 def plot_bands(mean: Series, stderr: Series, width: float = 1.96,
                x: List[int] = [], ylabel: str = '', xlabel: str = '',
                c: str = "b", loc: str = 'best', legend: List[str] = [],
                ax: Any = None, fontsize: int = 10, title: str = '',
-               hline: List[float] = [], vline: List[float] = []):
+               hline: List = [], vline: List = []):
     """Line plot a series with confidence bands
 
     Args:
-        mean: Mean values to plot
-        stderr: Stderr values to plot confidence bands
-        width: Multipler on stderr for confidence bands
-        c: Color to fill bands
-        x: X-axis values
-        ylabel, xlabel: Axis labels
-        legend: List of legend labels
-        loc: Location to display legend
+        mean : Mean values to plot
+        stderr : Stderr values to plot confidence bands
+        width : Multipler on stderr for confidence bands
+        c : Color to fill bands
+        x : X-axis values
+        ylabel, xlabel : Axis labels
+        legend : List of legend labels
+        loc : Location to display legend
         ax: Axis object
-        fontsize: Base font size
-        title: Main title string
-        hline: List of y-axis values to plot horizontal lines
-        vline: List of x-axis values to plot vertical lines
+        fontsize : Base font size
+        title : Main title string
+        hline : List of y-axis values to plot horizontal lines
+        vline : List of x-axis values to plot vertical lines
     """
     ax = ax or plt.gca()
     if not x:
@@ -196,6 +266,8 @@ def plot_bands(mean: Series, stderr: Series, width: float = 1.96,
     ax.set_title(title, fontsize=fontsize+4)
     ax.set_ylabel(ylabel, fontsize=fontsize+2)
     ax.set_xlabel(xlabel, fontsize=fontsize+2)
+    # plt.tight_layout()
+    return ax
         
 def plot_scatter(x: Series, y: Series, labels: List = [], ax: Any = None,
                  xlabel: str = '', ylabel: str = '', c: Any = None,
@@ -253,7 +325,7 @@ def plot_scatter(x: Series, y: Series, labels: List = [], ax: Any = None,
     ax.set_ylabel(ylabel, fontsize=fontsize)
     if len(labels):
         for t, xt, yt in zip(labels, x, y):
-            plt.text(xt * 1.01, yt * 1.01, t, fontsize=fontsize)
+            ax.text(xt * 1.01, yt * 1.01, t, fontsize=fontsize)
     ax.set_title(title, fontsize=fontsize+4)
     mfc = cax.get_fc()[0]    
     return Line2D([0], [0], marker=marker, mfc=mfc, ms=10, ls='', c=mfc)
@@ -276,7 +348,6 @@ def plot_hist(*args, kde: bool = True, hist: bool = False,
         title: Main title text
     """
     ax = ax or plt.gca()
-    ax=plt.gca()
     for arg in args:
         frame = DataFrame(arg)
         for col in frame.columns:
@@ -294,7 +365,7 @@ def plot_hist(*args, kde: bool = True, hist: bool = False,
             pdf = list(pdf)
         bx = ax.twinx() if args else ax
         bx.yaxis.set_tick_params(rotation=0, labelsize=fontsize)
-        x= np.linspace(*plt.xlim(), 100)
+        x= np.linspace(*ax.get_xlim(), 100)
         for i, p in enumerate(pdf):
             bx.plot(x, p(x), label=labels[i] if labels else None,
                     color=f"C{len(args)+i}")
@@ -306,11 +377,13 @@ def plot_hist(*args, kde: bool = True, hist: bool = False,
     ax.set_title(title, fontsize=fontsize+4)
     ax.set_ylabel(ylabel, fontsize=fontsize+4)
     ax.set_xlabel(xlabel, fontsize=fontsize+4)
+    # plt.tight_layout()
+    return ax
 
 def plot_bar(y: DataFrame, ax: Any = None, labels: List[str] = [],
              xlabel: str = '', ylabel: str = '', fontsize: int = 12,
              title: str = '', legend: List[str] = [], loc: str = 'best',
-             labelsize: int = 8, rotation: float = 0.):
+             alpha: float = .8, labelsize: int = 8, rotation: float = 0.):
     """Bar plot with annotated points
 
     Args:
@@ -321,26 +394,28 @@ def plot_bar(y: DataFrame, ax: Any = None, labels: List[str] = [],
         rotation: Rotate annotation labels text
         xlabel, ylabel: Axis labels
         fontsize: Base font size
+        alpha: Transparency of bars
         title: Main title text
         legend: List of legend names
         loc: Location for legend
     """
     ax = ax or plt.gca()
-    bars = list(np.ravel(y.plot.bar(ax=ax, width=0.8).containers, order='F'))
+    bars = y.plot.bar(ax=ax, width=0.8, alpha=alpha)
+    pts = np.ravel(bars.containers, order='F').tolist()
     ax.set_title(title, fontsize=fontsize+4)
-    ax.xaxis.set_tick_params(rotation=rotation, labelsize=fontsize)
+    ax.xaxis.set_tick_params(rotation=0, labelsize=fontsize)
     ax.yaxis.set_tick_params(rotation=0, labelsize=fontsize)
     if xlabel:
         ax.set_xlabel(xlabel, fontsize=fontsize+2)        
     if ylabel:
         ax.set_ylabel(ylabel, fontsize=fontsize+2)
-    if not loc:
+    if loc:
         if legend:
             ax.legend(legend, loc=loc)
         else:
             ax.legend(loc=loc)
     if labels:
-        for pt, label in zip(bars, labels):
+        for pt, label in zip(pts, labels):
             ax.annotate(str(label),
                         fontsize=labelsize,
                         xy=(pt.get_x() + pt.get_width() / 2, pt.get_height()),
@@ -349,27 +424,24 @@ def plot_bar(y: DataFrame, ax: Any = None, labels: List[str] = [],
                         ha='center',
                         va='bottom',
                         rotation=rotation)
+    # plt.tight_layout()
+    return ax
     
 open_t = pd.to_datetime('1900-01-01T09:30')  # usual NYSE open
 close_t = pd.to_datetime('1900-01-01T16:00') # usual NYSE close
 def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
               xmin: Timestamp = open_t, xmax: Timestamp = close_t,
-              marker: str = ' ', title: str = '', loc1: str = '',
-              loc2: str = '', legend1: List[str] = [],
-              legend2: List[str] = [], fontsize: int = 12):
+              marker: str = ' ', fontsize: int = 8):
     """Plot lines with Timestamp time on x-axis; primary and secondary y-axis
 
     Args:
-        y1: DataFrame to plot on left axis
-        y2: DataFrame (or None) to plot on right axis
-        ax : matplotlib axes object to plot in
-        xmin: left-most x-axis time, None to include all 
-        xmax: right-most x-axis time, None to include all
-        marker: style of marker to plot
-        title: text to display as title
-        loc1, loc2: locations to place legend/s
-        legend1, legend2: labels to display in legend
-        fontsize: Base font size
+      y1 : DataFrame to plot on left axis
+      y2 : DataFrame (or None) to plot on right axis
+      ax : Axes object to plot in
+      xmin : Left-most x-axis time, None to include all 
+      xmax : Right-most x-axis time, None to include all
+      marker : Style of marker to plot
+      fontsize : Font size of tick labels
     """
     ax = ax or plt.gca()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
@@ -382,15 +454,12 @@ def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
     for cn, c in enumerate(left.columns):
         f = left.loc[:, c].notnull().values
         if cn:    # kludgy hack with time-axis
-            ax.plot(left.index[f], left.loc[f, c], marker=marker,
-                    color = 'C' + str(cn))
+            ax.plot(left.index[f], left.loc[f, c],
+                    marker=marker, color = 'C' + str(cn))
         else:
-            sns.lineplot(x=left.index[f], y=left.loc[f, c], marker=marker,
-                         color='C' + str(cn),  ax=ax)
-    ax.legend(legend1 or left.columns, loc=loc1 or 'upper left',
-              fontsize=fontsize)
-    if len(left.columns) > 1:
-        ax.set_ylabel('', fontsize=fontsize+2)
+            sns.lineplot(x=left.index[f], y=left.loc[f, c],
+                         marker=marker, color='C' + str(cn),
+                         ax=ax, legend=False)
     if y2 is not None:
         right = DataFrame(y2)
         if xmin:
@@ -403,14 +472,10 @@ def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
             g = right.loc[:, c].notnull().values
             bx.plot(right.index[g], right.loc[g, c], marker=marker,
                     color='C' + str(cn+i+1))
-        bx.legend(legend2 or right.columns, loc=loc2 or 'lower right',
-                  fontsize=fontsize)
-        if len(right.columns) > 1:
-            bx.set_ylabel('')
     ax.xaxis.set_tick_params(rotation=0, labelsize=fontsize)
     ax.yaxis.set_tick_params(rotation=0, labelsize=fontsize)
-    plt.title(title, fontsize=fontsize+4)
-
+    # plt.tight_layout()
+    return ax
     
 ##############################
 #
@@ -434,27 +499,20 @@ def plot_fitted(fitted: Series, resid: Series, n: int = 3, ax: Any = None,
     """
     ax = ax or plt.gca()
     outliers = np.argpartition(resid.abs().values, -n)[-n:]
-    sns.regplot(x=fitted,
-                y=resid,
-                lowess=True,
-                ax=ax,
+    sns.regplot(x=fitted, y=resid, lowess=True, ax=ax,
                 scatter_kws={"s": 20, 'alpha': 0.5},
                 line_kws={"color": "r", "lw": 1})
-    ax.scatter(fitted[outliers],
-               resid[outliers],
-               c='m',
-               alpha=.25)
+    ax.scatter(fitted.iloc[outliers], resid.iloc[outliers], c='m',  alpha=.25)
     for i in outliers:
         if strftime:
             label = resid.index[i].strftime(strftime)
         else:
             label = str(resid.index[i])        
-        ax.annotate(label,
-                    xy=(fitted.iloc[i],resid.iloc[i]),
-                    c='m')
+        ax.annotate(label, xy=(fitted.iloc[i], resid.iloc[i]), c='m', fontsize='x-small')
     ax.set_title(title)
     ax.set_xlabel("Fitted values")
     ax.set_ylabel("Residuals")
+    # plt.tight_layout()
     return resid.iloc[outliers].rename('outliers')
 
 def plot_qq(resid: Series, title: str = 'Normal Q-Q', ax: Any = None,
@@ -485,11 +543,10 @@ def plot_qq(resid: Series, title: str = 'Normal Q-Q', ax: Any = None,
             label = i.strftime(strftime)
         else:
             label = str(i)
-        ax.annotate(label,
-                    xy=(x,y),
-                    c='m')
+        ax.annotate(label, xy=(x,y), c='m', fontsize='x-small')
     ax.set_title(title)
     ax.set_ylabel('Standardized residuals')
+    # plt.tight_layout()
     return DataFrame({'residuals': pp.sorted_data[outliers],
                       'standardized': pp.sample_quantiles[outliers]}, index=z)
 
@@ -522,15 +579,15 @@ def plot_scale(fitted: Series, resid: Series, ax: Any = None,
     ax.set_ylabel('$\sqrt{|Standardized \ residuals|}$');
     ax.set_xlabel('Fitted values')
     outliers = np.argpartition(resid.values, -n)[-n:]
-    ax.scatter(fitted[outliers], resid[outliers], c='m', alpha=.25)
+    ax.scatter(fitted.iloc[outliers], resid.iloc[outliers], c='m', alpha=.25)
     for i in outliers:
         if strftime:
             label = resid.index[i].strftime(strftime)
         else:
             label = str(resid.index[i])
-        ax.annotate(label,
-                    xy=(fitted[i], resid[i]),
-                    c='m')
+        ax.annotate(label, xy=(fitted.iloc[i], resid.iloc[i]), c='m', fontsize='x-small')
+    # plt.tight_layout()
+    return outliers
 
 def plot_leverage(resid: Series, hat: np.array, dist: np.array, ddof: int,
                   title: str = "Residuals vs Leverage", ax: Any = None,
@@ -549,6 +606,7 @@ def plot_leverage(resid: Series, hat: np.array, dist: np.array, ddof: int,
     ax = ax or plt.gca()
     s = np.sqrt(np.sum(np.array(resid)**2 * (1 - hat))/(len(hat) - ddof))
     r = resid/s   # studentized residual
+    hat = Series(hat)
     sns.regplot(x=hat,
                 y=r,
                 scatter=True,
@@ -557,16 +615,15 @@ def plot_leverage(resid: Series, hat: np.array, dist: np.array, ddof: int,
                 scatter_kws={'alpha': 0.5},
                 line_kws={'color': 'r', 'lw': 1})
     influential = np.where(dist > 1)[0]
-    ax.scatter(hat[influential], r[influential], c='c', alpha=.5)
+    ax.scatter(hat.iloc[influential], r.iloc[influential], c='c', alpha=.5)
     annotate = np.where(dist > 0.5)[0]
     for i in annotate:
         if strftime:
             label = r.index[i].strftime(strftime)
         else:
             label = str(r.index[i])        
-        ax.annotate(label,
-                    xy=(hat[i], r[i]),
-                    c=('r' if dist[i] > 1 else 'c'))
+        ax.annotate(label, xy=(hat.iloc[i], r.iloc[i]),
+                    c=('r' if dist[i] > 1 else 'c'), fontsize='x-small')
     ax.set_title(title)
     ax.set_xlabel("Leverage")
     ax.set_ylabel("Standardized residuals")
@@ -578,16 +635,15 @@ def plot_leverage(resid: Series, hat: np.array, dist: np.array, ddof: int,
             g = (y > ax.get_ylim()[0]) & (y < ax.get_ylim()[1])
             if g.any():
                 legend, = ax.plot(x[g], y[g], color='m', lw=.5+thresh, ls='--')
-                ax.annotate(str(thresh),
-                            xy=(max(x[g]),
-                                max(y[g]) if sign < 0 else min(y[g])),
-                            c='m')
+                ax.annotate(str(thresh), c='m', fontsize='x-small',
+                            xy=(max(x[g]), max(y[g]) if sign < 0 else min(y[g])))
     if legend:
         legend.set_label("Cook's Distance")
         ax.legend(loc='best')
+    # plt.tight_layout()
     return DataFrame({'influential': resid.iloc[influential],
                       "cook's D": dist[influential],
-                      "leverage": hat[influential]},
+                      "leverage": hat.iloc[influential]},
                      index=resid.iloc[influential].index)
 
 

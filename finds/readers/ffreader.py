@@ -11,14 +11,33 @@ import io
 import zipfile
 from pandas import DataFrame, Series
 from typing import Callable, List
-from .readers import requests_get
+import requests
 
 class FFReader:
     """Wraps over pandas_datareader to load FamaFrench factors from website
 
-    Attributes:
-        daily, monthly: List of common FF factors/industries
+    Hints for using pandas datareader:
+    ::
+
+       from pandas_datareader.famafrench import FamaFrenchReader as FFR
+       mkt = FFR('F-F_Research_Data_Factors', start=1900, end=2099).read()
     """
+    def __init__(self, symbol):
+        """Read data for symbol into class instance"""
+        self.data = pdr.data.FamaFrenchReader(symbol, start='1900-01-01').read()
+        self.descr = self.data['DESCR']
+
+    def __len__(self):
+        return len(self.data) - 1
+    
+    def __getitem__(self, key):
+        return self.data[key]
+
+    def __repr__(self):
+        return self.descr
+
+    def __str__(self):
+        return self.descr
 
     daily = [
         ('F-F_Research_Data_5_Factors_2x3_daily', 0, ''),
@@ -31,6 +50,8 @@ class FFReader:
         ('49_Industry_Portfolios_daily', 1, '49ew'), #  value-weighted vs
         ('48_Industry_Portfolios_daily', 1, '48ew'), #  equal-weighted
     ]
+    """Common daily FF series, with subset index and a suggested suffix"""
+
     
     monthly = [
         ('F-F_Research_Data_5_Factors_2x3', 0, '(mo)'),
@@ -39,6 +60,7 @@ class FFReader:
         ('F-F_LT_Reversal_Factor', 0, '(mo)'),
         ('F-F_ST_Reversal_Factor', 0, '(mo)'),
     ]
+    """Common monthly FF series, with subset index and a suggested suffix"""
 
 
     @staticmethod
@@ -68,11 +90,14 @@ class FFReader:
             2010-2019 Meat products
             2020-2029 Dairy products
         """
+        # if no source url provided, use Dartmouth website base URL
         if not source:
             prefix_ = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/"
             source = prefix_ + f"ftp/Sic{scheme}.zip"
+
+        # Handle cases where source is a base URL or a local zip file
         if source.startswith('http'):
-            response = requests_get(source)
+            response = requests.get(source)
             f = io.BytesIO(response.content)
             subfile = 'Sic' + scheme + '.txt'
             open_ = zipfile.ZipFile(f).open
@@ -84,6 +109,7 @@ class FFReader:
                 open_ = open
                 subfile = source
         labels = DataFrame(columns=['name','description','end'])
+        
         with open_(subfile) as f:   # open text subfile from zip archive
             for line in f:
                 items = line.decode('utf-8').rstrip('\n').split()
@@ -109,7 +135,7 @@ class FFReader:
         df = DataFrame(columns = labels.columns)
         df.loc[0, ['name', 'description']] = ['Other', other]
         df.loc[max(next_sic2) ,['name', 'description']] = ['Other', other]
-        
+
         if len(np.unique(labels.name)) < int(scheme[5:]):  # "Other" has no sics
             for i in range(len(labels)-1):
                 if (next_sic2.iloc[i] < labels.index[i+1]
@@ -123,42 +149,35 @@ class FFReader:
                     .sort_index()
         return sectors
     
-    
-    
+    @staticmethod
     def keys() -> List[str]:
         """Return names of all available datasets"""
         return pdr.data.FamaFrenchReader(None).get_available_datasets()
 
     @staticmethod
-    def fetch(name: str, 
-              item: int = 0, 
-              suffix: str = '', 
-              start: int = 19260101, 
-              end: int = 20271231, 
+    def fetch(name: str, item: int = 0, suffix: str = '',
               date_formatter: Callable = lambda x: x) -> DataFrame:
         """Retrieve item and return as DataFrame
 
         Args:
-            name: Name of research factor in Ken French website
-            item: Index of item to research (e.g. 0 is usually value-weighted)
-            suffix: Suffix string to append to name when stored in sql
-            start: earliest date to retrieve
-            end: latest date to retrieve 
-            date_formatter: to reformat dates, e.g. bd.offset or bd.endmo
+          name: Name of research factor in Ken French website
+          item: Index of item to research (e.g. 0 is usually value-weighted)
+          suffix: Suffix string to append to name when stored in sql
+          start: earliest date to retrieve
+          end: latest date to retrieve 
+          date_formatter: to reformat dates, e.g. bd.offset or bd.endmo
+
+        Returns:
+          DataFrame of asset returns (converted to decimal, not percentages) 
         """
-        start = pd.to_datetime(start, format='%Y%m%d')
-        end = pd.to_datetime(end, format='%Y%m%d')
-        df = pdr.data.DataReader(name=name,
-                                 data_source='famafrench',
-                                 start=start,
-                                 end=end)[item]
+        df = pdr.data.FamaFrenchReader(name, start='1900-01-01').read()
+        df = df[item]
         try:
             df.index = df.index.to_timestamp()
         except:
             pass     # else invalid comparison error!
-        df = df[(df.index >= start) & (df.index <= end)]
         df.index = [date_formatter(d) for d in df.index]
-        df.columns = [c.rstrip() + suffix for c in df.columns]
+        df.columns = [c.strip() + suffix for c in df.columns]
         df.where(df > -99.99, other=np.nan, inplace=True)  # replace NaNs
         df = df / 100   # change percentage returns in source to decimals
         return df

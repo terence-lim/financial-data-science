@@ -173,7 +173,7 @@ class PyR:
 
     @staticmethod
     def savefig(filename, display=True, ax=None, figsize=(12,12)):
-        """Save R graphics to file, or return R command. Optionally imshow"""
+        """Save R graphics to file, or return R command, optionally imshow"""
         
         s = "dev.copy(png, '{}'); dev.off()".format(filename)
         if display is not None:
@@ -183,6 +183,7 @@ class PyR:
                     fig, ax = plt.subplots(clear=True, figsize=figsize)
                 img = mpimg.imread(filename)
                 ax.imshow(img, interpolation='nearest')
+                ax.axis('off')
         return s
     
     def assign(self, obj):

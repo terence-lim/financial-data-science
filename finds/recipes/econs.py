@@ -48,7 +48,7 @@ def mrsq(X: DataFrame, kmax: int) -> DataFrame:
     return mrsq_.div(np.mean((u @ u.T @ Z)**2, axis=0), axis=0)
 
 
-def select_bai_ng(X: DataFrame, kmax: int = 0, p: int = 2) -> int:
+def select_baing(X: DataFrame, kmax: int = 0, p: int = 2) -> int:
     """Determine number of factors based on Bai & Ng (2002) info criterion
 
     Args:
@@ -65,10 +65,9 @@ def select_bai_ng(X: DataFrame, kmax: int = 0, p: int = 2) -> int:
     - Simplified the calculation of residual variance from adding components:
       is just the eigenvalues, no need to compute projections
     - The IC curve appears to have multiple minimums: the first "local"
-      minimum is selected -- may also be related to why authors suggest a
-      prior bound on number of factors.
+      minimum is selected -- may be want prior bound on number of factors.
     """
-    assert p > 0
+    assert p in [1, 2, 3], "p must be 1, 2 or 3"
     Z = ((X - X.mean()) / X.std(ddof=0)).to_numpy()
     T, N = Z.shape
     NT = N * T
@@ -85,11 +84,12 @@ def select_bai_ng(X: DataFrame, kmax: int = 0, p: int = 2) -> int:
     residual_variance[0] = sum(eigval)
     sigma = residual_variance / sum(eigval)
     ic = (np.log(sigma + 1e-12) + CT)[:(kmax or GCT)]
-    return np.where((ic[:-1] - ic[1:]) < 0)[0][0]
+    local = np.where(ic[:-1] < ic[1:])[0]       # find local minimum
+    return local[0] if len(local) else len(ic)
 
 
-def factors_em(X: DataFrame, kmax: int = 0, p: int = 2, max_iter: int = 50,
-           tol: float = 1e-12, verbose: int = _VERBOSE) -> DataFrame:
+def approximate_factors(X: DataFrame, kmax: int = 0, p: int = 2, max_iter: int = 50,
+                        tol: float = 1e-12, verbose: int = _VERBOSE) -> DataFrame:
     """Fill in missing values with factor model EM algorithm Bai and Ng (2002)
 
     Args:
@@ -122,7 +122,7 @@ def factors_em(X: DataFrame, kmax: int = 0, p: int = 2, max_iter: int = 50,
 
         # auto-select number of factors if p>0 else fix number of factors
         if p:
-            r = select_bai_ng(Z, p=p, kmax=kmax or len(s) - 1)
+            r = select_baing(Z, p=p, kmax=kmax or len(s) - 1)
         else:
             r = kmax or len(s) - 1
 
@@ -142,7 +142,7 @@ def factors_em(X: DataFrame, kmax: int = 0, p: int = 2, max_iter: int = 50,
 
 
 
-def impute_em(X: np.ndarray, add_intercept: bool = True,
+def fillna_em(X: np.ndarray, add_intercept: bool = True,
               tol: float = 1e-12, maxiter: int = 200,
               verbose: int = 1) -> Tuple[np.ndarray, DataFrame]:
     """Fill missing data with EM Normal distribution"""
@@ -195,13 +195,13 @@ def impute_em(X: np.ndarray, add_intercept: bool = True,
 #
 ######################
 
-def integration_order(df: Series, noprint: bool = True, max_order: int = 5,
+def integration_order(df: Series, verbose: bool = True, max_order: int = 5,
                       pvalue: float = 0.05, lags: str | int = 'AIC') -> int:
     """Returns order of integration by iteratively testing for unit root
 
     Args:
         df: Input Series
-        noprint: Whether to display results
+        verbose: Whether to display results
         max_order: maximum number of orders to test
         pvalue: Required p-value to reject Dickey-Fuller unit root
         lags: Method automatically determine lag length, or maxlag;
@@ -210,16 +210,16 @@ def integration_order(df: Series, noprint: bool = True, max_order: int = 5,
     Returns:
         Integration order, or -1 if max_order exceeded
     """
-    if not noprint:
+    if not verbose:
         print("Augmented Dickey-Fuller unit root test:")
     for i in range(max_order):
-        if not lags:
+        if not lags:   # test with default maxlag
             dftest = adfuller(df, maxlag=None, autolag=None)
-        elif isinstance(lags, str):
+        elif isinstance(lags, str):    # test using IC-determined lag length
             dftest = adfuller(df, autolag=lags)
-        else:
+        else:          # test with given maximum number of lags
             dftest = adfuller(df, autolag=None, maxlag=lags)
-        if not noprint:
+        if not verbose:
             results = Series(dftest[0:4],
                              index=['Test Statistic',
                                     'p-value',
@@ -248,18 +248,19 @@ def least_squares(data: DataFrame, y: List[str] = ['y'],
         stdres: Whether to output residual stdev
 
     Returns:
-        DataFrame (multiple) or Series (simple) of regression coefficients
+        Series (if only single y input) of regression coefficients, or
+        DataFrame (multiple y) with coeffs, and optionally stdres, in columns
 
     """
     X = data[x].to_numpy()
     Y = data[y].to_numpy()
     if add_constant:
         X = np.hstack([np.ones((X.shape[0], 1)), X])
-        x = ['Intercept'] + x
+        x = ['_intercept'] + x
     b = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, Y)).T
     if stdres:
         b = np.hstack([b, np.std(Y-(X @ b.T), axis=0).reshape(-1,1)])
-        x = x + ['stdres']
+        x = x + ['_stdres']
     return (DataFrame(b, columns=x, index=y) if len(b) > 1 else
             Series(b[0], x))   # return as Series for groupby.apply
 
@@ -281,8 +282,11 @@ def fstats(x: Series | np.ndarray, tail: float = 0.15) -> np.ndarray:
     return ((n-2)/2) * (rse - sse)/rse
 
 
+#
+# TODO: remove lm()
+#
 from collections import namedtuple    
-def lm(x: np.ndarray | DataFrame | Series, y: np.ndarray | DataFrame | Series,
+def _lm(x: np.ndarray | DataFrame | Series, y: np.ndarray | DataFrame | Series,
        add_constant: bool = True, flatten: bool = True) -> NamedTuple:
     """Calculate linear multiple regression model results as namedtuple
 

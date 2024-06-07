@@ -16,10 +16,9 @@ from typing import Dict, Any, Tuple, List
 from finds.structured.stocks import Stocks
 from finds.structured.benchmarks import Benchmarks
 from finds.database.sql import SQL
-from finds.plots import plot_date
-from finds.econs import least_squares
+from finds.utils.plots import plot_date
+from finds.recipes.econs import least_squares
 from .backtesting import compound_ret
-_VERBOSE = 1
 
 class RiskPremium:
     """Compute and test of factor loading risk premiums
@@ -71,11 +70,8 @@ class RiskPremium:
             for col in standardize: # weighted mean <- 0, equal wtd stdev <- 1
                 df[col] -= np.average(df[col], weights=w)
                 df[col] /= np.std(df[col])
-            df = df.join(stocks.get_ret(*holdrets, delist=True)-rf, how='left')
-            p = least_squares(df.dropna(),
-                              x=x,
-                              y=['ret'],
-                              add_constant=False)
+            df = df.join(stocks.get_ret(*holdrets) - rf, how='left')
+            p = least_squares(df.dropna(), x=x, y=['ret'], add_constant=False)
             p.name = holdrets[1]
             out.append(p)
         self.perf = pd.concat(out, axis=1).T

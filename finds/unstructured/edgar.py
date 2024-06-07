@@ -26,15 +26,41 @@ import requests
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
-from finds.readers import requests_get
-_VERBOSE = 1
+from finds.readers.readers import requests_get
+_VERBOSE = 0
 
 def _print(*args, verbose=0, **kwargs):
     if max(_VERBOSE, verbose):
         print(*args, **kwargs)
 
 class Edgar:
-    """Class to retrieve and pre-process Edgar website documents"""
+    """Class to retrieve and pre-process Edgar website documents
+
+        <localname> = YYYYMMDD_FORM__edgar_data_CIK_ADSH.txt
+
+        - e.g. 20211105_10-Q_edgar_data_1761312_0001558370-21-014714.txt
+
+    10-K and 10-Q zipped archive
+    - 10X/YYYY,zip
+
+    10-K and 10-Q local file (zip -q -r 2019.zip 2019)
+    - 10X/YYYY/YYYYMMDD/YYYYMMDD_FORM__edgar_data_CIK_ADSH.txt
+
+    10-K and 10-Q detail folder
+    - 10X/detail/YYYY/YYYYMMDD/YYYYMMDD_FORM__edgar_data_CIK_ADSH.txt
+
+    8-K local file
+    - 10X/YYYY/YYYYMMDD/YYYYMMDD_FORM__edgar_data_CIK_ADSH.txt
+
+    8-K detail folder
+    - 10X/8-K/detail/YYYY/YYYYMMDD/
+
+    10-K MDA local text file
+    - 10X/10-K/mda10K/PERMNO/YYYYMMDD_FORM__edgar_data_CIK_ADSH.txt
+
+    10-K MDA zipped archive (zip -q -r mda10K.zip mda10K)
+    - 10X/10-K/mda10K.zip
+    """
 
     edgar_url = 'https://www.sec.gov/Archives/'
     ticker_url = 'https://www.sec.gov/include/ticker.txt'
@@ -336,7 +362,7 @@ class Edgar:
 
         Args:
             text: Full text of filing, from which to extract passage for item
-            item: Item to extract, in {'mda10K', 'bus10K', 'mda10Q'}
+            item: Item to extract, in {'mda10K', 'bus10K', 'mda10Q', 'qqr10K'}
 
         Notes:
 
@@ -344,24 +370,35 @@ class Edgar:
        
         10-Q items:
 
-        - Item 1 - Business
-        - Item 1A - Risk Factors
-        - Item 1B - Unresolved Staff Comments
-        - Item 2 - Properties
-        - Item 3 - Legal Proceedings
+        PART I—FINANCIAL INFORMATION
+        Item 1. Financial Statements.
+        Item 2. Management’s Discussion and Analysis
+        Item 3. Quantitative and Qualitative Disclosures About Market Risk.
+        Item 4. Controls and Procedures.
+
+        PART II—OTHER INFORMATION
+        Item 1. Legal Proceedings.
+        Item 1A. Risk Factors.
+        Item 2. Unregistered Sales of Equity Securities and Use of Proceeds.
 
         10-K items:
-       
-        - PART I—FINANCIAL INFORMATION
-        - Item 1. Financial Statements.
-        - Item 2. Management’s Discussion and Analysis
-        - Item 3. Quantitative and Qualitative Disclosures About Market Risk.
-        - Item 4. Controls and Procedures.
 
-        - PART II—OTHER INFORMATION
-        - Item 1. Legal Proceedings.
-        - Item 1A. Risk Factors.
-        - Item 2. Unregistered Sales of Equity Securities and Use of Proceeds.
+        Part 1
+        Item 1 – Business
+        Item 1A – Risk Factors
+        Item 1B – Unresolved Staff Comments
+        Item 2 – Properties
+        Item 3 – Legal Proceedings
+        Item 4 – Mine Safety Disclosures
+        Part 2
+        Item 5 – Market
+        Item 6 – Consolidated Financial Data
+        Item 7 – Management's Discussion and Analysis of Financial Condition and Results of Operations
+        Item 7A – Quantitative and Qualitative Disclosures about Market Risks
+        Forward Looking Statements
+        Item 8 – Financial Statements
+        Item 9A. Controls and Procedures
+        Item 9B. Other Information
         """
 
         def parse_helper(text, marker, start=0):
@@ -430,6 +467,23 @@ class Edgar:
                     re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?7A', re.I),
                     re.compile('\n\s*?QUANTITATIVE AND QUALITATIVE DIS', re.I)],
                 'next_beg': [re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?8', re.I)]},
+            'qqr10K': {
+                'item_beg': [
+                    re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?7A', re.I),
+                    re.compile('\n\s*?QUALITATIVE AND QUANTITATIVE DIS', re.I),
+                    re.compile('\n\s*?QUANTITATIVE AND QUALITATIVE DIS', re.I)],
+                'item_end': [
+                    re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?8', re.I),
+                    re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?9', re.I),
+                    re.compile('REPORT OF INDEPENDENT', re.I),
+                    re.compile('OPINION ON THE FINANCIAL', re.I),
+                    re.compile('\n\s*?P\s?A\s?R\s?T.?\s*?III[^\w]+', re.I),
+                    re.compile('\n\s*?P\s?A\s?R\s?T.?\s*?3[^\w]+', re.I)],
+                'next_beg': [
+                    re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?8', re.I),
+                    re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?9', re.I),
+                    re.compile('\n\s*?P\s?A\s?R\s?T.?\s*?III[^\w]+', re.I),
+                    re.compile('\n\s*?P\s?A\s?R\s?T.?\s*?3[^\w]+', re.I)]},
             'bus10K': {
                 'item_beg': [
                     re.compile('\n\s*?I\s?T\s?E\s?M.?\s*?1[^\w]+', re.I),
@@ -529,9 +583,9 @@ class Edgar:
        
        Args:
            form: '10K' or '10Q' for items; '' for 10K/10Q filings
-           item: 'detail' or 'mda10K' or 'bus10K'
-           date: Year or date; 0 for mda10K/bus10K
-           permno: For mda10K/bus10K only
+           item: 'detail' or 'mda10K' or 'bus10K', or 'qqr10K'
+           date: Year or date; 0 for mda10K/bus10K/qqr10K
+           permno: For mda10K/bus10K/qqr10K only
 
        Returns:
            Local folder name to store the filing or item
@@ -650,7 +704,7 @@ class Edgar:
             savedir: Root folder where archives saved locally
             zipped: Whether to use zipped or unzipped version
         """
-        self.savedir = savedir
+        self.savedir = str(savedir)
         self.zipped = zipped
         self.verbose = verbose
 
@@ -664,8 +718,8 @@ class Edgar:
         
         Args:
             date: Year or daily date 
-            item: Item in {'mda10K, 'detail', 'bus10K'}
-            form: Filing type in {'10-K', '10-Q', '
+            item: Item in {'mda10K, 'detail', 'bus10K', 'qqr10K}
+            form: Filing type in {'10-K', '10-Q', '8-K'}
             permno: Identifier of security to retrieve
 
         Returns:
@@ -710,7 +764,7 @@ class Edgar:
             return {'cik': int(items[4]),
                     'form': items[1].replace('-A', '/A'), # cannot have '/'
                     'date': int(items[0]),
-                    'pathname': pathname}
+                    'pathname': pathname.strip('/')}
 
         self.close()   # only one archive open at a time per instance
 
@@ -788,43 +842,67 @@ class Edgar:
     def __getitem__(self, pathname):
         """Retrieves text of document file by pathname from archive"""
         if self.zipped:
+            _print(pathname)
             with self.archive.open(pathname) as stream:
                 with io.TextIOWrapper(stream, encoding='latin-1') as infile:
                     text = infile.read()
         else:
+            _print(self.savedir, pathname)
             with open(os.path.join(self.savedir, pathname)) as infile:
                 text = infile.read()
         return text
 
 if __name__ == "__main__":
-    from finds.database.sql import SQL
-    from finds.structured.pstat import PSTAT
-    from finds.busday import BusDay
+    from finds.database import SQL
+    from finds.structured import BusDay, PSTAT
     from secret import credentials, paths
     import tqdm
     import math
     
-    def _test():
-        master = Edgar.fetch_index(year=2022, quarter=1)
+    def _test_web():
+        """Access Edgar Webside
+
+        master = Edgar.fetch_index(year=2023, quarter=1)
+        - https://www.sec.gov/Archives/edgar/full-index/2023/QTR1/master.idx
+        >>> {'cik': 1000045,
+        >>>  'name': 'NICHOLAS FINANCIAL INC',
+        >>>  'form': '10-Q',
+        >>>  'date': 20230214,
+        >>>  'pathname': 'edgar/data/1000045/0000950170-23-002704.txt'}
+
+        Edgar.get_detail_filings(r['pathname'])
+        - retrieve detail and filings text files
+        """
+
+        # Read index of filings in a quarter
+        master = Edgar.fetch_index(year=2023, quarter=1, verbose=1)
+
+        # retrieve its detail and actual filing text
         r = master[0]
         detail, filing = Edgar.get_detail_filings(r['pathname'])
-        ed = Edgar(paths['10X'], zipped=True)
-        rows = ed.open(date=2020)
-        return rows
+
     
     def _save_10X():
-        """Sample code to load edgar and store locally"""
-        start_year, start_quarter = 2022, 1
-        end_year, end_quarter = 2022, 2
+        """Sample code to load from Edgar web site and store locally
+
+        ed.save_detail(text, form, date, cik, pathname)
+        - save detail text in local file
+
+        ed.save_filing(text, form, date, cik, pathname)
+        - save filing textin local file
+
+        """
+        start_year, start_quarter = 2024, 1
+        end_year, end_quarter = 2024, 1
         yq = [(math.floor(y), int((y+.25 - math.floor(y))*4))
               for y in np.arange(start_year + (start_quarter - 1) * .25,
                                  end_year + end_quarter * .25,
                                  0.25)]
-        restart = {'year': 2022,
-                   'quarter': 2,
-                   'filenum': 87372}
+        restart = {'year': 0,
+                   'quarter': 0,
+                   'filenum': 0}
 
-        ed = Edgar(savedir=paths['10X'], zipped=True)
+        ed = Edgar(savedir=paths['10X'], zipped=False, verbose=1)
         forms = [f for c in ['10-K', '10-Q', '8-K'] for f in Edgar._forms[c]]
         tic = time.time()
         for year, quarter in yq:
@@ -845,15 +923,30 @@ if __name__ == "__main__":
 
     
     def _extract_items():
-        """Sample code to extract mda10K and bus10K, and store locally""" 
-        ed = Edgar(savedir=paths['10X'], zipped=False)
+        """Sample code to extract mda10K and bus10K, and store locally
+
+        ed = Edgar(savedir, zipped=True)
+        - open archive may be local files or zipped archive
+
+        rows = ed.open(date=2022)
+        - each row has keys ['cik', 'form', 'date, 'pathname']
+
+        Edgar.extract_item(filing, item='mda10K')
+        - extract item text from filing text
+
+        ed.save_item(text, form='10-K', permno, item='mda10K', pathname)
+        - save text in local file
+
+        """ 
+        ed = Edgar(savedir=paths['10X'], zipped=True, verbose=1)
         sql = SQL(**credentials['sql'])
         bday = BusDay(sql)
         pstat = PSTAT(sql, bday)
         to_permno = pstat.build_lookup(target='lpermno', source='cik')
 
-        years = [2022]
-        items = {'10-K': ['bus10K', 'mda10K']}  # '10-Q': ['mda10Q']}
+        years = range(2023, 2022, -1)   # 1992
+        items = {'10-K': ['qqr10K']}   # '10-Q': ['mda10Q']}
+        #items = {'10-K': ['bus10K', 'mda10K']}
         logger = []
         for year in years: 
             rows = ed.open(date=year)
@@ -877,5 +970,4 @@ if __name__ == "__main__":
                              'text_w': len(filing.split()),
                              'item_w': len(extract.split())}
                         logger.append(r)
-        return logger
 

@@ -1,6 +1,6 @@
-"""IBES summary, ident and history of analysts earnings estimates
+"""IBES summary analysts earnings estimates
 
-Copyright 2022, Terence Lim
+Copyright 2022-2024, Terence Lim
 
 MIT License
 """
@@ -13,16 +13,18 @@ from pandas.api.types import is_list_like, is_integer_dtype
 from sqlalchemy import Table, Column, Index
 from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, BigInteger
 from finds.database.sql import SQL
-from finds.busday import BusDay
-from .structured import Structured
+from finds.structured.busday import BusDay
+from finds.structured.structured import Structured
 _VERBOSE = 1
 
 class IBES(Structured):
     """Provide interface to IBES analyst estimates structured datasets
     
     Args:
-        sql: Connection to SQL database
-        bd: Custom business day calendar object
+      sql: Connection to SQL database
+      bd: Custom business day calendar object
+      name: Name of dataset is "IBES"
+      identifer: Stocks identifier field name is "ticker"
 
     Notes:
 
@@ -33,33 +35,37 @@ class IBES(Structured):
     - SDATES: Identification start date
     """
 
-    def __init__(self, sql: SQL, 
-                       bd: BusDay, 
-                       name='IBES', 
-                       verbose=_VERBOSE):
-        """Initialize a connection to IBES datasets"""
+    def __init__(self,
+                 sql : SQL, 
+                 bd : BusDay, 
+                 name : str = 'IBES',
+                 identifier : str ='ticker',
+                 verbose : int =_VERBOSE):
+        """Initialize IBES tables"""
         tables = {
-            'history': sql.Table(
-                'history',
-                Column('ticker', String(6), primary_key=True),  # IBES Ticker
-                Column('oftic', String(8)),  # Official Ticker
-                Column('statpers', Integer, primary_key=True), # Stat Period
-                Column('measure', String(3), primary_key=True), # forecast type
-                Column('fy0a', Float),
-                Column('curcode', String(3)),
-                Column('fy0edats', Integer),
-                Column('price', Float),
-                Column('prdays', Integer),
-                Column('shout', Float),
-                Column('iadiv', Float),
-                Column('curr_price', String(3)),                
+            'ident': sql.Table(  # identification
+                'idsum',
+                Column('sdates', Integer, primary_key=True),
+                Column('ticker', String(6), primary_key=True),
+                Column('cusip', String(8)),
+                Column('oftic', String(8)),
+                Column('cname', String(32)),
+                Column('dilfac', SmallInteger, default=0),
+                Column('pdi', String(1)),
+                #Column('ccopcf', String(1)),
+                #Column('tnthfac', SmallInteger, default=0),
+                #Column('instrmnt', String(1)),
+                #Column('exchcd', String(2)),
+                #Column('country', String(1)),
+                #Column('compflag', String(1)),
+                #Column('usfirm', SmallInteger, default=0),
             ),
-            'summary': sql.Table(
-                'summary',
+            'statsum': sql.Table(   # statistical summary of estimates
+                'statsum',
                 Column('ticker', String(6), primary_key=True), 
                 Column('fpedats', Integer, primary_key=True),
                 Column('statpers', Integer, primary_key=True),
-                Column('measure', String(3), primary_key=True), #new key
+                Column('measure', String(3), primary_key=True),
                 Column('fpi', String(1), primary_key=True),
                 Column('numest', SmallInteger, default=0),
                 Column('numup', SmallInteger, default=0),
@@ -72,34 +78,32 @@ class IBES(Structured):
                 Column('actual', Float),
                 Column('anndats_act', Integer, default=0),
             ),
-            'ident': sql.Table(
-                'ident',
-                Column('sdates', Integer, primary_key=True),
-                Column('ticker', String(6), primary_key=True),
-                Column('cusip', String(8)),
-                Column('oftic', String(8)),
-                Column('cname', String(32)),
-                Column('dilfac', SmallInteger, default=0),
-                Column('pdi', String(1)),
-                #Column('ccopcf', String(1)),
-                Column('tnthfac', SmallInteger, default=0),
-                #Column('instrmnt', String(1)),
-                #Column('exchcd', String(2)),
-                #Column('country', String(1)),
-                #Column('compflag', String(1)),
-                #Column('usfirm', SmallInteger, default=0),
+            'actpsum': sql.Table(   # history of actuals
+                'actpsum',
+                Column('ticker', String(6), primary_key=True),  # IBES Ticker
+                # Column('oftic', String(8)),  # Official Ticker
+                Column('statpers', Integer, primary_key=True),  # Stat Period
+                Column('measure', String(3), primary_key=True), # forecast type
+                Column('fy0a', Float),
+                Column('curcode', String(3)),
+                Column('fy0edats', Integer),
+                Column('price', Float),
+                Column('prdays', Integer),
+                Column('shout', Float),
+                Column('iadiv', Float),
+                Column('curr_price', String(3)),                
             ),
-            'adjust': sql.Table(
-                'adjust',
+            'adjsum': sql.Table(    # adjustment factors
+                'adjsum',
                 Column('ticker', String(6), primary_key=True),
-                Column('oftic', String(6)),
+                #Column('oftic', String(6)),
                 Column('statpers', Integer, primary_key=True),
                 Column('adjspf', Float),
             ),
-            'surprise': sql.Table(
-                'surprise',
+            'surpsum': sql.Table(   # surprise
+                'surpsum',
                 Column('ticker', String(6), primary_key=True),
-                Column('oftic', String(6)),
+                # Column('oftic', String(6)),
                 Column('measure', String(3)),
                 Column('fiscalp', String(3), primary_key=True),
                 Column('pyear', SmallInteger, default=0),
@@ -110,8 +114,8 @@ class IBES(Structured):
                 Column('surpstdev', Float),
                 Column('suescore', Float),
             ),
-            'links': sql.Table(
-                'identlink',
+            'links': sql.Table(   # 
+                'ibeslink',
                 Column('ticker', String(6), primary_key=True),
                 Column('sdates', Integer, primary_key=True),
                 Column('permno', Integer, default=0),
@@ -121,11 +125,11 @@ class IBES(Structured):
                 Column('cusip', String(8)),
             ),
         }
-        super().__init__(sql, bd, tables, identifier='ticker', name=name,
+        super().__init__(sql, bd, tables, identifier=identifier, name=name,
                          verbose=verbose)
 
     def build_lookup(self, source: str, target: str, date_field='sdates', 
-                     dataset: str = 'ident', fillna: Any = None) -> Any:
+                     dataset: str = 'links', fillna: Any = None) -> Any:
         """Build lookup function to return target identifier from source"""
         return super().build_lookup(source=source, target=target,
                                     date_field=date_field, dataset=dataset,
@@ -141,7 +145,7 @@ class IBES(Structured):
              "      (SELECT MAX(date) FROM names c WHERE c.ncusip={ident}.cusip"
              "       AND c.date<={ident}.sdates)").format(
                  links=self['links'].key,
-                 ident=self['ident'].key)
+                 ident=self['idsum'].key)
         self._print("(write_links) ", q)
         self.sql.run(q)
         q = (f"SELECT SUM(ISNULL(permno)) AS missing, "
@@ -182,7 +186,7 @@ class IBES(Structured):
 
         Examples:
 
-        >>> ibes.get_linked('ident', fields=['cname'], date_field='statpers'):
+        >>> ibes.get_linked('idsum', fields=['cname'], date_field='statpers'):
 
         Notes:
 
@@ -201,25 +205,35 @@ class IBES(Structured):
 
 
 if __name__ == "__main__":
-    from pathlib import Path
-    from env.conf import credentials
+    from secret import credentials, paths
+    VERBOSE = 1
     
-    VERBOSE = 0
     sql = SQL(**credentials['sql'], verbose=VERBOSE)
     user = SQL(**credentials['user'], verbose=VERBOSE)
     bd = BusDay(sql)
     ibes = IBES(sql, bd)
-    
-    # load IBES
-    downloads = Path('/home/terence/Downloads/stocks2022/v1/IBES/')
-    df = ibes.load_csv('ident', downloads / Path('ident.txt.gz'), sep='\t')
+    downloads = paths['data'] / 'IBES'
+
+    """
+    # load IBES identifiers
+    df = ibes.load_csv('idsum', downloads / 'idsum.txt.gz', sep='\t')
     print(len(df), 85550)
     ibes.write_links()  #  (missing, count) = 15340  88963
-    
-    df = ibes.load_csv('history', downloads / Path('history.txt.gz'), sep='\t')
-    df = ibes.load_csv('summary', downloads / Path('summary.txt.gz'), sep='\t')
-    print(len(df), 11776742)
-    
-    #ibes.load_csv('adjust', downloads + 'adjustment.csv') #rows=24777
-    #ibes.load_csv('surprise', downloads + 'surprise.csv')  #rows=528933
+    """
+    # load IBES actuals history
+    df = ibes.load_csv('actpsum', downloads / 'actpsum.txt.gz', sep='\t')
 
+    """
+    # load IBES statistical summary
+    df = ibes.load_csv('statsum', downloads / 'statsum.txt.gz', sep='\t')
+    print(len(df), 11776742)
+
+    # load IBES adjustment factors
+    df = ibes.load_csv('adjsum', downloads / 'adjsum.txt.gz', sep='\t') 
+    print(len(df), 24777)
+
+    # load IBES surprises
+    ibes.load_csv('surpsum', downloads / 'surpsum.txt.gz', sep='\t')
+    print(len(df), 528933)
+
+    """

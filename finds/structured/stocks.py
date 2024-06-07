@@ -1,4 +1,4 @@
-"""Stocks subclass for stocks datasets
+"""Stocks subclass for defining stocks datasets
 
 Copyright 2022, Terence Lim
 
@@ -10,10 +10,10 @@ import pandas as pd
 from pandas import DataFrame, Series
 from pandas.api.types import is_list_like, is_integer_dtype
 from sqlalchemy import Table
-from finds.busday import BusDay
 from finds.database.sql import SQL
 from finds.database.redisdb import RedisDB
 from .structured import Structured
+from .busday import BusDay
 _VERBOSE = 1
 
 class Stocks(Structured):
@@ -32,25 +32,42 @@ class Stocks(Structured):
 
     def get_series(self,
                    permnos: int | str | List[str | int], 
-                   field: str = 'ret', 
-                   date_field: str = 'date',
+                   field: str, 
                    dataset: str = 'daily', 
+                   date_field: str = 'date',
                    beg: int = 19000000, 
                    end: int = 29001231) -> DataFrame | Series:
         """Return time series of a field for multiple permnos as DataFrame
 
         Args:
-            permnos: Identifiers to filter
-            field: Name of column to extract
-            beg: Inclusive start date (YYYYMMDD)
-            end: Inclusive end date (YYYYMMDD)
-            dataset: Name of dataset to retrieve `ret` (default is `daily`)
+          permnos: Identifiers to filter
+          dataset: Name of dataset to retrieve from, default `daily`
+          field: Name of column to extract, e.g. 'ret'
+          beg: Inclusive start date (YYYYMMDD)
+          end: Inclusive end date (YYYYMMDD)
 
         Returns:
-            DataFrame indexed by date with permnos in columns
+          DataFrame indexed by date with permnos in columns
         """
         assert self[dataset] is not None
-        if isinstance(permnos, (int, str)) :
+        if isinstance(permnos, (int, str)):
+            permnos = [permnos]
+        q = ("SELECT {date_field}, {permno}, {field} "
+             "  FROM {table}"
+             "  WHERE {date_field} >= {beg} AND {date_field} <= {end} "
+             "    AND {permno} IN ('{permnos}')").format(
+                 permno=self.identifier,
+                 field=field,
+                 date_field=date_field,
+                 table=self[dataset].key,
+                 beg=int(beg),
+                 end=int(end),
+                 permnos="', '".join([str(p) for p in permnos]))
+        return self.sql.read_dataframe(q)\
+                       .pivot(index='date', 
+                              columns=self.identifier, 
+                              values=field)[permnos].sort_index()
+        """
             q = ("SELECT {date_field}, {field}"
                  "  FROM {table}"
                  "  WHERE {date_field} >= {beg} AND {date_field} <= {end} "
@@ -63,46 +80,45 @@ class Stocks(Structured):
                      end=int(end),
                      permnos=permnos)
             self._print('(get_series single)', q)
-            return self.sql.read_dataframe(q)\
-                .set_index(date_field)[field].sort_index().rename(permnos)
+            return self.sql.read_dataframe(q).set_index(date_field)[field]\
+                                             .sort_index().rename(permnos)
         else:
             q = ("SELECT {date_field}, {permno}, {field} "
                  "  FROM {table}"
-                 "  WHERE {date_field} >= {beg} AND {date_field} <= {end} "
-                 "    AND {permno} IN ('{permnos}')").format(
+                 "  WHERE {date_field}>={beg} AND {date_field}<={end}").format(
                      permno=self.identifier,
                      field=field,
                      date_field=date_field,
                      table=self[dataset].key,
                      beg=int(beg),
-                     end=int(end),
-                     permnos="', '".join([str(p) for p in permnos]))
-            self._print('(get_series many)', q)
+                     end=int(end))
+            #self._print('(get_series many)', q)
             return self.sql.read_dataframe(q)\
-                    .pivot(index='date', 
-                           columns=self.identifier, 
-                           values=field)[permnos].sort_index()
+                           .pivot(index='date', 
+                                  columns=self.identifier, 
+                                  values=field)[permnos].sort_index()
+        """
 
     def get_ret(self,
-                beg: int, 
-                end: int, 
-                dataset: str = 'daily', 
-                field: str = 'ret', 
+                beg: int,
+                end: int,
+                dataset: str = 'daily',
+                field: str = 'ret',
                 date_field: str = 'date',
                 cache_mode: str = 'rw') -> Series:
         """Compounded returns between beg and end dates of all stocks
 
         Args:
-            beg: Inclusive start date (YYYYMMDD)
-            end: Inclusive end date (YYYYMMDD)
-            dataset: Name of dataset to retrieve (default is `daily`)
-            field: Name of returns field
-            date_field: Name of date field
-            cache_mode: 'r' to try read from cache first, 'w' to write to cache
+          beg: Inclusive start date (YYYYMMDD)
+          end: Inclusive end date (YYYYMMDD)
+          dataset: Name of dataset to retrieve, default is `daily`
+          field: Name of returns field
+          date_field: Name of date field
+          cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Series:
-            DataFrame with prod(min_count=1) of returns in column `ret`, 
-            with rows indexed by permno
+          DataFrame with prod(min_count=1) of returns in column `ret`, 
+          with rows indexed by permno
         """
         rkey = "_".join([field, str(self), str(beg), str(end)])
         if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(rkey):
@@ -130,32 +146,33 @@ class Stocks(Structured):
 
     def get_compounded(self,
                        periods: List[Tuple[int, int]], 
-                       permnos: List[int], 
+                       permnos: List[int],
+                       field: str = 'ret',
                        cache_mode: str = "rw") -> DataFrame:
         """Compound returns within list of periods, for given permnos
 
         Args:
-            periods: Tuples of inclusive begin and end dates of returns period
-            permnos: List of permnos
-            cache_mode: 'r' to try read from cache first, 'w' to write to cache
+          periods: Tuples of inclusive begin and end dates of returns period
+          permnos: List of permnos
+          cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Returns:
-            DataFrame of compounded returns in rows, for permnos in cols
+          DataFrame of compounded returns in rows, for permnos in cols
         """
         # accumulate horizontally, then finally transpose
         r = DataFrame(index=permnos)
         for beg, end in periods:
-            r[end] = self.get_ret(beg, end, cache_mode=cache_mode)\
+            r[end] = self.get_ret(beg, end, field=field, cache_mode=cache_mode)\
                          .reindex(permnos)
         return r.transpose()
 
     def cache_ret(self,
                   dates: List[Tuple[int, int]], 
                   replace: bool, 
+                  dataset: str,
                   field: str = 'ret', 
-                  date_field: str ='date',
-                  dataset: str = 'daily'):
-        """Pre-generate compounded returns from daily for redis store"""
+                  date_field: str ='date'):
+        """Pre-generate compounded returns for redis store"""
         assert self.rdb is not None
         q = ("SELECT {field}, {identifier}, {date_field} FROM {table} "
              " WHERE {date_field} >= {beg} "
@@ -183,27 +200,27 @@ class Stocks(Structured):
     
     
     def get_window(self,
-                   dataset: str, 
                    field: str, 
                    permnos: List[Any], 
-                   date_field: str, 
                    dates: List[int], 
                    left: int, 
                    right: int, 
+                   dataset: str  = 'daily',
+                   date_field: str = 'date', 
                    avg: bool = False) -> DataFrame:
         """Retrieve field values for permnos in window centered around dates
 
         Args:
-            dataset: Name of dataset
-            field: Name of field to retrieve
-            permnos: List of identifiers to retrieve
-            date_field: Name of date field in database
-            dates : List of corresponding dates of center of event window
-            left : Relative (inclusive) offset of start of event window
-            right : Relative (inclusive) offset of end of event window
+          field: Name of field to retrieve
+          permnos: List of identifiers to retrieve
+          date_field: Name of date field in database
+          dates : List of corresponding dates of center of event window
+          left : Relative (inclusive) offset of start of event window
+          right : Relative (inclusive) offset of end of event window
+          dataset: Name of dataset, default 'daily'
 
         Returns:
-            DataFrame columns [0:(right-left)] of field values in event window
+          DataFrame columns [0:(right-left)] of field values in event window
         """
         dates = list(dates)
         permnos = list(permnos)
@@ -277,24 +294,24 @@ class Stocks(Structured):
         return result.reset_index(drop=True)
 
     def get_many(self,
-                 dataset: str, 
                  permnos: List[str | int], 
                  fields: List[str], 
-                 date_field: str, 
                  dates: List[int], 
+                 dataset: str = 'daily', 
+                 date_field: str = 'date', 
                  exact: bool = True) -> DataFrame:
         """Retrieve multiple fields for lists of permnos and dates
 
         Args:
-            dataset: Name of dataset
-            permnos: List of identifiers to retrieve
-            dates: List of corresponding dates of center of event window
-            field: Names of fields to retrieve
-            date_field: Names of date field in database
-            exact: Whether require exact date match, or allow most recent
+          permnos: List of identifiers to retrieve
+          dates: List of corresponding dates of center of event window
+          field: Names of fields to retrieve
+          dataset: Name of dataset, default 'daily'
+          date_field: Name of date field in database, default 'date'
+          exact: Whether require exact date match, or allow most recent
 
         Returns:
-            DataFrame with permno, date, and retrieved fields across columns
+          DataFrame with permno, date, and retrieved fields across columns
         """
         field = "`, `".join(list(fields))
         self.sql.load_dataframe(table=self.sql._t,
@@ -335,22 +352,22 @@ class Stocks(Structured):
         return df
 
     def get_section(self,
-                    dataset: str, 
                     fields: List[str], 
-                    date_field: str,
                     date: int, 
+                    dataset: str = 'daily', 
+                    date_field: str = 'date',
                     start: int = -1) -> DataFrame:
         """Return a cross-section of values of fields as of a single date
 
         Args:
-            dataset: Dataset to extract from
-            fields: list of columns to return
-            date_field: Name of date column in the table
-            date: Desired date in YYYYMMDD format
-            start: Non-inclusive date of starting range; if -1 then exact date
+          fields: list of columns to return
+          date: Desired date in YYYYMMDD format
+          date_field: Name of date column in the table, default 'date'
+          dataset: Dataset to extract from, default 'daily'
+          start: Non-inclusive date of starting range; if -1 then exact date
 
         Returns:
-            Most recent row within date range, indexed by permno
+          Most recent row within date range, indexed by permno
 
         Note:
 
@@ -390,24 +407,24 @@ class Stocks(Structured):
         return self.sql.read_dataframe(q).set_index(self.identifier)
 
     def get_range(self,
-                  dataset: str, 
                   fields: List[str] | Dict[str, str],
-                  date_field: str, 
                   beg: int, 
                   end: int,
+                  dataset: str = 'daily', 
+                  date_field: str = 'date', 
                   cache_mode: str = "rw") -> DataFrame:
         """Return field values within a date range
 
         Args:
-            dataset: Name of dataset to extract from
-            fields: Names of columns to return (and optionally rename as)
-            date_field: Name of date column in the table
-            beg: Inclusive start date in YYYYMMDD format
-            end: Inclusive end date in YYYYMMDD format
-            cache_mode: 'r' to try read from cache first, 'w' to write to cache
+          fields: Names of columns to return (and optionally rename as)
+          beg: Inclusive start date in YYYYMMDD format
+          end: Inclusive end date in YYYYMMDD format
+          dataset: Name of dataset to extract from, default 'daily'
+          date_field: Name of date column in the table, default 'date'
+          cache_mode: 'r' to try read from cache first, 'w' to write to cache
 
         Returns:
-            DataFrame multi-indexed by permno, date
+          DataFrame multi-indexed by permno, date
         """
         assert(fields)
         if isinstance(fields, dict):
@@ -441,66 +458,73 @@ class Stocks(Structured):
 
 class StocksBuffer(Stocks):
     """Cache daily returns into memory, and provide Stocks-like interface"""
-    
+
     def __init__(self,
                  stocks: Stocks, 
                  beg: int, 
                  end: int,
-                 dataset: str = 'daily',
-                 fields: List[str] = ['ret', 'retx'], 
-                 identifier: str = 'permno'):
-        """Create object and load daily returns into its cache
+                 dataset: str,
+                 fields: List[str],
+                 identifier: str,
+                 date_field: str = 'date'):
+        """Create object and load returns into its cache
 
         Args:
-            stocks: Stocks structured data object to access stock returns data
-            beg: Earliest date of daily stock returns to pre-load
-            end: Latest date of daily stock returns to pre-load
-            fields: Column names of returns fields to load
-            dataset: Name of dataset to extract from
-            identifier: Field name of stocks identifier
+          stocks: Stocks structured data object to access stock returns data
+          beg: Earliest date of daily stock returns to pre-load
+          end: Latest date of daily stock returns to pre-load
+          fields: Column names of returns fields, e.g. ['ret', 'retx', 'prc']
+          dataset: Name of dataset to extract from, e.g. 'daily', 'monthly'
+          date_field: Name of date field, default 'date'
+          identifier: Field name of stocks identifier
         """
         self.fields = fields
         self.identifier = identifier
+        self.date_field = date_field
         self.bd = stocks.bd
+        self.stocks = stocks
         self._dataset = dataset
-        q = (f"SELECT permno, date, {', '.join(fields)} "
+        q = (f"SELECT {identifier}, {date_field}, {', '.join(fields)} "
              f"  FROM {stocks[dataset].key}"
-             f"  WHERE date>={beg} AND date<={end}")
-        self.rets = stocks.sql.read_dataframe(q).sort_values(['permno', 'date'])
+             f"  WHERE {date_field}>={beg} AND {date_field}<={end}")
+        self.rets = stocks.sql.read_dataframe(q)\
+                              .sort_values([self.identifier, date_field])
 
     def get_section(self,
-                    dataset: str, 
                     fields: List[str], 
-                    date_field: str,
                     date: int, 
+                    dataset: str = '', 
+                    date_field: str  = '',
                     start: int = -1) -> DataFrame:
         """Return a cross-section of values of fields as of a single date
 
         Args:
-            dataset: Dataset to extract from
-            fields: list of columns to return
-            date_field: Name of date column in the table
-            date: Desired date in YYYYMMDD format
-            start: Non-inclusive date of starting range (ignored)
+          dataset: Dataset to extract from
+          fields: list of columns to return
+          date_field: Name of date column in the table
+          date: Desired date in YYYYMMDD format
+          start: Non-inclusive date of starting range (ignored)
 
         Returns:
-            Most recent row within date range, indexed by permno
+          Most recent row within date range, indexed by permno
         """
-        df = self.rets[self.rets['date'].eq(date)]\
-                 .drop(columns=['date'])\
-                 .set_index('permno')\
-                 .dropna()
-        return df[fields]
-        
+        date_field = date_field or self.date_field
+        dataset = dataset or self._dataset
+        assert dataset == self._dataset, f"buffered dataset was {self._dataset}"
+        df = self.rets[self.rets[date_field].eq(date)]\
+                 .drop(columns=[date_field])\
+                 .set_index(self.identifier)[fields]
+        return df.dropna()
+
     def get_ret(self, beg: int, end: int, field: str = 'ret') -> Series:
         """Return compounded stock returns between beg and end dates
 
         Args:
-            beg: Begin date to compound returns
-            end: End date (inclusive) to compound returns
-            field: Name of returns field in dataset, in {'ret', 'retx')
+          beg: Begin date to compound returns
+          end: End date (inclusive) to compound returns
+          field: Name of returns field in dataset, in {'ret', 'retx')
         """
-        df = self.rets.loc[self.rets['date'].between(beg, end),
+        df = self.rets.loc[self.rets[self.date_field].between(beg, end),
                            [self.identifier, field]].dropna()
         df.loc[:, field] += 1
         df = (df.groupby(self.identifier).prod(min_count=1) - 1).fillna(0)
@@ -511,13 +535,14 @@ class StocksFrame(Stocks):
     """Mimic Stocks object given an input DataFrame of returns
     
     Args:
-        df: DataFrame of returns with date in index and permno in columns
-        rsuffix: replicate output columns and append rsuffix to column name
-        identifier: name of identifier column
+      df: DataFrame of returns with date in index and permno in columns
+      rsuffix: replicate output columns and append rsuffix to column name
+      identifier: name of identifier column
 
     Notes:
 
-    - limited interface to manipulate DataFrame of asset returns as Stocks-like
+    - Limited interface to manipulate DataFrame of asset returns as 
+      Stocks-like. Use when sql and BusDay not available.
     """
 
     class bd:
@@ -551,11 +576,11 @@ class StocksFrame(Stocks):
         """Return the series for target permnos"""
         return self.data[permnos]
 
-    def get_ret(self, beg: int, end: int, *args, **kwargs) -> Series:
+    def get_ret(self, beg: int, end: int, field: str = 'ret', **kwargs) -> Series:
         """Compounded returns between beg and end (inclusive) dates"""
-        df = DataFrame((self.data.loc[(self.data.index >= beg)
-                                      & (self.data.index <= end)] + 1).prod() - 1)
-        df.columns = ['ret']
+        df = DataFrame((self.data.loc[(self.data.index >= beg) &
+                                      (self.data.index <= end)] + 1).prod() - 1)
+        df.columns = [field]
         df.index.name = self.identifier
-        return df['ret']
+        return df[field]
 
