@@ -6,38 +6,42 @@
 Financial Data Science Documentation
 ====================================
 
-API reference for the FinDS Python package.
+API reference for the FinDS Python package, used in `financial data science projects <https://terence-lim.github.io/finds-notebooks/>`_
+
+- use database engines SQL, MongoDB, Redis
+- interfaces for
+  - structured data from CRSP, Compustat, IBES, TAQ
+  - APIs from ALFRED, BEA
+  - unstructured data from SEC Edgar, Federal Reserve websites
+  - academic websites by Ken French, Loughran and MacDonald, Hoberg and Phillips
+- recipes for econometrics, finance, graphs, event studies, backtesting
+- applications of statistics, machine learning, neural networks and large language models
 
 Resources:
 ----------
 
-`30+ projects, presented as Jupyter-notebooks <https://stackoverflow.com/>`_,
-in financial data science using this package
+1. `40+ projects in financial data science <https://terence-lim.github.io/finds-notebooks/>`_ (or `download pdf <https://terence-lim.github.io/notes/financial-data-science.pdf/>`_)
 
-`Online Jupyter-book <https://terence-lim.github.io/data-science-notebooks/>`_, or `download pdf <https://terence-lim.github.io/notes/data-science-notebooks.pdf/>`_
+2. `Github report for the notebooks <https://github.com/terence-lim/data-science-notebooks/>`_
 
-`FinDS API reference <https://terence-lim.github.io/financial-data-science/>`_
+3. `Github repo for the package <https://github.com/terence-lim/financial-data-science/>`_
 
-`FinDS repo <https://github.com/terence-lim/financial-data-science/>`_
+4. `API reference <https://terence-lim.github.io/finds/>`_
 
-`Jupyter notebooks repo <https://github.com/terence-lim/data-science-notebooks/>`_
+
    
 
 
 .. toctree::
    :maxdepth: 1
-   :caption: Contents:
+   :caption: Modules:
 
    finds.database
    finds.structured
    finds.backtesting
    finds.unstructured
    finds.readers
-   finds.misc
-   finds.busday
-   finds.finance
-   finds.econs
-   finds.filters
-   finds.plots
+   finds.recipes
+   finds.utils
 
 

@@ -1,7 +1,7 @@
-finds.misc.gdrive
+finds.utils.store
 =================
 
-.. automodule:: finds.misc.gdrive
+.. automodule:: finds.utils.store
    :members:
    :undoc-members:
    :show-inheritance:

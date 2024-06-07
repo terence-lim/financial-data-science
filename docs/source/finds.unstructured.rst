@@ -5,5 +5,5 @@ finds.unstructured
    :maxdepth: 4
 
    finds.unstructured.unstructured
-   finds.unstructured.store
-   finds.unstructured.textual
+   finds.unstructured.edgar
+   finds.unstructured.vocab

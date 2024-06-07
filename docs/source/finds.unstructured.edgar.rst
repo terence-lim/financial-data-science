@@ -1,7 +1,7 @@
-finds.unstructured.store
+finds.unstructured.edgar
 ========================
 
-.. automodule:: finds.unstructured.store
+.. automodule:: finds.unstructured.edgar
    :members:
    :undoc-members:
    :show-inheritance:

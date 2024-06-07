@@ -6,9 +6,10 @@ finds.structured
 
    finds.structured.structured
    finds.structured.stocks
+   finds.structured.benchmarks
+   finds.structured.signals
    finds.structured.crsp
    finds.structured.pstat
    finds.structured.ibes
-   finds.structured.benchmarks
-   finds.structured.signals
-   finds.structured.finder
+   finds.structured.busday
+

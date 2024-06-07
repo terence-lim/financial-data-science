@@ -1,7 +1,7 @@
-finds.readers.edgar
+finds.recipes.econs
 ===================
 
-.. automodule:: finds.readers.edgar
+.. automodule:: finds.recipes.econs
    :members:
    :undoc-members:
    :show-inheritance:

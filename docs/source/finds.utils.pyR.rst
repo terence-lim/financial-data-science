@@ -1,7 +1,7 @@
-finds.misc.misc
+finds.utils.pyR
 ===============
 
-.. automodule:: finds.misc.misc
+.. automodule:: finds.utils.pyR
    :members:
    :undoc-members:
    :show-inheritance:
