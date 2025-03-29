@@ -10,4 +10,4 @@ finds.readers
    finds.readers.ffreader
    finds.readers.fomcreader
    finds.readers.sectoring
-   finds.readers.readers
+   finds.readers.readers   

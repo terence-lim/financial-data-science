@@ -7,7 +7,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'Financial Data Science'
-copyright = '2022-2024, Terence Lim'
+copyright = '2020-2025, Terence Lim'
 author = 'Terence Lim'
 
 # -- General configuration ---------------------------------------------------

@@ -3,33 +3,50 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Financial Data Science Documentation
-====================================
+Financial Data Science (FinDS) API Reference
+============================================
 
-API reference for the FinDS Python package, used in `financial data science projects <https://terence-lim.github.io/finds-notebooks/>`_
+Designed to support financial data science workflows,
+the `FinDS Python package <https://github.com/terence-lim/financial-data-science>`_
+demonstrates how to use database engines
+such as SQL, Redis, and MongoDB to manage and access large datasets, including:
 
-- use database engines SQL, MongoDB, Redis
-- interfaces for
-  - structured data from CRSP, Compustat, IBES, TAQ
-  - APIs from ALFRED, BEA
-  - unstructured data from SEC Edgar, Federal Reserve websites
-  - academic websites by Ken French, Loughran and MacDonald, Hoberg and Phillips
-- recipes for econometrics, finance, graphs, event studies, backtesting
-- applications of statistics, machine learning, neural networks and large language models
+- Core financial databases such as CRSP, Compustat, IBES, and TAQ
 
-Resources:
-----------
+- Public economic data APIs from sources like FRED and the Bureau of Economic Analysis (BEA)
 
-1. `40+ projects in financial data science <https://terence-lim.github.io/finds-notebooks/>`_ (or `download pdf <https://terence-lim.github.io/notes/financial-data-science.pdf/>`_)
+- Structured and unstructured data from academic and research websites
 
-2. `Github report for the notebooks <https://github.com/terence-lim/data-science-notebooks/>`_
+Its companion `Financial Data Science Python Notebooks <https://terence-lim.github.io/docs/financial-data-science-notebooks/>`_
+provides practical examples and templates for applying:
 
-3. `Github repo for the package <https://github.com/terence-lim/financial-data-science/>`_
+- Financial econometrics and time series modeling
 
-4. `API reference <https://terence-lim.github.io/finds/>`_
+- Graph analytics, event studies, and backtesting strategies
+
+- Machine learning for predictive analytics
+
+- Natural language processing (NLP) to extract insights from financial text
+
+- Neural networks and large language models (LLMs) for advanced decision-making
 
 
-   
+Documentation:
+--------------
+
+- `Financial Data Science Notebooks <https://terence-lim.github.io/docs/financial-data-science-notebooks/>`_
+
+- `Download PDF <https://terence-lim.github.io/docs/financial-data-science-notebooks.pdf>`_
+
+- `FinDS API reference <https://terence-lim.github.io/docs/financial-data-science/>`_
+
+
+Github repos:
+-------------
+
+- `FinDS package <https://github.com/terence-lim/financial-data-science>`_
+
+- `Jupyter notebooks <https://github.com/terence-lim/financial-data-science-notebooks>`_
 
 
 .. toctree::
