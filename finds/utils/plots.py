@@ -430,7 +430,7 @@ def plot_bar(y: DataFrame, ax: Any = None, labels: List[str] = [],
 open_t = pd.to_datetime('1900-01-01T09:30')  # usual NYSE open
 close_t = pd.to_datetime('1900-01-01T16:00') # usual NYSE close
 def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
-              xmin: Timestamp = open_t, xmax: Timestamp = close_t,
+              xmin: Timestamp = open_t, xmax: Timestamp = close_t, title: str='',
               marker: str = ' ', fontsize: int = 8):
     """Plot lines with Timestamp time on x-axis; primary and secondary y-axis
 
@@ -460,6 +460,7 @@ def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
             sns.lineplot(x=left.index[f], y=left.loc[f, c],
                          marker=marker, color='C' + str(cn),
                          ax=ax, legend=False)
+        ax.legend(left.columns, loc='upper left')
     if y2 is not None:
         right = DataFrame(y2)
         if xmin:
@@ -472,8 +473,10 @@ def plot_time(y1: DataFrame, y2: DataFrame | None = None, ax: Any = None,
             g = right.loc[:, c].notnull().values
             bx.plot(right.index[g], right.loc[g, c], marker=marker,
                     color='C' + str(cn+i+1))
+        bx.legend(right.columns, loc='upper right')
     ax.xaxis.set_tick_params(rotation=0, labelsize=fontsize)
     ax.yaxis.set_tick_params(rotation=0, labelsize=fontsize)
+    ax.set_title(title, fontsize=fontsize+4)    
     # plt.tight_layout()
     return ax
     

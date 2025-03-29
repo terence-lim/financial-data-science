@@ -16,15 +16,15 @@ import requests
 class FFReader:
     """Wraps over pandas_datareader to load FamaFrench factors from website
 
-    Hints for using pandas datareader:
+    Hints for using pandas datareader to read a single series
     ::
 
        from pandas_datareader.famafrench import FamaFrenchReader as FFR
-       mkt = FFR('F-F_Research_Data_Factors', start=1900, end=2099).read()
+       mkt = FFReader('F-F_Research_Data_Factors', start=1900, end=2099).read()
     """
     def __init__(self, symbol):
-        """Read data for symbol into class instance"""
-        self.data = pdr.data.FamaFrenchReader(symbol, start='1900-01-01').read()
+        """Read data for symbol into instance"""
+        self.data = pdr.data.FamaFrenchReader(symbol, start=pd.to_datetime('1900-01-01')).read()
         self.descr = self.data['DESCR']
 
     def __len__(self):
@@ -143,7 +143,7 @@ class FFReader:
                     df.loc[next_sic2.iloc[i], 'name'] = 'Other'
                     df.loc[next_sic2.iloc[i], 'description'] = other
 
-        # clean up dataframe {sectors} and save to sql 
+        # return as dataframe
         sectors = pd.concat([labels, df], axis=0)\
                     .drop(columns=['end'])\
                     .sort_index()
@@ -162,20 +162,18 @@ class FFReader:
         Args:
           name: Name of research factor in Ken French website
           item: Index of item to research (e.g. 0 is usually value-weighted)
-          suffix: Suffix string to append to name when stored in sql
-          start: earliest date to retrieve
-          end: latest date to retrieve 
+          suffix: Suffix to append to name (e.g. to distinguish monthly from daily)
           date_formatter: to reformat dates, e.g. bd.offset or bd.endmo
 
         Returns:
           DataFrame of asset returns (converted to decimal, not percentages) 
         """
-        df = pdr.data.FamaFrenchReader(name, start='1900-01-01').read()
+        df = pdr.data.FamaFrenchReader(name, start=pd.to_datetime('1900-01-01')).read()
         df = df[item]
         try:
             df.index = df.index.to_timestamp()
         except:
-            pass     # else invalid comparison error!
+            pass       # invalid comparison error
         df.index = [date_formatter(d) for d in df.index]
         df.columns = [c.strip() + suffix for c in df.columns]
         df.where(df > -99.99, other=np.nan, inplace=True)  # replace NaNs

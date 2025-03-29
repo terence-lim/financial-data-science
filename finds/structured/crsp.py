@@ -17,17 +17,7 @@ from finds.database.redisdb import RedisDB
 from finds.structured.busday import BusDay
 from finds.structured.stocks import Stocks, StocksBuffer
 from finds.recipes.filters import fractile_split
-
 _VERBOSE = 1
-
-"""TODO !
-(0) verify this all true (keep monthly_delist): merge of last month and delists
-(1) when loading monthly, also need to overwrite monthly return 
-    (by insert overwrite) when monthly delisting -> retain overwriting table!
-    - if special delisting code, then include 0.0
-(2) conditionally:
-    if daily delist date in or after month of last return: -0.3 or delisting ret
-"""
 
 class CRSP(Stocks):
     """Implements an interface to CRSP structured stocks dataset
@@ -157,7 +147,7 @@ class CRSP(Stocks):
         Returns:
           Series of market cap indexed by permno
         """
-        rkey = f"cap{'co' if use_permco else ''}_{str(self)}_{date}"
+        rkey = self.rdb.prefix + f"cap{'co' if use_permco else ''}_{str(self)}_{date}"
         if self.rdb and 'r' in cache_mode and self.rdb.redis.exists(rkey):
             self._print('(get_cap load)', rkey)
             return self.rdb.load(rkey)['cap']
@@ -221,7 +211,7 @@ class CRSP(Stocks):
         """
 
         assert date == self.bd.offset(date), f"get_universe: {date} not valid date"
-        rkey = "_".join(["universe", str(self), str(date)])
+        rkey = self.rdb.prefix + "_".join(["universe", str(self), str(date)])
         if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(rkey):
             self._print('(get_universe load)', rkey)
             df = self.rdb.load(rkey)
@@ -424,7 +414,7 @@ class CRSPBuffer(StocksBuffer):
 if __name__ == "__main__":
     from pathlib import Path
     from finds.structured import CRSP, CRSPBuffer
-    from secret import credentials, paths
+    from secret import credentials, paths, CRSP_DATE
     VERBOSE = 1
     
     sql = SQL(**credentials['sql'], verbose=VERBOSE)
@@ -434,6 +424,7 @@ if __name__ == "__main__":
     crsp = CRSP(sql, bd, rdb=rdb, verbose=VERBOSE)
     downloads = paths['data'] / 'CRSP'
 
+    '''
     # load CRSP: TODO handle missing return codes (< -1, see below)
     df = crsp.load_csv('names', downloads / 'names.txt.gz', sep='\t')
     print(len(df), '~', 103383)
@@ -445,6 +436,7 @@ if __name__ == "__main__":
     print(len(df), '~', 33584)
     df = crsp.load_csv('monthly', downloads / 'monthly.txt.gz', sep='\t')
     print(len(df), '~', 4606907)
+    '''
 
     for s in sorted(downloads.glob('daily*.txt.gz'), reverse=True):
         tic = time.time()
@@ -457,7 +449,7 @@ if __name__ == "__main__":
 
     # Pre-generate weekly returns and save in Redis cache
     begweek = 19251231
-    endweek = 20231229
+    endweek = CRSP_DATE
 
     rebaldates = bd.date_range(begweek, endweek, freq='weekly')
     r = bd.date_tuples(rebaldates)
@@ -469,7 +461,7 @@ if __name__ == "__main__":
         crsp.cache_ret(batch, field='retx', replace=True)
 
     # test CRSPBuffer
-    stocks = CRSPBuffer(crsp, 20210101, 20211231, dataset='monthly')
+    stocks = CRSPBuffer(crsp, beg=20210101, end=20211231, fields=['ret'], dataset='monthly')
     beg, end = 20210101, 20210131
     df = stocks.get_ret(beg, end)
     print(df) 
@@ -477,7 +469,7 @@ if __name__ == "__main__":
     print(m)
 
 
-if False:
+    '''
     # changed so now may get from monthly column or compound delist table
     def get_dlstret(self, beg: int, end: int, cache_mode: str = "rw") -> Series:
         """Compounded delisting returns from beg to end dates for all permnos
@@ -490,7 +482,7 @@ if False:
         Returns:
             Series of compounded returns
         """
-        rkey = "_".join(["dlst", str(self), str(beg), str(end)])
+        rkey = self.rdb.prefix "_".join(["dlst", str(self), str(beg), str(end)])
         if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(rkey):
             self._print("(get_dlstret load)", rkey, str(self))
             return self.rdb.load(rkey)['ret']
@@ -509,3 +501,4 @@ if False:
             self._print("(get_dlstret dump)", rkey, str(self))
             self.rdb.dump(rkey, df)
         return df['ret']
+    '''

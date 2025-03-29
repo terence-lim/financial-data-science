@@ -12,7 +12,7 @@ from pandas.api.types import is_list_like, is_integer_dtype
 from sqlalchemy import Table, Column, Index, Integer, Float
 from finds.database.sql import SQL, as_dtypes
 from .stocks import Stocks
-_VERBOSE = 1
+_VERBOSE = 0
 
 class Signals(Stocks):
     """Provide structured stocks data interface to derived signal values 

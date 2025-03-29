@@ -182,12 +182,14 @@ class BEA:
             source: Source url or local file
 
         Notes:
+
         - https://www.bea.gov/industry/input-output-accounts-data
         - https://apps.bea.gov/industry/xls/io-annual/
           - IOUse_Before_Redefinitions_PRO_1947-1962_Summary.xlsx
           - Use_SUT_Framework_2007_2012_DET.xlsx 
         - Replace "HS" "ORE" with "531"
         """
+        
         if not source:
             filename = {   # there are 3 historical schmes
                 1997: 'Use_SUT_Framework_2007_2012_DET.xlsx',   

@@ -201,7 +201,7 @@ class Structured(object):
         df = df.loc[rows]
             
         # Create sql table and load from DataFrame
-        #table.create(checkfirst=True)
+        #table.create(self.sql.engine, checkfirst=True)
         self.sql.create_all()
         self.sql.load_dataframe(table=table.key, df=df, index_label=None)
         return df

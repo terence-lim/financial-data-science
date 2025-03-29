@@ -28,7 +28,7 @@ import pandas as pd
 from pandas import DataFrame, Series, Timestamp
 from pandas.tseries.offsets import MonthEnd, YearEnd, QuarterEnd
 from pandas.api.types import is_list_like
-from .readers import requests_get
+from finds.readers.readers import requests_get
 _VERBOSE = 1
 
 
@@ -697,9 +697,14 @@ class Alfred:
 #
 # Functions to retrieve fred_md and fred_qd
 #
-fred_md_url = 'https://files.stlouisfed.org/files/htdocs/fred-md/'
+#fred_md_url = 'https://files.stlouisfed.org/files/htdocs/fred-md/'
+# https://www.stlouisfed.org/-/media/project/frbstl/stlouisfed/research/fred-md/historical_fred-md.zip
+# https://www.stlouisfed.org/-/media/project/frbstl/stlouisfed/research/fred-md/md-vintages-2-10-25.zip
 
-def fred_md(vintage: int | str = 0, url: str = '',
+# https://www.stlouisfed.org/-/media/project/frbstl/stlouisfed/research/fred-md/monthly/current.csv
+fred_md_url = "https://www.stlouisfed.org/-/media/project/frbstl/stlouisfed/research/fred-md/"
+
+def fred_md(vintage: int | str = 0, url: str = fred_md_url,
             verbose: int = _VERBOSE)-> DataFrame:
     """Retrieve and parse current or vintage csv from McCracken FRED-MD site
 
@@ -723,11 +728,10 @@ def fred_md(vintage: int | str = 0, url: str = '',
     >>> md_df, mt = fred_md('monthly/2015-05.csv',
                             url=fred_md_url+'FRED_MD.zip')      # post-2015
     """
-    url_ = fred_md_url
     if isinstance(vintage, int) and vintage:
         csvfile = f"{vintage // 100}-{vintage % 100:02d}.csv"
         if vintage < 201500:
-            url_ = url_ + 'Historical_FRED-MD.zip'
+            url = url + 'historical_fred-md.zip'
             vintage = 'Historical FRED-MD Vintages Final/' + csvfile
         else:
             vintage = 'monthly/' + csvfile
@@ -735,7 +739,6 @@ def fred_md(vintage: int | str = 0, url: str = '',
         vintage = vintage or 'monthly/current.csv'
     if verbose:
         print('FRED-MD vintage:', vintage)
-    url = url or url_
     if url.endswith('.zip'):
         if url.startswith('http'):
             url = io.BytesIO(requests_get(url).content)
@@ -754,7 +757,8 @@ def fred_md(vintage: int | str = 0, url: str = '',
     df.index = _to_monthend(df.index)
     return df.iloc[:, 1:], DataFrame(meta)
 
-def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = _VERBOSE):
+
+def fred_qd(vintage: int | str = 0, url: str = fred_md_url, verbose: int = _VERBOSE):
     """Retrieve and parse current or vintage csv from McCracken FRED-MD site
 
     Args:
@@ -769,11 +773,10 @@ def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = _VERBOSE):
     - if vintage is int: derive vintage csv file name from input date YYYYMM
     - if url is '': derive subfolder or zip archive name, from vintage
     """
-    url = url or fred_md_url
     if isinstance(vintage, int) and vintage:
         vintage = f"quarterly/{vintage // 100}-{vintage % 100:02d}.csv"
     else:
-        vintage = 'quarterly/current.csv'
+        vintage = vintage or 'quarterly/current.csv'
     if verbose:
         print('FRED-QD vintage:', vintage)
     df = pd.read_csv(urljoin(url, vintage), header=0)
@@ -789,3 +792,16 @@ def fred_qd(vintage: int | str = 0, url: str = '', verbose: int = _VERBOSE):
     return df.iloc[:, 1:], DataFrame(meta)
         
 
+import zipfile
+def csv_from_zip(zip_path: str, filename: str) -> DataFrame | None:
+    with zipfile.ZipFile(zip_path) as z:
+        with z.open(csv_filename) as f:
+            return pd.read_csv(f)
+    return None
+
+if __name__ == "__main__":
+    vintage = 202004
+    vintage = f"quarterly/{vintage // 100}-{vintage % 100:02d}.csv"
+    vintage = 'assets/FRED-MD_2015m5.csv'
+    df, codes = fred_md(vintage, url='')
+#    df, codes = fred_qd('assets/FRED-QD_2020m04.csv', url='')

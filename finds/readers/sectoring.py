@@ -100,6 +100,8 @@ class Sectoring:
                                Column('name', String(16), primary_key=True),
                                Column('scheme', String(8), primary_key=True),
                                Column('description', String(128)))
+        self.sql.create_all()
+
         if self.scheme.startswith('sic') and len(self.scheme) > 3:
             digits = int(scheme[3])
             n = 4 - digits
@@ -136,7 +138,6 @@ class Sectoring:
         def _load(df: DataFrame | None) -> Series | None:
             """Helper to upload dataframe with code in index, name. desc to SQL"""
             if df is not None:     # columns=['name', 'description']
-                self.sql.create_all()
                 self.sectors = df[['name', 'description']]
                 self.sectors['scheme'] = self.scheme
                 delete = self.table.delete().where(
@@ -183,7 +184,7 @@ if __name__ == "__main__":
     #
     codes = {}
 
-    """
+
     scheme = 'sic2'
     codes[scheme] = Sectoring(sql, scheme=scheme)
     
@@ -199,7 +200,7 @@ if __name__ == "__main__":
     codes[scheme] = Sectoring(sql, scheme=scheme).load()
     print(scheme, len(codes[scheme]))
     
-    """
+
     scheme = 'NAICS'  # NAICS from SIC Crosswalk
     codes[scheme] = Sectoring(sql, scheme=scheme).load()
     print(scheme, len(codes[scheme]))

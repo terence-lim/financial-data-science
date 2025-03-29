@@ -15,7 +15,7 @@ from pandas.tseries.offsets import MonthEnd
 from sqlalchemy import Column, Integer
 from datetime import datetime
 from finds.database.sql import SQL
-_VERBOSE = 1
+_VERBOSE = 0
 
 # List of anticipated NYSE holidays
 _hols = [20230102, 20230116, 20230220, 20230407, 20230529,

@@ -15,7 +15,7 @@ from sqlalchemy import Integer, String, Float, SmallInteger, Boolean, BigInteger
 from finds.database.sql import SQL
 from finds.structured.busday import BusDay
 from finds.structured.structured import Structured
-_VERBOSE = 1
+_VERBOSE = 0
 
 class IBES(Structured):
     """Provide interface to IBES analyst estimates structured datasets
@@ -87,6 +87,10 @@ class IBES(Structured):
                 Column('fy0a', Float),
                 Column('curcode', String(3)),
                 Column('fy0edats', Integer),
+                Column('fvyrgro', Float),
+                Column('fvyrsta', Float),
+                Column('int0a', Float),
+                Column('int0dats', Integer),
                 Column('price', Float),
                 Column('prdays', Integer),
                 Column('shout', Float),
@@ -140,12 +144,13 @@ class IBES(Structured):
         self.sql.create_all()
         q = ("INSERT INTO {links}"
              "  SELECT {ident}.ticker, {ident}.sdates, permno, date, comnam, "
-             "  cname, {ident}.cusip FROM {ident} LEFT JOIN names "
-             "    ON {ident}.cusip = names.ncusip AND names.date = "
-             "      (SELECT MAX(date) FROM names c WHERE c.ncusip={ident}.cusip"
+             "  cname, {ident}.cusip FROM {ident} LEFT JOIN {names} "
+             "    ON {ident}.cusip = {names}.ncusip AND {names}.date = "
+             "      (SELECT MAX(date) FROM {names} c WHERE c.ncusip={ident}.cusip"
              "       AND c.date<={ident}.sdates)").format(
                  links=self['links'].key,
-                 ident=self['idsum'].key)
+                 ident=self['ident'].key,
+                 names='names')
         self._print("(write_links) ", q)
         self.sql.run(q)
         q = (f"SELECT SUM(ISNULL(permno)) AS missing, "
@@ -186,7 +191,7 @@ class IBES(Structured):
 
         Examples:
 
-        >>> ibes.get_linked('idsum', fields=['cname'], date_field='statpers'):
+        >>> ibes.get_linked('ident', fields=['cname'], date_field='statpers'):
 
         Notes:
 
@@ -214,16 +219,18 @@ if __name__ == "__main__":
     ibes = IBES(sql, bd)
     downloads = paths['data'] / 'IBES'
 
-    """
+    '''
     # load IBES identifiers
-    df = ibes.load_csv('idsum', downloads / 'idsum.txt.gz', sep='\t')
+    df = ibes.load_csv('ident', downloads / 'idsum.txt.gz', sep='\t')
     print(len(df), 85550)
     ibes.write_links()  #  (missing, count) = 15340  88963
-    """
+    '''
+    
     # load IBES actuals history
     df = ibes.load_csv('actpsum', downloads / 'actpsum.txt.gz', sep='\t')
+    print(len(df))
 
-    """
+    '''
     # load IBES statistical summary
     df = ibes.load_csv('statsum', downloads / 'statsum.txt.gz', sep='\t')
     print(len(df), 11776742)
@@ -235,5 +242,4 @@ if __name__ == "__main__":
     # load IBES surprises
     ibes.load_csv('surpsum', downloads / 'surpsum.txt.gz', sep='\t')
     print(len(df), 528933)
-
-    """
+    '''

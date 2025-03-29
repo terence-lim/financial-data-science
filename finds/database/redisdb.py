@@ -21,6 +21,7 @@ class RedisDB(Database):
       port: Port number
       charset: Character set
       decode_responses: Set to False to zlib dataframe
+      prefix: string to prefix all key names
 
     Attributes:
       redis: Redis client instance providing interface to all Redis commands
@@ -48,11 +49,13 @@ class RedisDB(Database):
                  port: int,
                  charset: str = 'utf-8',
                  decode_responses: bool = False,
+                 prefix: str = '',
                  **kwargs):
         """Open a Redis connection instance"""
         self.redis = redis.StrictRedis(host=host, port=port, charset=charset,
                                        decode_responses=decode_responses,
                                        **kwargs)
+        self.prefix = prefix
         
     def dump(self, key: str, df: DataFrame):
         """Saves dataframe, serialized to parquet, by key name to redis

@@ -120,7 +120,7 @@ class Stocks(Structured):
           DataFrame with prod(min_count=1) of returns in column `ret`, 
           with rows indexed by permno
         """
-        rkey = "_".join([field, str(self), str(beg), str(end)])
+        rkey = self.rdb.prefix + "_".join([field, str(self), str(beg), str(end)])
         if 'r' in cache_mode and self.rdb and self.rdb.redis.exists(rkey):
             self._print('(get_ret load)', rkey)
             return self.rdb.load(rkey)[field]    # use cache
@@ -188,7 +188,7 @@ class Stocks(Structured):
         rets[field] += 1
         
         for beg, end in dates:
-            rkey = "_".join([field, str(self), str(beg), str(end)])
+            rkey = self.rdb.prefix + "_".join([field, str(self), str(beg), str(end)])
             if not replace and self.rdb.redis.exists(rkey):
                 self._print('(cache_ret exists)', rkey)
                 continue
@@ -435,7 +435,7 @@ class Stocks(Structured):
         if self.identifier not in fields:
             fields += [self.identifier]
 
-        rkey = f"{str(self)}_{'_'.join(fields)}_{beg}_{end}"
+        rkey = self.rdb.prefix + f"{str(self)}_{'_'.join(fields)}_{beg}_{end}"
 
         if self.rdb and 'r' in cache_mode and self.rdb.redis.exists(rkey):
             self._print('(get_range load)', rkey)
@@ -487,8 +487,11 @@ class StocksBuffer(Stocks):
         q = (f"SELECT {identifier}, {date_field}, {', '.join(fields)} "
              f"  FROM {stocks[dataset].key}"
              f"  WHERE {date_field}>={beg} AND {date_field}<={end}")
+        
         self.rets = stocks.sql.read_dataframe(q)\
                               .sort_values([self.identifier, date_field])
+        if not len(self.rets) and _VERBOSE:
+            print('empty results from stocks.StocksBuffer:', q)
 
     def get_section(self,
                     fields: List[str], 

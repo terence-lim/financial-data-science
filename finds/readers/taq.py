@@ -608,6 +608,7 @@ def plot_taq(left1: DataFrame, right1: DataFrame | None = None,
     """Convenience method for 1x2 primary/secondary-y subplots of tick data"""
 
     if left2 is None:
+        bx = None
         fig, ax = plt.subplots(num=num, figsize=(10, 6), clear=True)
     else:
         fig, (ax, bx) = plt.subplots(2, 1, num=num, figsize=(10,12),
@@ -615,6 +616,7 @@ def plot_taq(left1: DataFrame, right1: DataFrame | None = None,
         plot_time(left2, right2, ax=bx, xmin=open_t, xmax=close_t)
     plot_time(left1, right1, ax=ax, title=title, xmin=open_t, xmax=close_t)
     plt.tight_layout(pad=3)
+    return ax,bx
 
 def itertaq(trades: TAQ, quotes: TAQ, master: DataFrame,
             open_t: Timestamp = open_t, close_t: Timestamp = 0,
@@ -693,7 +695,7 @@ if __name__ == "__main__":  # test access methods
     import os
     import numpy as np
     import matplotlib.pyplot as plt
-    from env.conf import credentials, paths
+    from secret import paths
 
     # daily taq files from ftp://ftp.nyxdata.com/Historical%20Data%20Samples/
     dates = [20191007, 20191008, 20180305, 20180306, 20171101]
@@ -712,7 +714,8 @@ if __name__ == "__main__":  # test access methods
     
     date = dates[0]
     master, trades, quotes = opentaq(date, taqdir)
-    
+
+    '''
     #
     # 1. Read lines
     #
@@ -735,16 +738,18 @@ if __name__ == "__main__":  # test access methods
         df = next(quote)
         print(f'next Quote symbol {df.index.name}: {len(df)} records')
 
+    '''
     #
     # 3. getitem by symbol (uses index_gzipped package)
     #
     symbol = 'VTI'
     symbol = 'AAPL' #'ZM'
-    symbol = 'GS'
+#    symbol = 'GS'
+    symbol = "VOO"
     t = trades[symbol]
     q = quotes[symbol]
     ct = clean_trade(t, close_t=close_t + np.timedelta64('5','m'))
-    cq = clean_nbbo(q)    
+    cq = clean_nbbo(q)
     align_trades(ct, cq, inplace=True)
 
     plot_taq(ct[['Trade_Price', 'Prevailing_Mid']].groupby(level=0).last(),
@@ -756,9 +761,13 @@ if __name__ == "__main__":  # test access methods
              open_t=open_t,
              close_t=close_t + np.timedelta64('5','m'),
              num=1,
-             title=f"Tick Prices, Volume, Quotes, Spreads, and Depths")
+             title=f"Tick Prices, Volume, Quotes, Spreads, and Depths ({dates[0]})"
+    )
     plt.show()    
 
+    raise Exception
+    
+    
     value, unit = 5, 'm'
     timedelta = np.timedelta64(value, unit)
     bt = bin_trades(ct, value, unit, close_t=close_t + timedelta)

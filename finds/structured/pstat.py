@@ -16,8 +16,8 @@ from finds.database.sql import SQL
 from finds.database.redisdb import RedisDB
 from finds.structured.busday import BusDay
 from finds.structured.structured import Structured
-_VERBOSE = 1
-
+_VERBOSE = 0
+                 
 class PSTAT(Structured):
     """Provide interface to Compustat structured data sets
 
@@ -346,20 +346,20 @@ class PSTAT(Structured):
             ),
             'customer': sql.Table(
                 'customer',
-                Column('gvkey', Integer, primary_key=True),  # Supplier GVKEY
-                Column('conm', String(29)),                  # Supplier Name
-                Column('cgvkey', Integer, primary_key=True), # Customer GVKEY
-                Column('cconm', String(28)),            #Cust Current Name
-                Column('cnms', String(50)),                     # Customer Name
-                Column('srcdate', Integer, primary_key=True),   # Source Date
+                Column('gvkey', Integer, primary_key=True),   # Supplier GVKEY
+                Column('conm', String(100)),                  # Supplier Name
+                Column('cgvkey', Integer, primary_key=True),  # Customer GVKEY
+                Column('cconm', String(100)),                 # Cust Current Name
+                Column('cnms', String(100)),                  # Customer Name
+                Column('srcdate', Integer, primary_key=True), # Source Date
                 Column('cid', SmallInteger, default=0), #Cust Identifier
                 Column('sid', SmallInteger, default=0), #Cust Segment Ident Link
                 Column('ctype', String(7)),  # Customer Type
                 Column('salecs', Float),     # Customer Sales
                 Column('scusip', String(9)), # Supplier CUSIP
-                Column('stic', String(5)),   # Supplier Ticker Symbol
+                Column('stic', String(7)),   # Supplier Ticker Symbol
                 Column('ccusip', String(9)), # Customer CUSIP
-                Column('ctic', String(5)),   # Customer Ticker Symbol
+                Column('ctic', String(7)),   # Customer Ticker Symbol
             ),
         }
         super().__init__(sql, bd, tables, identifier=identifier, name=name,
@@ -444,42 +444,67 @@ if __name__ == "__main__":
     pstat = PSTAT(sql, bd)
     downloads = paths['data'] / 'PSTAT'
 
-    """
+    '''
     # load links
-    df = pstat.load_csv(
+    links_df = pstat.load_csv(
         'links', downloads / 'links.txt.gz', sep='\t',    
         drop={'lpermno': ['0', 0],
               'linkprim': ['N', 'J']},
         keep={'linktype': ['LC', 'LU']},  # researched and unresearched links"
         replace={'linkdt': (['C', 'E', 'B'], 0),
                  'linkenddt': (['C', 'E', 'B'], 0)})
-    print(len(df), 33036)
-    lag = df.shift()
-    f = (lag.gvkey == df.gvkey) & (lag.lpermno != df.lpermno)
-    print('permnos in links changed in ', sum(f), 'of', len(df), 1063)
+    print(len(links_df), 33036)
+    lag = links_df.shift()
+    f = (lag.gvkey == df.gvkey) & (lag.lpermno != links_df.lpermno)
+    print('permnos in links changed in ', sum(f), 'of', len(links_df), 1063)
 
     # load annual
-    df = pstat.load_csv('annual', downloads / 'annual.txt.gz', sep='\t')
-    print(len(df), 464753)
-    print(df.isna().mean().sort_values().tail(5))
-    
+    annual_df = pstat.load_csv('annual', downloads / 'annual.txt.gz', sep='\t')
+    print(len(annual_df), 464753)
+    print(annual_df.isna().mean().sort_values().tail(5))
+
     # load quarterly
-    df = pstat.load_csv('quarterly', downloads / 'quarterly.txt.gz', sep='\t')
-    print(len(df), 1637274)
-    print(df.isna().mean().sort_values().tail(5))
-    
+    quarterly_df = pstat.load_csv('quarterly', downloads / 'quarterly.txt.gz', sep='\t')
+    print(len(quarterly_df), 1637274)
+    print(quarterly_df.isna().mean().sort_values().tail(5))
+
+
     # load keydevs
     for filename in sorted(downloads.glob('keydev*.txt.gz')):
         tic = time.time()   
-        df = pstat.load_csv('keydev', downloads / filename, sep='\t',
-                            drop={'gvkey': [0, '0'],
-                                  'announcedate': [0, '0'],
-                                  'keydevid': [0, '0']})
-        print(len(df), filename, time.time() - tic)
+        keydev_df = pstat.load_csv('keydev',
+                                   downloads / filename,
+                                   sep='\t',
+                                   drop={'gvkey': [0, '0'],
+                                         'announcedate': [0, '0'],
+                                         'keydevid': [0, '0']})
+        print(len(keydev_df), filename, time.time() - tic)
     print(sql.run('select count(*) from keydev'), 12256909)
-    """
+    '''
 
     # load principal customers
-    df = pstat.load_csv('customer', downloads / 'supplychain.csv.gz', sep=',')
-    print(len(df), 107114)
-        
+    supply_df = pstat.load_csv('customer',
+                               downloads / 'supplychain.txt',
+                               sep='\t',
+                               drop={'gvkey': ['', 0, '0'],
+                                     'ctic': ['', 0, '0'],
+                                     'stic': ['', 0, '0']})
+    print(len(supply_df), 107114)
+
+    # TODO: loop over String cols and compare lens
+    for col in ['conm', 'cconm', 'cnms', 'ctype', 'scusip', 'stic', 'ccusip', 'ctic']:
+        print(col, max(supply_df[col].str.len()), min(supply_df[col].str.len()))
+
+'''nanmean
+pstkrq    0.278155
+dlcq      0.283994
+lctq      0.368958
+actq      0.373740
+xsgaq     0.385008
+
+xlr       0.775819
+ob        0.827637
+cshrc     0.859283
+scstkc    0.974569
+gwo       0.977663
+'''

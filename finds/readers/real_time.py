@@ -9,30 +9,27 @@ import time
 import sys
 from datetime import datetime
 import numpy as np
+import random
 import pandas as pd
 from pandas import DataFrame, Series
 import pandas_datareader as pdr
 import matplotlib.pyplot as plt
-from finds.database import SQL, RedisDB, as_dtypes
-from finds.structured import (BusDay, CRSP, Benchmarks, PSTAT,
-                              SignalsFrame, CRSPBuffer)
-from finds.utils import Finder, plot_date
-from finds.recipes import fractile_split
-from finds.readers import FFReader
-from finds.backtesting import DailyPerformance, BackTest, bivariate_sorts
-
-from yahoo import get_price
+import yfinance as yf
 from secret import credentials, paths, CRSP_DATE
 VERBOSE = 1
 
-START_DATE = CRSP_DATE - 200  # start collect yahoo
-PSTAT_DATE = 20171201  # date to start collecting PSTAT data
-REBAL_DATE = 20220630  # at least 4 years after PSTAT data
-LAST_DATE = BusDay.today()   
+PSTAT_DATE = 20181201  # date to start collecting PSTAT data
+REBAL_DATE = 20230630  # at least 4 years after PSTAT data
+TODAY_DATE = int(datetime.today().strftime('%Y%m%d'))
 
 downloads = paths['yahoo']
 DEBUG = True
-today = datetime.today().strftime('%Y%m%d')
+
+def datestr(dt: int) -> str:
+    dt = int(dt)
+    return f'{dt//10000}-{(dt//100)%100:02d}-{dt%100:02d}'
+beg_history = datestr(CRSP_DATE - 200)
+end_history = datestr(TODAY_DATE)
 
 ticker_changes = []  # [('FB','META')]
 
@@ -41,193 +38,186 @@ ticker_changes = []  # [('FB','META')]
     # time.sleep(3600*24)
 
 if True:  # download from yahoo
-    symbols = pdr.nasdaq_trader.get_nasdaq_symbols()
-    print(today, CRSP_DATE, downloads, len(symbols), DEBUG)
+    symbols_ = pdr.nasdaq_trader.get_nasdaq_symbols()
+    symbols = symbols_.loc[(symbols_['Financial Status'].astype(str).str.lower().str[0] == 'n').astype(bool) &  
+                        ~symbols_['Test Issue'].astype(bool) &
+                        ~symbols_['Security Name'].str.lower().str.contains('- warrant') &
+                        ~symbols_.index.astype(str).str.contains('\$') & 
+                        ~symbols_.index.astype(str).str.contains('\^')]
+    symbols.index = symbols.index.astype(str).str.replace('.', '-')
+    
+    print(TODAY_DATE, CRSP_DATE, beg_history, end_history, downloads, len(symbols), DEBUG)
     tic = time.time()
     
     prices = {}
     ignored = []
-    for i, symbol in enumerate(symbols.index):
-        if (not isinstance(symbol, str) or ('$' in symbol) or ('^' in symbol) or
-            symbols.loc[symbol, 'Test Issue']):
-            print(symbol, ' ignored (bad symbol)')
-            ignored += [symbol]
-            continue
-        ticker = symbol.replace('.','-')  # yahoo share class follows '-'
-        df = get_price(ticker=ticker, start_date=str(START_DATE))
-        if df is None:
-            print(symbol, ' ignored (get_price error)')
-            ignored += [symbol]
-            continue            
+
+    restart = 0  #21
+    end = len(symbols)  #restart+2
+    for i, symbol in enumerate(symbols.index[restart:end]):
+        time.sleep(1.0 + random.random())
+        dat = yf.Ticker(symbol)
+        df = dat.history(start=beg_history, end=end_history)
         if not len(df):
             print(symbol, ' ignored (len==0)')
             ignored += [symbol]
-            continue
+            continue        
+        df.index = df.index.strftime('%Y%m%d').astype(int)
+        print(i, symbol, len(df), df.index[0], df.index[-1], max(df['Close']),
+              int(time.time() - tic), len(symbols))
 
-        print(i, ticker, max(df['close']), int(time.time() - tic), len(symbols))
+        df['ticker'] = symbol
+        last_prc = df['Close'].iloc[-1]
+        split = df['Stock Splits'].where(df['Stock Splits'] != 0.0, 1)\
+                                  .shift(-1).fillna(1).iloc[::-1].cumprod().iloc[::-1]
+        df['vol'] = df['Volume'].div(split)
+        df['divamt'] = df['Dividends'].abs().mul(split).fillna(0)
+        df['ret'] = ((df['Close'].abs() / df['Close'].abs().shift() - 1))
+        df['prc'] = df['Close'].abs().mul(split)
+        for _ in range(2):   # denominator 'prc' is not exactly right for formula, so iterate a few times
+            df['divret'] = df['divamt'].div(df['prc'].abs().shift()).fillna(0)
+            df['retx'] = (df['ret'] - df['divret'])
+            df['prc'] = (last_prc / (df['retx'].shift(-1).fillna(0) + 1).iloc[::-1].cumprod().iloc[::-1].values) * split
 
-        df = df.reset_index().rename(columns={'index': 'date'})
-        df['ticker'] = ticker
-        prices[ticker] = df
-
-    outdir = downloads / today
+        shr = dat.get_shares_full(start=beg_history, end=end_history)
+        if shr is not None and len(shr):
+            shr = shr.dropna()
+            shr.index = shr.index.strftime('%Y%m%d').astype(int)
+            shr = shr[~shr.index.duplicated(keep='first')]
+            df['shrout'] = shr
+            df['shrout'] = df['shrout'].ffill()
+        else:
+            df['shrout'] = np.nan
+        prices[symbol] = df.reset_index().rename(columns={'index': 'date'})
+    print('IGNORED:', len(ignored))
+    outdir = downloads / str(TODAY_DATE)
     outdir.mkdir(exist_ok=True)
-    pd.concat(prices.values(), ignore_index=True)\
-      .to_csv(outdir / 'prices.csv.gz', sep='|', index=False)
-    symbols.to_csv(outdir / 'symbols.csv.gz', sep='|', index=False)
+    pd.concat(prices.values(), ignore_index=True).to_csv(outdir / 'prices.csv.gz', sep='|', index=False)
+    symbols.to_csv(outdir / 'symbols.csv.gz', sep='|', index=True)
 
+
+from finds.database import SQL, RedisDB, as_dtypes
+from finds.structured import BusDay, CRSP, Benchmarks, PSTAT, SignalsFrame, CRSPBuffer
+from finds.utils import Finder, plot_date
+from finds.recipes import fractile_split
+from finds.readers import FFReader
+from finds.backtesting import DailyPerformance, BackTest, bivariate_sorts    
+    
 if True:
     # Merge daily prices from all downloaded weekly files to form year-to-date
     files = sorted(downloads.glob('2*'), reverse=True)
-    prices = DataFrame(columns=['ticker'])
-    divs = DataFrame(columns=['ticker'])
+    prices = list()
+    dists = list()
+    old_tickers = set()
     for ifile, pathname in enumerate(files):
         df = pd.read_csv(pathname / 'prices.csv.gz', sep='|')
-
-        # compute returns
-        lag = df[['ticker' ,'close', 'adjClose']].shift()
-        df['ret'] = np.where(df['ticker'] == lag['ticker'],
-                             abs(df['adjClose'] / lag['adjClose']),
-                             np.nan)
-        df['retx'] = np.where(df['ticker'] == lag['ticker'],
-                              abs(df['close'] / lag['close']),
-                              np.nan)
-
-        # estimate dividends
-        div = df[['ticker', 'date', 'ret', 'retx', 'close']]\
-            .shift(-1, fill_value=0)
-        div = div.loc[abs(div['ret'] - div['retx']) > 1e-5]
-        div['div'] = (div['ret'] - div['retx']) * div['close'] / div['retx']
-        div = div[['div', 'date', 'ticker']].reset_index(drop=True)
+        df['shrout'] = df['shrout'] / 1000
+        df['vol'] = df['vol'].astype(int)
         
-        if ifile:
-            new = set(df['ticker']).difference(set(prices['ticker']))
-            prices = pd.concat([prices, df[df['ticker'].isin(new)]],
-                               axis=0, sort=False)
-            print(pathname, 'added prices', new)
+        # Only consider new tickers
+        new_tickers = set(df['ticker'].unique()).difference(old_tickers)
+        df = df.loc[df['ticker'].isin(new_tickers)].rename(columns={'Date': 'date'})
+        old_tickers != new_tickers
+        
+        # Extract dist: divamt and facpr
+        dist = pd.concat([df.loc[df['divamt'].gt(0), ['ticker', 'date', 'divamt']],
+                          df.loc[df['Stock Splits'].ne(0), ['ticker', 'date', 'Stock Splits']]])\
+                 .fillna(0)\
+                 .rename(columns={'date': 'exdt', 'Stock Splits': 'facpr'})
+        dist['facpr'] = dist['facpr'].where(dist['facpr'] == 0.0, dist['facpr'] - 1).fillna(0.0)
+        dist['distcd'] = np.where(dist['divamt'].gt(0), 1232, 5523)
+        dists.append(dist)
 
-            new = set(div['ticker']).difference(set(divs['ticker']))
-            divs = pd.concat([divs, div[div['ticker'].isin(new)]], sort=False)
-            print(pathname, 'added divs', new)
-        else:
-            prices = df
-            divs = div
-            print(pathname, 'prices has', len(prices))
-            print(pathname, 'added divs', len(divs))
+        df['bidlo'] = df['prc'] * df['Low'] / df['Close']
+        df['askhi'] = df['prc'] * df['High'] / df['Close']
+        df['openprc'] = df['prc'] * df['Open'] / df['Close']
+        prices.append(df[['ticker', 'date', 'bidlo', 'askhi', 'prc', 'vol', 'ret', 'retx', 'openprc', 'shrout']])
+        
+        print(pathname, 'prices:', len(df), 'dists:', len(dist))
 
+    # Combines dists and prices of all days
+    dists = pd.concat(dists, axis=0)
+    dists['dclrdt'] = 0
+    dists['rcrddt'] = 0
+    dists['paydt'] = 0
+    dists['acperm'] = 0
+    dists['accomp'] = 0
+    dists
+
+    prices = pd.concat(prices, axis=0)
+    prices['bid'] = np.nan
+    prices['ask'] = np.nan
+    prices
+    
     sql = SQL(**credentials['sql'], verbose=VERBOSE)
     bd = BusDay(sql)
     crsp = CRSP(sql, bd, rdb=None)
-    date = bd.offset(CRSP_DATE)      # last date of CRSP data
+    crsp_date = bd.offset(CRSP_DATE)      # last date of CRSP data
+    prices = prices.loc[prices['date'] > crsp_date].reset_index(drop=True)
+    dists = dists.loc[dists['exdt'] > crsp_date].reset_index(drop=True)
 
-    # get price and shrout as of last date
-    price = crsp.get_section(dataset='daily',
-                             fields=['prc', 'shrout'],
-                             date_field='date',
-                             date=date,
-                             start=-1)
+    # get shrout as of last date
+    shrout = crsp.get_section(dataset='daily',
+                              fields=['shrout'],
+                              date_field='date',
+                              date=crsp_date,
+                              start=-1)
 
     # get tickers to lookup permno
     tickers = crsp.get_section(dataset='names',
                                fields=['tsymbol', 'date'],
                                date_field='date',
-                               date=date,
-                               start=0).reindex(price.index)
-    tickers = tickers.sort_values(['tsymbol', 'date'])\
-                     .drop_duplicates(keep='last')
-    
+                               date=crsp_date,
+                               start=0)\
+                  .reindex(shrout.index)\
+                  .sort_values(['tsymbol', 'date'])\
+                  .drop_duplicates(subset=['tsymbol'], keep='last')
+
     # kludge in ticker changes
     for t_, ticker_ in ticker_changes:
         tickers.loc[tickers['tsymbol'].eq(t_), 'tsymbol'] = ticker_    
     tickers = tickers.reset_index().set_index('tsymbol')['permno']
     
     # Yahoo has '-' but CRSP has '' between symbol and share class
-    prices['ticker'] = prices['ticker'].str.replace('-','')  # divs
+    prices['ticker'] = prices['ticker'].str.replace('-','')
+    dists['ticker'] = dists['ticker'].str.replace('-','') 
     
-    # merge permnos into big prices table
-    prices = prices.join(tickers, on='ticker', how='inner')
+    # merge permnos into prices and dists table
+    prices = prices.join(tickers, on='ticker', how='inner').drop('ticker', axis=1)
+    dists = dists.join(tickers, on='ticker', how='inner').drop('ticker', axis=1)
 
-    # estimate facpr, for internal consistency, based on crsp_date price ratio
-    # TODO:
-    #   where prices substantially different (more than 0.005 and outside range)
-    #     include facpr
-    #   else: adjust the next day's ret and retx by the facpr
-    
-    facpr = prices[prices.date == date][['permno', 'close']]
-    facpr = facpr.join(price,
-                       on='permno',
-                       how='inner')
-    facpr['facpr'] = np.round((facpr['prc'].abs() / facpr['close']) - 1, 3)
-    facpr = facpr[facpr['facpr'].abs().gt(0.005)
-                  & abs(facpr['close'] - abs(facpr['prc'])).ge(0.005)
-                  & (facpr['prc'].gt(0) |
-                     abs(facpr['close'] - abs(facpr['prc'])).gt(0.25))]
-    
+    # fill in prices['shrout'] where indexes in shrout dataframe
+    price = prices.groupby('permno').first()[['date', 'shrout']]    # get first record by permno
+    price.loc[price['shrout'].isna(), 'shrout'] = shrout['shrout']  # replace missing shrout
+    price = price.fillna(0)
+    price = price.reset_index().set_index(['permno', 'date'])  # index by (permno, date)
+    index = Series(prices[['permno', 'date']].itertuples(index=False, name=None))  # indexes in prices
+    prices['shrout'] = index.map(price['shrout'])\
+                            .fillna(prices['shrout'].reset_index(drop=True))\
+                            .ffill().values
 
-    # adjust shrout if necessary, then merge into big df of prices
-    facpr.loc[:, 'shrout'] *= (1 + facpr['facpr'])
-    facpr = facpr.set_index('permno')
-    price.loc[facpr.index, 'shrout'] = facpr.loc[facpr.index, 'shrout']
-    prices = prices.join(price[['shrout']], on='permno', how='inner')
-
-    # create monthly data df
+    # create monthly data
     prices['month'] = prices['date'] // 100
     groupby = prices.groupby(['permno', 'month'])
-    monthly = (groupby[['ret', 'retx']].prod() - 1)\
-              .join(groupby['close'].last()).reset_index()
+    monthly = (groupby[['ret', 'retx']].apply(lambda x: (1+x).prod()) - 1).join(groupby['prc'].last()).reset_index()
     monthly['month'] = bd.endmo(monthly['month'])
-    monthly.rename(columns={'month': 'date', 'close':'prc'}, inplace=True)
-    monthly = monthly[monthly['date'] > date]
+    monthly.rename(columns={'month': 'date'}, inplace=True)
+    monthly = monthly[monthly['date'] > crsp_date]
     monthly['dlstcd'] = 0
     monthly['dlret'] = np.nan
     print('monthly:', len(monthly), len(np.unique(monthly['permno'])))
     
-    # clean up prices table to mimic daily table
-    prices['ret'] -= 1
-    prices['retx'] -= 1
-    prices.rename(columns={'open':'openprc', 'high':'askhi', 'low':'bidlo',
-                           'close':'prc', 'volume':'vol'}, inplace=True)
-    prices.drop(columns=['month', 'ticker','adjClose'], inplace=True)
-    prices['bid'] = np.nan
-    prices['ask'] = np.nan
-    prices = as_dtypes(prices,
-                       {k: v.type for k,v in crsp['daily'].columns.items()})
-    prices = prices[prices['date'] > date]
+    prices = prices[prices['date'] > crsp_date].drop(columns=['month'])
     prices.index = np.arange(len(prices))
-    print(prices['date'].value_counts())
+    print('daily:', prices['date'].value_counts())
 
-    # clean up facpr table and merge into dist dataframe
-    #
-    # TODO: why not as_dtypes on facpr at the end?
-    #
-    dist = as_dtypes(None, {k : v.type for k,v in crsp['dist'].columns.items()})
-    facpr = facpr.reset_index().drop(columns=['close','prc','shrout'])
-    facpr['exdt'] = int(bd.offset(date, 1))
-    facpr['distcd'] = 5523
-    facpr['facshr'] = facpr['facpr']
-    dist = pd.concat([dist, facpr], axis=0, sort=False)
-    print(np.isnan(dist).mean(axis=0))
-
-    # clean up divs table and merge into dist dataframe
-    divs = divs[divs['date'] > date]\
-                .join(tickers, on='ticker', how='inner')
-    divs = divs.rename(columns={'div':'divamt', 'date':'exdt'})\
-                         .drop(columns=['ticker'])
-    divs['distcd'] = 1232
-    divs['divamt'] = (divs['divamt'] * 2).round(2)/2 # round half cent
-    dist = pd.concat([dist, divs], axis=0, sort=False)  # $ divs
-    print(np.isnan(dist).mean(axis=0))
-
-    # save current intermediate files
-    tickers.to_csv(downloads / 'tickers.csv.gz', sep='|')
-    divs.to_csv(downloads / 'dividends.csv.gz', sep='|')
-    facpr.to_csv(downloads / 'facpr.csv.gz', sep='|')
+    # save daily file
     prices.to_csv(downloads / 'daily.csv.gz', sep='|')
 
     # update monthly sql table
     print('monthly', sql.run('select count(*) from monthly'))
     table = crsp['monthly']
-    delete = table.delete().where(table.c['date'] > date)
+    delete = table.delete().where(table.c['date'] > crsp_date)
     sql.run(delete)
     print('monthly', sql.run('select count(*) from monthly'))
     sql.load_dataframe(table.key, monthly, index_label=None, to_sql=True,
@@ -235,43 +225,43 @@ if True:
     print('monthly', sql.run('select count(*) from monthly'))
 
     # update dist table
-    print(len(dist), len(np.unique(dist.permno)), dist['exdt'].min(),
-          dist['exdt'].max(), np.unique(dist.distcd))
-    dist[dist.isna()] = 0
-    dist = as_dtypes(dist, {k : v.type for k,v in crsp['dist'].columns.items()})
-    dist.to_csv(downloads / 'dist.csv.gz', sep='|', index=False)
+    print(len(dists), len(np.unique(dists.permno)), dists['exdt'].min(),
+          dists['exdt'].max(), np.unique(dists.distcd))
+    dists.to_csv(downloads / 'dists.csv.gz', sep='|', index=False)
 
-    print('dist', sql.run('select count(*) from dist'))
+    print('dists new:', sql.run('select count(*) from dist'))
     table = crsp['dist']
-    delete = table.delete().where(table.c['exdt'] > date)
+    delete = table.delete().where(table.c['exdt'] > crsp_date)
     sql.run(delete)
-    print('dist', sql.run('select count(*) from dist'))
-    sql.load_dataframe(table.key, dist, index_label=None, to_sql=True,
+    print('dists before:', sql.run('select count(*) from dist'))
+    sql.load_dataframe(table.key, dists, index_label=None, to_sql=True,
                        replace=False)
-    print('dist', sql.run('select count(*) from dist'))
+    print('dists after:', sql.run('select count(*) from dist'))
 
     # update daily table
     print('daily', sql.run('select count(*) from daily'))
     table = crsp['daily']
-    delete = table.delete().where(table.c['date'] > date)
+    delete = table.delete().where(table.c['date'] > crsp_date)
     sql.run(delete)
-    print(sql.run('select count(*) from daily'))
-    
+    print('daily before:', sql.run('select count(*) from daily'))   
     sql.load_dataframe(table.key, prices, index_label=None, to_sql=True,
                        replace=False)
-    print('update', sql.run(f"select count(*) from daily where date > {date}"))
-    print('daily', sql.run('select count(*) from daily'))
+    print('update', sql.run(f"select count(*) from daily where date > {crsp_date}"))
+    print('daily after', sql.run('select count(*) from daily'))
 
-    print(f"redis-cli --scan --pattern '*CRSP_{CRSP_DATE // 10000}*' "
-          + f"| xargs redis-cli del")
+    #
+    # (1) remove post-CRSP cache (2) change to "r"ead-only, after pre-CRSP cache saved
+    #
+    print(f"redis-cli --scan --pattern '*CRSP_{str(TODAY_DATE)[:4]}*' | xargs redis-cli del")
+
 
 if True:
     sql = SQL(**credentials['sql'], verbose=VERBOSE)
     user = SQL(**credentials['user'], verbose=VERBOSE)
-    #rdb = Redis(**credentials['redis'])   # don't use redis
+    rdb = RedisDB(**credentials['redis'])   #### don't use redis ???
     bd = BusDay(sql, new=False)
     bench = Benchmarks(sql, bd, verbose=VERBOSE)
-    crsp = CRSP(sql, bd, rdb=None, verbose=VERBOSE)
+    crsp = CRSP(sql, bd, rdb=rdb, verbose=VERBOSE)
     pstat = PSTAT(sql, bd)
     imgdir = paths['scratch']
 
@@ -282,13 +272,13 @@ if True:  # Compare monthly market-weighted returns to FF research factor
 
     ## Compute monthend universe holdings
     holdings = {}
-    for rebal in bd.date_range(rebalbeg, bd.endmo(LAST_DATE, -1), freq='endmo'):
-        univ = crsp.get_universe(rebal)
+    for rebal in bd.date_range(rebalbeg, bd.endmo(TODAY_DATE, -1), freq='endmo'):
+        univ = crsp.get_universe(rebal, cache_mode="r")
         holdings[rebal] = univ['cap'] / univ['cap'].sum()
 
     ## Run back-test (auto monthly), compare to market factor benchmark
     label = 'mkt-rf'    
-    backtest = BackTest(user, bench, 'RF', bd.offset(LAST_DATE))    
+    backtest = BackTest(user, bench, 'RF', bd.offset(TODAY_DATE))    
     backtest(crsp, holdings, label)
     excess = backtest.fit(['Mkt-RF'])
 
@@ -297,7 +287,7 @@ if True:  # Compare monthly market-weighted returns to FF research factor
     plot_date(y1=excess.iloc[:-1].cumsum(), marker='',
               ax=ax, legend1=['self-computed', 'Ken French Library'],
               loc1='lower left', vlines=[CRSP_DATE],
-              title=f"Monthly Returns to {label} factor, through {LAST_DATE}")
+              title=f"Monthly Returns to {label} factor, through {TODAY_DATE}")
     ax.set_xlabel(f"published {datetime.now().strftime('%Y-%m-%d')}")
     plt.tight_layout()
     plt.savefig(imgdir / f"mkt.jpg")
@@ -312,14 +302,14 @@ if True:  # to update FamaFrench benchmarks
         for col in df.columns:
             print(bench.load_series(df[col], name=name, item=str(item)))
         print(DataFrame(**sql.run('select * from ' + bench['ident'].key)))
-    
+
 if True:  # to calibrate Fama-French daily benchmarks
     # Compute DailyPerformance backtest, using StocksBuffer
     rebalbeg = bd.offset(REBAL_DATE)  # first rebalance date to compute HML, MOM
-    rebalend = bd.endmo(LAST_DATE, -1)
+    rebalend = bd.endmo(TODAY_DATE, -1)
     perf = DailyPerformance(stocks=CRSPBuffer(stocks=crsp,
                                               beg=rebalbeg,
-                                              end=bd.offset(LAST_DATE),
+                                              end=bd.offset(TODAY_DATE),
                                               fields=['ret', 'retx'],
                                               dataset='daily'))
     holdings = {}
@@ -349,8 +339,8 @@ if True:  # to calibrate Fama-French daily benchmarks
     ## construct b/m ratio
     df['rebaldate'] = 0
     for datadate in sorted(df['datadate'].unique()):
-        if (datadate // 10000) < (LAST_DATE // 10000):
-            capdate = min(crsp.bd.endyr(datadate), LAST_DATE) # Dec year-end cap
+        if (datadate // 10000) < (TODAY_DATE // 10000):
+            capdate = min(crsp.bd.endyr(datadate), TODAY_DATE) # Dec year-end cap
             f = df['datadate'].eq(datadate)
             df.loc[f, 'rebaldate'] = crsp.bd.endmo(datadate, abs(lag))
             df.loc[f, 'cap'] = crsp.get_cap(capdate)\
@@ -377,8 +367,8 @@ if True:  # to calibrate Fama-French daily benchmarks
         beg = bd.endmo(rebaldate, -past[1])   # require price at this date
         start = bd.offset(beg, 1)             # start date, inclusive, of signal
         end = bd.endmo(rebaldate, 1-past[0])  # end date of signal
-        p = [crsp.get_universe(rebaldate),    # retrieve prices for signal
-             crsp.get_ret(start, end).rename(label),
+        p = [crsp.get_universe(rebaldate, cache_mode="r"),    # retrieve prices for signal
+             crsp.get_ret(start, end, cache_mode="r").rename(label),
              crsp.get_section(dataset='monthly',
                               fields=['prc'],
                               date_field='date',
@@ -402,7 +392,7 @@ if True:  # to calibrate Fama-French daily benchmarks
                                            months=[])
 
     # Compute and display daily returns for all factors
-    ret = {label: perf(holdings[label], bd.offset(LAST_DATE))
+    ret = {label: perf(holdings[label], bd.offset(TODAY_DATE))
            for label in holdings.keys()}
 
     ## display returns vs bench
@@ -420,7 +410,7 @@ if True:  # to calibrate Fama-French daily benchmarks
                   vlines=[CRSP_DATE, max(benchret.index)],
                   marker=' ',
                   fontsize=10,
-                  title=f"Daily Returns to {label} factor, through {LAST_DATE}")
+                  title=f"Daily Returns to {label} factor, through {TODAY_DATE}")
         ax.set_xlabel(f"published {datetime.now().strftime('%Y-%m-%d')}")
         plt.tight_layout()
         plt.savefig(imgdir / f"{label}.jpg")

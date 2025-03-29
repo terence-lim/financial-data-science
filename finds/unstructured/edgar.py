@@ -856,9 +856,9 @@ if __name__ == "__main__":
     from finds.database import SQL
     from finds.structured import BusDay, PSTAT
     from secret import credentials, paths
-    import tqdm
+    from tqdm import tqdm
     import math
-    
+
     def _test_web():
         """Access Edgar Webside
 
@@ -938,20 +938,20 @@ if __name__ == "__main__":
         - save text in local file
 
         """ 
-        ed = Edgar(savedir=paths['10X'], zipped=True, verbose=1)
+        ed = Edgar(savedir=paths['10X'], zipped=False, verbose=1)
         sql = SQL(**credentials['sql'])
         bday = BusDay(sql)
         pstat = PSTAT(sql, bday)
         to_permno = pstat.build_lookup(target='lpermno', source='cik')
 
-        years = range(2023, 2022, -1)   # 1992
-        items = {'10-K': ['qqr10K']}   # '10-Q': ['mda10Q']}
-        #items = {'10-K': ['bus10K', 'mda10K']}
+        years = range(2024, 2023, -1) 
+        #items = {'10-K': ['qqr10K']}   # '10-Q': ['mda10Q']}
+        items = {'10-K': ['bus10K', 'mda10K', 'qqr10K']}
         logger = []
         for year in years: 
             rows = ed.open(date=year)
             row = rows[0]
-            for i, row in enumerate(rows):
+            for i, row in tqdm(enumerate(rows), total=len(rows)):
                 permno = to_permno(int(row['cik']))
                 if row['form'] in items and permno:
                     filing = ed[row['pathname']]

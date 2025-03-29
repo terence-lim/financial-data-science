@@ -251,7 +251,7 @@ class EventStudy(Structured):
                      .iloc[:, window:]\
                      .fillna(0)
             corr, disp, cols = fft_align(rets.values.T)
-            rho = np.mean(corr)
+            rho = np.nanmean(corr)
 
         # 3. apply simplification of eqn(15) of Kolari et al 2018
         effective = len(cumret) / (1 + (rho * tau * (len(cumret) - 1)))

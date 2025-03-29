@@ -13,7 +13,7 @@ from finds.database.sql import SQL
 from finds.database.redisdb import RedisDB
 from finds.structured.busday import BusDay
 from finds.structured.stocks import Stocks
-_VERBOSE = 1
+_VERBOSE = 0
 
 class Benchmarks(Stocks):
     """Provide Structured Stocks interface to benchmark and index returns"""
@@ -39,8 +39,8 @@ class Benchmarks(Stocks):
 
         Args:
             df : DataFrame with time-series in each column to load to sql
-            name: Primary label for this source to insert into ident table
-            item: Secondary label for this source to insert into ident table
+            name: Primary description to insert into ident table
+            item: Secondary description to insert into ident table
             monthly: if True: convert index to business calendar endmo dates
 
         Returns:
@@ -51,7 +51,7 @@ class Benchmarks(Stocks):
         - Each column of input data frame is loaded to sql table 'daily',
           with its series name as 'permno' field, values as 'ret' field,
           and series index as 'date' field.
-        - 'idents' table in sql is also updated with identifier and metadata    
+        - 'idents' table in sql is updated with identifier and descriptive info
         """
         self.sql.create_all()
         #self['daily'].create(checkfirst=True)
@@ -69,7 +69,7 @@ class Benchmarks(Stocks):
         return ident
 
 if __name__ == "__main__":
-    from secret import credentials
+    from secret import credentials, paths
     from finds.readers import FFReader
     VERBOSE = 1
 
@@ -78,15 +78,21 @@ if __name__ == "__main__":
     rdb = RedisDB(**credentials['redis'])
     bd = BusDay(sql)
     bench = Benchmarks(sql, bd)
-
     downloads = paths['data'] / 'CRSP'
+
+    df = pd.read_csv(downloads / 'treasuries.txt.gz', header=0, sep='\t').set_index('caldt')
+    for col in df.columns:
+        print(bench.load_series(df[col].rename(col + '(mo)'), name=col, item='monthly'))
+        
+
     df = pd.read_csv(downloads / 'sp500.txt.gz', header=0, sep='\t').set_index('caldt')
     for col in df.columns:
-        print(bench.load_series(df[col], name=col))
-    
+        print(bench.load_series(df[col], name=col, item='daily'))
+
+    '''        
     # load benchmarks (mostly FamaFrench)
-    for datasets, date_formatter in zip(
-            [FFReader.monthly, FFReader.daily],[bd.endmo, bd.offset]):
+    for datasets, date_formatter in zip([FFReader.monthly, FFReader.daily],
+                                        [bd.endmo, bd.offset]):
         for name, item, suffix in datasets:
             df = FFReader.fetch(name=name, 
                                 item=item,
@@ -98,3 +104,4 @@ if __name__ == "__main__":
 
     print(bench.get_series('CMA', 'ret'))
     print(bench.get_series(['CMA', 'HML'], 'ret'))
+    '''
