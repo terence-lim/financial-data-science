@@ -27,7 +27,7 @@ provides practical examples and templates for applying:
 
 **March 2025**: Updated with data through early 2025 and incorporated the latest LLMs -- Microsoft Phi-4-multimodal (released Feb 2025), Google Gemma-3-12B (March 2025), DeepSeek-R1-14B (January 2025), Meta Llama-3.1-8B (July 2024), GPT-4o-mini (July 2024).
 
-![image](assets/diagram.png)
+![image](diagram.png)
 
 
 ## Documentation
